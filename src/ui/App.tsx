@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Box, Text, useWindowSize } from 'ink'
+import { AGENT_NAMES } from '../agents/adapters.js'
+import { ROOM_ID } from '../agents/orchestrator.js'
 import type { Engine, Toast } from '../engine.js'
 import { DEFAULT_THEME, findTheme, THEMES } from '../themes.js'
 import { CommandPalette, type PaletteItem } from './CommandPalette.js'
 import { HelpPanel } from './HelpPanel.js'
+import { BANNER_ROWS, HomeBanner } from './HomeBanner.js'
 import { emptyInput, setText, type InputBuffer } from './inputBuffer.js'
 import { buildLines, plainLines, windowLines, type Line } from './layout.js'
 import { matchCommands } from './palette.js'
@@ -72,6 +75,8 @@ export function App({ engine, onExit }: Props) {
   const convs = engine.convs()
   const pending = engine.pending()
   const unread = convs.reduce((sum, c) => sum + c.unread, 0)
+  const room = engine.agentRoom()
+  const agentsActive = room.runs.filter((r) => r.state === 'running' || r.state === 'queued').length
 
   // The window title carries the unread count so it shows in the taskbar/tab.
   useEffect(() => {
@@ -88,13 +93,14 @@ export function App({ engine, onExit }: Props) {
     ? buildLines(engine.messages(activeId, HISTORY_LIMIT), mainWidth - 2, theme)
     : plainLines(engine.home(), mainWidth - 2)
   const { visible, maxOffset } = windowLines(lines, paneRows, offset)
+  const showBanner = activeId === null && engine.welcome() && paneRows >= BANNER_ROWS
 
   const onScroll = useCallback(
     (dir: 1 | -1) => setOffset(Math.min(maxOffset, Math.max(0, offset + dir * Math.max(1, paneRows - 2)))),
     [maxOffset, offset, paneRows],
   )
   const onSwitch = (dir: 1 | -1): void => {
-    const ids = [null, ...convs.map((c) => c.id)]
+    const ids = [null, ...convs.map((c) => c.id), ROOM_ID]
     const at = Math.max(0, ids.indexOf(activeId))
     engine.activate(ids[(at + dir + ids.length) % ids.length] ?? null)
   }
@@ -114,8 +120,13 @@ export function App({ engine, onExit }: Props) {
     return <Text>Terminal too small (need {MIN_COLUMNS}x{MIN_ROWS})</Text>
   }
 
-  const title = activeConv ? (activeConv.kind === 'group' ? `#${activeConv.title}` : activeConv.title) : 'home'
-  const placeholder = activeConv ? `Message ${title} or type / for commands` : 'Type / for commands'
+  const inRoom = activeId === ROOM_ID
+  const title = inRoom ? '⌁ agents' : activeConv ? (activeConv.kind === 'group' ? `#${activeConv.title}` : activeConv.title) : 'home'
+  const placeholder = inRoom
+    ? 'Ask @omp, @claude, @opencode or @hermes'
+    : activeConv
+      ? `Message ${title} or type / for commands`
+      : 'Type / for commands'
 
   const paletteItems: PaletteItem[] = [
     { label: '⌂ Home', run: () => engine.activate(null) },
@@ -151,6 +162,21 @@ export function App({ engine, onExit }: Props) {
         run: () => void engine.submit(`/theme ${t.name}`),
       }),
     ),
+    { label: '⌁ Agents room', hint: agentsActive > 0 ? `${agentsActive} running` : '/open agents', run: () => engine.activate(ROOM_ID) },
+    ...AGENT_NAMES.map(
+      (n): PaletteItem => ({ label: `Ask ${n}…`, hint: `/agent ${n}`, run: () => setInput(setText(`/agent ${n} `)) }),
+    ),
+    { label: 'Check agents', hint: '/agent check', run: () => void engine.submit('/agent check') },
+    ...(agentsActive > 0 ? [{ label: 'Stop all agents', hint: '/agent stop', run: () => void engine.submit('/agent stop') }] : []),
+    ...room.runs
+      .filter((r) => r.mergeable)
+      .map(
+        (r): PaletteItem => ({
+          label: `Merge ${r.id} (${r.files} file${r.files === 1 ? '' : 's'})`,
+          hint: '/agent merge',
+          run: () => void engine.submit(`/agent merge ${r.id}`),
+        }),
+      ),
     { label: 'Quit', hint: '/quit', run: onExit },
   ]
 
@@ -175,7 +201,7 @@ export function App({ engine, onExit }: Props) {
           <Text dimColor>Ctrl+P commands · ? help</Text>
         </Box>
         <Box flexGrow={1}>
-          {sidebarShown ? <Sidebar convs={convs} pending={pending} activeId={activeId} /> : null}
+          {sidebarShown ? <Sidebar convs={convs} pending={pending} room={room} activeId={activeId} /> : null}
           <Box flexDirection="column" flexGrow={1}>
             {overlay === 'palette' ? (
               <CommandPalette items={paletteItems} height={paneRows + 1} onClose={closeOverlay} />
@@ -187,17 +213,21 @@ export function App({ engine, onExit }: Props) {
                   <Text bold>{title}</Text>
                   {offset > 0 ? <Text dimColor> · scrolled (PgDn)</Text> : null}
                 </Box>
-                <Box height={paneRows} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
-                  {visible.map((line) => (
-                    <Text key={line.key} wrap="truncate-end">
-                      {line.segs.map((s, i) => (
-                        <Text key={i} color={s.color} bold={s.bold} dimColor={s.dim} italic={s.italic}>
-                          {s.text}
-                        </Text>
-                      ))}
-                    </Text>
-                  ))}
-                </Box>
+                {showBanner ? (
+                  <HomeBanner width={mainWidth - 2} height={paneRows} info={engine.home().slice(2)} />
+                ) : (
+                  <Box height={paneRows} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
+                    {visible.map((line) => (
+                      <Text key={line.key} wrap="truncate-end">
+                        {line.segs.map((s, i) => (
+                          <Text key={i} color={s.color} bold={s.bold} dimColor={s.dim} italic={s.italic}>
+                            {s.text}
+                          </Text>
+                        ))}
+                      </Text>
+                    ))}
+                  </Box>
+                )}
               </>
             )}
             <Prompt
@@ -223,6 +253,8 @@ export function App({ engine, onExit }: Props) {
           online={engine.onlineCount()}
           unread={unread}
           pending={pending.length}
+          agentsRunning={agentsActive}
+          update={engine.updateAvailable()}
           hint={hint}
         />
         <Toasts toasts={toasts} />

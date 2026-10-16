@@ -72,8 +72,17 @@ export function Prompt({
       if (key.eventType === 'release') return
       if (key.meta && key.upArrow) return onSwitch(-1)
       if (key.meta && key.downArrow) return onSwitch(1)
-      if (key.ctrl && key.leftArrow) return onEdit(moveWordLeft)
-      if (key.ctrl && key.rightArrow) return onEdit(moveWordRight)
+      // Option+Arrow / Option+Backspace (macOS), Ctrl+Arrow (Windows/Linux)
+      if ((key.ctrl || key.meta) && key.leftArrow) return onEdit(moveWordLeft)
+      if ((key.ctrl || key.meta) && key.rightArrow) return onEdit(moveWordRight)
+      if (key.meta && key.backspace) return onEdit(deleteWordBack)
+      // Cmd (kitty-protocol terminals): line start / end / delete to line start
+      if (key.super && key.leftArrow) return onEdit(home)
+      if (key.super && key.rightArrow) return onEdit(end)
+      if (key.super && key.backspace) return onEdit(deleteToStart)
+      // macOS Terminal types these when Option is not set up as Meta (US layout: Option+B, Option+F)
+      if (input === '∫') return onEdit(moveWordLeft)
+      if (input === 'ƒ') return onEdit(moveWordRight)
       if (key.meta) {
         if (input === 'b') return onEdit(moveWordLeft)
         if (input === 'f') return onEdit(moveWordRight)
@@ -90,6 +99,10 @@ export function Prompt({
             return onPalette()
           case 'b':
             return onSidebar()
+          case 'n':
+            return onSwitch(1)
+          case 'o':
+            return onSwitch(-1)
           case 'a':
             return onEdit(home)
           case 'e':

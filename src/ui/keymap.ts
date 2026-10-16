@@ -9,8 +9,10 @@ export const KEY_SECTIONS: readonly KeySection[] = [
     title: 'Chat',
     rows: [
       ['Enter', 'Send message / run command'],
+      ['@name (agents room)', 'Ask a coding agent'],
       ['Ctrl+P', 'Command palette'],
       ['Alt+Up / Alt+Down', 'Previous / next conversation'],
+      ['Ctrl+O / Ctrl+N', 'Previous / next conversation (any terminal)'],
       ['Ctrl+B', 'Toggle sidebar'],
       ['PgUp / PgDn', 'Scroll messages'],
       ['?', 'This help (on an empty prompt)'],
@@ -28,7 +30,8 @@ export const KEY_SECTIONS: readonly KeySection[] = [
     title: 'Editing',
     rows: [
       ['Ctrl+A / Ctrl+E', 'Line start / end'],
-      ['Alt+B / Alt+F', 'Word left / right (Ctrl+Left / Right too)'],
+      ['Alt+B / Alt+F', 'Word left / right (Option or Ctrl + Left / Right too)'],
+      ['Alt+Backspace', 'Delete word back (Option+Delete on macOS)'],
       ['Ctrl+W / Ctrl+U / Ctrl+K', 'Delete word back / to start / to end'],
       ['Esc', 'Clear the input, or close this panel'],
     ],

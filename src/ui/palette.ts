@@ -1,8 +1,8 @@
-import { COMMANDS, GROUP_SUBCOMMANDS, THEME_ARGUMENTS, type CommandSpec } from '../commands.js'
+import { AGENT_ARGUMENTS, COMMANDS, GROUP_SUBCOMMANDS, THEME_ARGUMENTS, type CommandSpec } from '../commands.js'
 
 const MAX_ROWS = 6
 /** Commands whose first argument completes from a fixed list. */
-const ARGUMENTS: Record<string, readonly CommandSpec[]> = { group: GROUP_SUBCOMMANDS, theme: THEME_ARGUMENTS }
+const ARGUMENTS: Record<string, readonly CommandSpec[]> = { agent: AGENT_ARGUMENTS, group: GROUP_SUBCOMMANDS, theme: THEME_ARGUMENTS }
 const ARGUMENT_RE = /^\/(\S+) (\S*)$/
 
 /** Slash-command suggestions for the current prompt text. */

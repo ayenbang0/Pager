@@ -6,7 +6,11 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import { after, before, test } from 'node:test'
 import DHT from 'hyperdht'
 import createTestnet, { type Testnet } from 'hyperdht/testnet.js'
-import { Engine, type Toast } from './engine.js'
+import { execFileSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import { AGENT_NAMES, type AdapterSpec, type AgentName } from './agents/adapters.js'
+import { ROOM_ID } from './agents/orchestrator.js'
+import { Engine, type EngineOptions, type Toast } from './engine.js'
 import { dmConvId } from './events.js'
 import { Net, type PeerLink } from './net.js'
 import { waitFor } from './testutil.js'
@@ -30,12 +34,17 @@ interface Peer {
   toasts: Toast[]
 }
 
-async function boot(name: string, dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-e-'))): Promise<Peer> {
+async function boot(
+  name: string,
+  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-e-')),
+  extra: Partial<EngineOptions> = {},
+): Promise<Peer> {
   const engine = await Engine.open({
     dir,
     bootstrap: testnet.bootstrap,
     dhtOptions: { host: '127.0.0.1' },
     backoff: { baseMs: 50, maxMs: 200 },
+    ...extra,
   })
   engines.push(engine)
   const toasts: Toast[] = []
@@ -183,4 +192,39 @@ test('/theme switches, persists across restarts, and rejects unknown names', asy
   await a.engine.close()
   const again = await boot('alice', a.dir)
   assert.deepEqual(again.engine.settings(), { theme: 'mono', sidebar: false })
+})
+
+test('agents room: /agent and @name drive agents, plain text is refused, the room is not a conversation', async () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-r-'))
+  const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })
+  git('init', '-q', '-b', 'main')
+  git('config', 'user.name', 'tester')
+  git('config', 'user.email', 't@example.invalid')
+  git('config', 'commit.gpgsign', 'false')
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'base')
+  git('add', '-A')
+  git('commit', '-q', '-m', 'base')
+  const fake: AdapterSpec = {
+    bin: process.execPath,
+    args: (p) => [fileURLToPath(new URL('./agents/testAgent.js', import.meta.url)), p],
+    extract: (s) => s.trim(),
+  }
+  const adapters = Object.fromEntries(AGENT_NAMES.map((n) => [n, fake])) as Record<AgentName, AdapterSpec> // every key is filled by the map above
+  const a = await boot('alice', undefined, { workdir: repo, agentAdapters: adapters })
+  const has = (text: string): boolean => a.engine.messages(ROOM_ID, 50).some((m) => m.text === text)
+
+  await a.engine.submit('/agent omp ECHO hi')
+  assert.equal(a.engine.active(), ROOM_ID)
+  await waitFor(() => has('hi'), 20_000, 'omp reply')
+  await a.engine.submit('@claude ECHO yo')
+  await waitFor(() => has('yo'), 20_000, 'claude reply')
+
+  const runs = a.engine.agentRoom().runs.length
+  await a.engine.submit('hello')
+  assert.equal(a.toasts.at(-1)?.kind, 'warn')
+  await a.engine.submit('/agent nope x')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  assert.equal(a.engine.agentRoom().runs.length, runs)
+  assert.ok(a.engine.convs().every((c) => c.id !== ROOM_ID))
+  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5 })
 })

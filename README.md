@@ -44,6 +44,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/group members` | List members of the open group |
 | `/group leave` | Leave the open group permanently |
 | `/theme [name]` | Show or switch the color theme: `omp` (default), `terminal`, `mono`, `ocean`, `amber`, `light` (saved) |
+| `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `runs`, `stop`, `merge`, `drop`, `check` |
 | `/quit` | Exit |
 
 ## Keys
@@ -55,10 +56,12 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | Ctrl+P | Command palette: switch conversation, accept/decline, change theme, and more |
 | ? (empty prompt) | Keyboard shortcut help |
 | Alt+Up / Alt+Down | Previous / next conversation (home is first) |
+| Ctrl+O / Ctrl+N | Same, for terminals that do not send Alt+arrows (macOS Terminal.app by default) |
 | Ctrl+B | Toggle the sidebar (saved) |
 | PgUp / PgDn | Scroll messages |
 | Ctrl+A / Ctrl+E, Home / End | Start / end of line |
-| Alt+B / Alt+F, Ctrl+Left / Right | Word left / right |
+| Alt+B / Alt+F, Ctrl+Left / Right | Word left / right (Option+Left / Right on macOS; Option+B / F also works without "Option as Meta") |
+| Alt+Backspace | Delete word back (Option+Delete on macOS) |
 | Ctrl+W, Ctrl+U, Ctrl+K | Delete word back, to line start, to line end |
 | Esc | Clear the input (closes the palette / help) |
 | Ctrl+C | Clear the input; on an empty prompt press again within 2 s to quit |
@@ -68,11 +71,16 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 
 | Variable | Meaning |
 |---|---|
-| `PAGER_HOME` | Data directory (default `~/.pager`) |
+| `PAGER_HOME` | Data directory (default `~/.pager`); agent worktrees live in its `worktrees/` folder |
 | `PAGER_BOOTSTRAP` | Comma-separated `host:port` DHT bootstrap nodes (default: public HyperDHT) |
 | `PAGER_REDUCE_MOTION` | Set to `1` to disable animations (connecting spinner, toast countdown bars) |
+| `PAGER_NO_UPDATE_CHECK` | Set to `1` to skip the daily check for a newer release |
 
-Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar), `pager.lock` (one instance per directory).
+Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar), `update.json` (cached latest version and check time), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
+
+### Updating
+
+Once a day pager asks the npm registry for the latest `pager-cli` (one short request, failures are silent). If a newer release exists you get a toast and a `↑ x.y.z` badge in the status bar. `/update` checks on demand. Quit pager and run `pager update` to install it (`npm install -g pager-cli@latest`); it refuses while a pager is running in the same data directory, and on Windows it fails with a "file busy" message if another pager instance still holds the install open. Only releases that already contain this feature can announce updates.
 
 ### Trying it on one machine
 
@@ -100,6 +108,22 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Sync.** On every connection peers exchange a `sync-state` (the highest `seq` they hold per author, per shared conversation) and send each other whatever is missing. That gives offline catch-up and lets group members relay events to each other. Receivers `ack` events; your message shows `…` until the recipient(s) acked, then `✓`.
 - **Groups.** The creator invites contacts with signed `member-add` events (max 16). Members connect to each other directly. `member-leave` is permanent for that group. New members receive the full history.
 - **Hardening.** Frames are newline-delimited JSON, validated with zod, capped at 256 KiB, and peer-supplied text containing control characters (terminal escape injection) is rejected.
+
+## Coding agents
+
+`/agent` runs the coding agents installed on your machine (`omp`, `claude`, `opencode`, `hermes`) and lets them hand work to each other. It works only inside a git repository with at least one commit, and only on what you type locally: nothing from a peer or a chat can ever start or steer an agent.
+
+```
+/agent claude fix the flaky retry test     # starts a run; replies appear in the ⌁ agents room
+@omp add unit tests for src/db.ts           # same, typed inside the agents room
+/agent runs | stop [run] | merge <run> | drop <run|all> | check
+```
+
+- **Isolation.** Every run gets its own git worktree and branch `pager/<agent>-<id>` under `<data dir>/worktrees/`. Agents start from `HEAD` (uncommitted edits are not visible). Pager commits each run's work automatically. Runs are headless and **auto-approve their own tool use**: the worktree isolates git state, not the shell, so an agent can still touch files outside it or use the network. Only run agents on tasks and repositories you trust them with.
+- **Cooperation.** An agent can end its reply with `@@ask <agent>` … `@@end` blocks. Pager runs the asked agent on top of the asker's commit, then resumes the asker with the replies. Runs in one task are strictly sequential and stacked, so agents on different models and APIs never write the same files at once. Limits: 3 concurrent runs, delegation depth 3, 10 runs per task, 15 minutes per run.
+- **Merging.** Nothing reaches your checkout until you `/agent merge <run>`. It refuses on a dirty checkout, and on a conflict it aborts, names the conflicting files and leaves the tree untouched. Merging a run also retires the earlier runs it was built on. Pager warns when separate tasks change the same files.
+- **Invocations.** `omp -p --no-session`, `claude -p --permission-mode bypassPermissions`, `opencode run --auto`, `hermes chat -Q --oneshot --yolo`. `/agent check` asks each one to reply `PAGER_OK` so you can verify your installs.
+- **Persistence.** Runs and the room transcript live in memory only. After a restart, leftover worktrees stay in `<data dir>/worktrees/`; remove one with `git worktree remove --force <dir>` and `git branch -D pager/<id>` (`/agent drop` only knows runs from the current session).
 
 ## Limitations
 

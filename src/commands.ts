@@ -1,3 +1,4 @@
+import { AGENT_NAMES } from './agents/adapters.js'
 import { THEMES } from './themes.js'
 
 export interface CommandSpec {
@@ -16,6 +17,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'open', usage: '/open <name>', summary: 'Open a conversation' },
   { name: 'remove', usage: '/remove <name>', summary: 'Remove a contact' },
   { name: 'group', usage: '/group new|invite|members|leave', summary: 'Manage groups' },
+  { name: 'agent', usage: '/agent <name> <task>', summary: 'Run coding agents in isolated worktrees' },
+  { name: 'update', usage: '/update', summary: 'Check for a newer pager version' },
   { name: 'theme', usage: '/theme [name]', summary: 'Show or switch the color theme' },
   { name: 'quit', usage: '/quit', summary: 'Exit pager' },
 ]
@@ -32,6 +35,15 @@ export const THEME_ARGUMENTS: readonly CommandSpec[] = THEMES.map((t) => ({
   usage: `/theme ${t.name}`,
   summary: t.description,
 }))
+
+export const AGENT_ARGUMENTS: readonly CommandSpec[] = [
+  ...AGENT_NAMES.map((n) => ({ name: n, usage: `/agent ${n} <task>`, summary: `Ask ${n}` })),
+  { name: 'runs', usage: '/agent runs', summary: 'List agent runs' },
+  { name: 'stop', usage: '/agent stop [run]', summary: 'Stop running agents' },
+  { name: 'merge', usage: '/agent merge <run>', summary: 'Merge a finished run into this branch' },
+  { name: 'drop', usage: '/agent drop <run|all>', summary: 'Discard finished runs' },
+  { name: 'check', usage: '/agent check', summary: 'Test that each agent CLI responds' },
+]
 
 /** `line` starts with '/'. `rest` is the text after the first token, trimmed. */
 export function parseCommand(line: string): { name: string; args: string[]; rest: string } {

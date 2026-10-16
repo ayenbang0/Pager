@@ -4,7 +4,7 @@ import { completion, matchCommands } from './palette.js'
 
 test('prefix matching on commands', () => {
   assert.deepEqual(matchCommands('/gr').map((c) => c.name), ['group'])
-  assert.deepEqual(matchCommands('/a').map((c) => c.name), ['add', 'accept'])
+  assert.deepEqual(matchCommands('/a').map((c) => c.name), ['add', 'accept', 'agent'])
   assert.equal(matchCommands('/').length, 6)
 })
 
@@ -18,6 +18,12 @@ test('theme names complete after "/theme "', () => {
   assert.deepEqual(matchCommands('/theme mo').map((c) => c.name), ['mono'])
   assert.ok(matchCommands('/theme ').length >= 2)
   assert.deepEqual(matchCommands('/theme mono x'), [])
+})
+
+test('agent names and subcommands complete after "/agent "', () => {
+  assert.deepEqual(matchCommands('/agent cl').map((c) => c.name), ['claude'])
+  assert.equal(matchCommands('/agent ').length, 6)
+  assert.deepEqual(matchCommands('/agent claude fix').length, 0)
 })
 
 test('plain text, unknown commands and free-form arguments show nothing', () => {

@@ -1,18 +1,20 @@
 #!/usr/bin/env node
-import { createRequire } from 'node:module'
-import { render } from 'ink'
-import { Engine } from './engine.js'
+import type { Engine } from './engine.js'
 import { acquireLock, AlreadyRunningError } from './lock.js'
 import { dataDir } from './paths.js'
-import { App } from './ui/App.js'
+import { isNewer, latestVersion, runUpdate } from './update.js'
+import { VERSION } from './version.js'
 
 const USAGE = `pager: peer-to-peer terminal chat
 
-Usage: pager [-h | --help] [-v | --version]
+Usage: pager [update | -h | --help | -v | --version]
+
+  update           install the latest release (npm install -g pager-cli@latest)
 
 Environment:
-  PAGER_HOME       data directory (default ~/.pager)
-  PAGER_BOOTSTRAP  comma-separated host:port DHT bootstrap nodes (default: public HyperDHT)
+  PAGER_HOME             data directory (default ~/.pager)
+  PAGER_BOOTSTRAP        comma-separated host:port DHT bootstrap nodes (default: public HyperDHT)
+  PAGER_NO_UPDATE_CHECK  set to 1 to skip the daily check for a newer version
 `
 
 const args = process.argv.slice(2)
@@ -21,10 +23,10 @@ if (args.includes('-h') || args.includes('--help')) {
   process.exit(0)
 }
 if (args.includes('-v') || args.includes('--version')) {
-  const pkg = createRequire(import.meta.url)('../package.json') as { version: string }
-  process.stdout.write(`${pkg.version}\n`)
+  process.stdout.write(`${VERSION}\n`)
   process.exit(0)
 }
+if (args[0] === 'update' && args.length === 1) process.exit(await runUpdate(dataDir(), VERSION))
 if (args.length > 0) {
   process.stderr.write(USAGE)
   process.exit(2)
@@ -52,11 +54,19 @@ const bootstrap = process.env.PAGER_BOOTSTRAP?.split(',')
 
 let engine: Engine
 try {
+  // Dynamic for the same reason as above: keep native addons out of `pager update` / --help / --version.
+  const { Engine } = await import('./engine.js')
   engine = await Engine.open({ dir, bootstrap: bootstrap && bootstrap.length > 0 ? bootstrap : undefined })
 } catch (err) {
   release()
   process.stderr.write(`pager failed to start: ${err instanceof Error ? err.message : String(err)}\n`)
   process.exit(1)
+}
+
+if (process.env.PAGER_NO_UPDATE_CHECK !== '1') {
+  void latestVersion(dir).then((latest) => {
+    if (latest !== undefined && isNewer(latest, VERSION)) engine.setUpdate(latest)
+  })
 }
 
 let shuttingDown = false
@@ -70,6 +80,11 @@ async function shutdown(code: number, error?: unknown): Promise<void> {
   if (error !== undefined) process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`)
   process.exit(code)
 }
+
+// Dynamic: static imports would load hyperdht's native addons even for `pager update`, and Windows
+// cannot replace .node files this process has loaded.
+const { render } = await import('ink')
+const { App } = await import('./ui/App.js')
 
 // interactive: stdin/stdout are already verified TTYs, so a stray CI variable must not blank the UI.
 const app = render(<App engine={engine} onExit={() => void shutdown(0)} />, {

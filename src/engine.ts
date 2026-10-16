@@ -1,6 +1,8 @@
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import type { BootstrapNode } from 'hyperdht'
+import { isAgentName, type AdapterSpec, type AgentName } from './agents/adapters.js'
+import { Orchestrator, ROOM_ID, type RoomView } from './agents/orchestrator.js'
 import { COMMANDS, parseCommand } from './commands.js'
 import { ContactCodeError, decodeContactCode, encodeContactCode } from './contactCode.js'
 import { Store, type Conv } from './db.js'
@@ -10,6 +12,8 @@ import { checkEvent, MAX_GROUP_MEMBERS } from './ingest.js'
 import { Net, type PeerLink } from './net.js'
 import { loadSettings, saveSettings, type Settings } from './settings.js'
 import { findTheme, THEMES } from './themes.js'
+import { isNewer, latestVersion } from './update.js'
+import { VERSION } from './version.js'
 import type { Frame } from './wire.js'
 
 export type ToastKind = 'info' | 'success' | 'warn' | 'error'
@@ -48,6 +52,10 @@ export interface EngineOptions {
   bootstrap?: BootstrapNode[]
   dhtOptions?: Record<string, unknown>
   backoff?: { baseMs: number; maxMs: number }
+  /** Directory agents work against; must be inside a git repository. Defaults to the current directory. */
+  workdir?: string
+  /** Test seam: replaces the real agent CLIs. */
+  agentAdapters?: Partial<Record<AgentName, AdapterSpec>>
 }
 
 interface PendingItem {
@@ -78,11 +86,13 @@ export class Engine extends EventEmitter {
   private readonly secretKey: Buffer
   private readonly store: Store
   private readonly net: Net
+  private readonly agents: Orchestrator
   private readonly unknownTimers = new Set<NodeJS.Timeout>()
   private activeId: string | null = null
   /** Text set by /help and /code; null shows the welcome banner. */
   private homeLines: string[] | null = null
   private closed = false
+  private update: string | null = null
   private prefs: Settings
 
   static async open(opts: EngineOptions): Promise<Engine> {
@@ -116,6 +126,12 @@ export class Engine extends EventEmitter {
     })
     this.net.on('frame', (link: PeerLink, frame: Frame) => this.onFrame(link, frame))
     this.net.on('close', () => this.emit('change'))
+    this.agents = new Orchestrator({ dataDir: opts.dir, workdir: opts.workdir ?? process.cwd(), adapters: opts.agentAdapters })
+    this.agents.on('change', () => {
+      if (this.activeId === ROOM_ID) this.agents.markRead()
+      this.emit('change')
+    })
+    this.agents.on('toast', (t: Toast) => this.emit('toast', t))
   }
 
   // ---------------------------------------------------------------- queries
@@ -154,6 +170,11 @@ export class Engine extends EventEmitter {
     return this.pendingItems().map((p) => p.view)
   }
 
+  /** True while the home view shows the welcome screen (not /help or /code output). */
+  welcome(): boolean {
+    return this.homeLines === null
+  }
+
   home(): string[] {
     return (
       this.homeLines ?? [
@@ -172,6 +193,7 @@ export class Engine extends EventEmitter {
   }
 
   messages(convId: string, limit: number): MessageView[] {
+    if (convId === ROOM_ID) return this.agents.messages(limit)
     const conv = this.store.getConv(convId)
     if (!conv) return []
     const others = this.otherMembers(conv)
@@ -215,7 +237,18 @@ export class Engine extends EventEmitter {
 
   // ---------------------------------------------------------------- actions
 
+  /** Agents-room view model for the sidebar and status bar. */
+  agentRoom(): RoomView {
+    return this.agents.room()
+  }
+
   activate(convId: string | null): void {
+    if (convId === ROOM_ID) {
+      this.agents.markRead()
+      this.activeId = ROOM_ID
+      this.emit('change')
+      return
+    }
     if (convId !== null) {
       const conv = this.store.getConv(convId)
       if (!conv || conv.state !== 'active') return
@@ -242,6 +275,7 @@ export class Engine extends EventEmitter {
     this.closed = true
     for (const t of this.unknownTimers) clearTimeout(t)
     this.unknownTimers.clear()
+    await this.agents.close()
     await this.net.stop()
     this.store.close()
   }
@@ -271,11 +305,46 @@ export class Engine extends EventEmitter {
         return this.cmdGroup(args[0]?.toLowerCase(), rest.slice((args[0] ?? '').length).trim())
       case 'theme':
         return this.cmdTheme(rest)
+      case 'update':
+        return this.cmdUpdate()
+      case 'agent':
+        return this.cmdAgent(rest, args)
       case 'quit':
         this.emit('quit')
         return
       default:
         this.toast('error', `Unknown command /${name}. Try /help`)
+    }
+  }
+
+  private async cmdAgent(rest: string, args: string[]): Promise<void> {
+    const usage = '/agent <omp|claude|opencode|hermes> <task> | runs | stop [id] | merge <id> | drop <id|all> | check'
+    const sub = (args[0] ?? '').toLowerCase()
+    if (sub === '') return this.toast('info', usage)
+    if (isAgentName(sub)) {
+      const task = rest.slice(sub.length).trim()
+      if (task === '') return this.toast('error', `Usage: /agent ${sub} <task>`)
+      this.activate(ROOM_ID)
+      void this.agents.ask(sub, task)
+      return
+    }
+    const target = args[1]
+    switch (sub) {
+      case 'runs':
+        this.activate(ROOM_ID)
+        return this.agents.list()
+      case 'stop':
+        return this.agents.stop(target ?? 'all')
+      case 'merge':
+        return target === undefined ? this.toast('error', 'Usage: /agent merge <run>') : this.agents.merge(target)
+      case 'drop':
+        return target === undefined ? this.toast('error', 'Usage: /agent drop <run|all>') : this.agents.drop(target)
+      case 'check':
+        this.activate(ROOM_ID)
+        void this.agents.check()
+        return
+      default:
+        return this.toast('error', `Usage: ${usage}`)
     }
   }
 
@@ -292,6 +361,24 @@ export class Engine extends EventEmitter {
       this.toast('warn', 'Could not save settings; the change lasts until you quit')
     }
     this.emit('change')
+  }
+
+  /** Records a newer published version: shows the status-bar badge and a toast. */
+  setUpdate(version: string): void {
+    this.update = version
+    this.toast('info', `pager ${version} is available. Quit and run: pager update`)
+    this.emit('change')
+  }
+
+  updateAvailable(): string | null {
+    return this.update
+  }
+
+  private async cmdUpdate(): Promise<void> {
+    const latest = await latestVersion(this.dir, { force: true })
+    if (latest === undefined) return this.toast('error', 'Could not reach the npm registry')
+    if (isNewer(latest, VERSION)) return this.setUpdate(latest)
+    this.toast('success', `pager ${VERSION} is up to date`)
   }
 
   private cmdTheme(name: string): void {
@@ -395,6 +482,7 @@ export class Engine extends EventEmitter {
   }
 
   private cmdOpen(query: string): void {
+    if (query.trim().toLowerCase() === 'agents') return this.activate(ROOM_ID)
     const res = this.resolve(this.convs(), query, (c) => c.title, (c) => c.peer)
     if ('error' in res) {
       this.toast('error', res.error)
@@ -826,6 +914,7 @@ export class Engine extends EventEmitter {
       this.toast('error', `Message too long (max ${MAX_TEXT} characters)`)
       return
     }
+    if (this.activeId === ROOM_ID) return this.agents.say(text)
     const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
     if (!conv) {
       this.toast('warn', 'Open a conversation first (Ctrl+P) or /add a contact')

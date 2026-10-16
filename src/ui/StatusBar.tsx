@@ -11,10 +11,12 @@ interface Props {
   online: number
   unread: number
   pending: number
+  agentsRunning: number
+  update: string | null
   hint: string
 }
 
-export function StatusBar({ columns, listening, online, unread, pending, hint }: Props) {
+export function StatusBar({ columns, listening, online, unread, pending, agentsRunning, update, hint }: Props) {
   const theme = useTheme()
   return (
     <Box paddingX={1} justifyContent="space-between">
@@ -29,6 +31,13 @@ export function StatusBar({ columns, listening, online, unread, pending, hint }:
         <Text dimColor> · {online} online</Text>
         {unread > 0 ? <Text color={theme.badge}> · {unread} unread</Text> : null}
         {pending > 0 ? <Text color={theme.badge}> · {pending} pending</Text> : null}
+        {agentsRunning > 0 ? (
+          <Text color={theme.badge}>
+            {' · '}
+            <Spinner color={theme.badge} /> {agentsRunning} agent{agentsRunning === 1 ? '' : 's'}
+          </Text>
+        ) : null}
+        {update !== null ? <Text color={theme.badge}> · ↑ {update} (pager update)</Text> : null}
       </Text>
       {columns >= HINT_MIN_COLUMNS ? <Text dimColor>{hint}</Text> : null}
     </Box>
