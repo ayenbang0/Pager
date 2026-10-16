@@ -1,0 +1,45 @@
+{
+  "name": "pager-cli",
+  "version": "0.1.0",
+  "description": "Peer-to-peer terminal chat for developers",
+  "type": "module",
+  "bin": {
+    "pager": "dist/cli.js"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ayenbang0/Pager.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ayenbang0/Pager/issues"
+  },
+  "homepage": "https://github.com/ayenbang0/Pager#readme",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/cli.js",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
+    "testnet": "node scripts/testnet.mjs"
+  },
+  "dependencies": {
+    "hypercore-crypto": "^3.7.0",
+    "hyperdht": "^6.34.1",
+    "ink": "^8.0.0",
+    "react": "^19.3.1",
+    "string-width": "^8.3.0",
+    "wrap-ansi": "^10.0.2",
+    "z32": "^1.1.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "@types/react": "^19.3.0",
+    "typescript": "^7.0.2"
+  }
+}
