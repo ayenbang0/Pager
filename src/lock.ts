@@ -17,13 +17,19 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-/** Pid recorded in the lock; undefined when the file vanished or is unparseable (stale). */
-function readLockPid(file: string): number | undefined {
+/** Lock younger than this may still be mid-creation by another process. */
+const FRESH_LOCK_MS = 2000
+
+type LockState = { kind: 'gone' } | { kind: 'held'; pid: number } | { kind: 'stale' } | { kind: 'fresh-unparsed' }
+
+function inspectLock(file: string): LockState {
   try {
     const pid = Number.parseInt(fs.readFileSync(file, 'utf8').trim(), 10)
-    return Number.isInteger(pid) && pid > 0 ? pid : undefined
+    if (Number.isInteger(pid) && pid > 0) return pidAlive(pid) ? { kind: 'held', pid } : { kind: 'stale' }
+    // Empty/garbled: the owner may be between openSync('wx') and writeSync.
+    return Date.now() - fs.statSync(file).mtimeMs < FRESH_LOCK_MS ? { kind: 'fresh-unparsed' } : { kind: 'stale' }
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'gone' }
     throw err
   }
 }
@@ -42,12 +48,12 @@ export function acquireLock(dir: string): () => void {
       break
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
-      const pid = readLockPid(file)
-      if (attempt < 3 && (pid === undefined || !pidAlive(pid))) {
-        fs.rmSync(file, { force: true })
+      const state = inspectLock(file)
+      if (attempt < 3 && (state.kind === 'gone' || state.kind === 'stale')) {
+        if (state.kind === 'stale') fs.rmSync(file, { force: true })
         continue
       }
-      throw new AlreadyRunningError(pid ?? 0)
+      throw new AlreadyRunningError(state.kind === 'held' ? state.pid : 0)
     }
   }
   let released = false

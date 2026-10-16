@@ -23,8 +23,17 @@ test('a lock held by a dead pid is replaced', () => {
   release()
 })
 
-test('an empty lock file (crash between create and write) is replaced', () => {
+test('an old empty lock file (crash between create and write) is replaced', () => {
+  const dir = tmp()
+  const file = path.join(dir, 'pager.lock')
+  fs.writeFileSync(file, '')
+  const old = new Date(Date.now() - 10_000)
+  fs.utimesSync(file, old, old)
+  acquireLock(dir)()
+})
+
+test('a fresh empty lock file may be mid-creation by a live process', () => {
   const dir = tmp()
   fs.writeFileSync(path.join(dir, 'pager.lock'), '')
-  acquireLock(dir)()
+  assert.throws(() => acquireLock(dir), AlreadyRunningError)
 })
