@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { wheelEvents } from './mouse.js'
+import { clickEvents, wheelEvents } from './mouse.js'
 
 test('wheel up and down map to older and newer', () => {
   assert.deepEqual(wheelEvents('\x1b[<64;10;5M'), [1])
@@ -16,4 +16,13 @@ test('modifier bits do not hide the wheel; clicks, releases and horizontal wheel
   assert.deepEqual(wheelEvents('\x1b[<0;3;3M\x1b[<0;3;3m'), [])
   assert.deepEqual(wheelEvents('\x1b[<66;3;3M\x1b[<67;3;3M'), [])
   assert.deepEqual(wheelEvents('plain typing'), [])
+})
+
+test('left presses become clicks with their cell; other events do not', () => {
+  assert.deepEqual(clickEvents('\x1b[<0;12;7M'), [{ x: 12, y: 7 }])
+  assert.deepEqual(clickEvents('\x1b[<64;1;1M'), [])
+  assert.deepEqual(clickEvents('\x1b[<2;1;1M'), [])
+  assert.deepEqual(clickEvents('\x1b[<0;1;1m'), [])
+  assert.deepEqual(clickEvents('\x1b[<32;1;1M'), [])
+  assert.deepEqual(clickEvents('\x1b[<0;1;2M\x1b[<0;3;4M'), [{ x: 1, y: 2 }, { x: 3, y: 4 }])
 })

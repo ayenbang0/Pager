@@ -38,11 +38,14 @@ export const THEME_ARGUMENTS: readonly CommandSpec[] = THEMES.map((t) => ({
 
 export const AGENT_ARGUMENTS: readonly CommandSpec[] = [
   ...AGENT_NAMES.map((n) => ({ name: n, usage: `/agent ${n} <task>`, summary: `Ask ${n}` })),
+  { name: 'chain', usage: '/agent chain omp>claude <task>', summary: 'Run agents in turn; each reviews the previous work' },
   { name: 'runs', usage: '/agent runs', summary: 'List agent runs' },
   { name: 'stop', usage: '/agent stop [run]', summary: 'Stop running agents' },
   { name: 'merge', usage: '/agent merge <run>', summary: 'Merge a finished run into this branch' },
   { name: 'drop', usage: '/agent drop <run|all>', summary: 'Discard finished runs' },
   { name: 'cli', usage: '/agent cli <name> <args>', summary: "Run an agent's own CLI command (mcp list, models, ...)" },
+  { name: 'commands', usage: '/agent commands <name>', summary: "List an agent's slash commands" },
+  { name: 'memory', usage: '/agent memory [add <text>|clear]', summary: "Show or edit this repository's shared agent notes" },
   { name: 'check', usage: '/agent check', summary: 'Test that each agent CLI responds' },
 ]
 

@@ -228,3 +228,15 @@ test('agents room: /agent and @name drive agents, plain text is refused, the roo
   assert.ok(a.engine.convs().every((c) => c.id !== ROOM_ID))
   fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5 })
 })
+
+test('input history is de-duplicated, newest last, and survives a restart', async () => {
+  const a = await boot('hist')
+  await a.engine.submit('/theme nord')
+  await a.engine.submit('/theme dracula')
+  await a.engine.submit('/theme nord')
+  assert.deepEqual(a.engine.history().slice(-2), ['/theme dracula', '/theme nord'])
+  assert.equal(a.engine.history().filter((h) => h === '/theme nord').length, 1)
+  await a.engine.close()
+  const again = await boot('hist', a.dir)
+  assert.deepEqual(again.engine.history().slice(-3, -1), ['/theme dracula', '/theme nord'])
+})

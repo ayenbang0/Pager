@@ -16,7 +16,8 @@ import { StatusBar } from './StatusBar.js'
 import { ThemeContext } from './theme.js'
 import { Toasts, TOAST_LIFETIME_MS, type ToastItem } from './Toasts.js'
 import { useEngine } from './useEngine.js'
-import { useMouseWheel } from './useMouseWheel.js'
+import { useMouse } from './useMouse.js'
+import { useTerminalFocus } from './useTerminalFocus.js'
 
 const MIN_COLUMNS = 60
 const MIN_ROWS = 12
@@ -26,9 +27,14 @@ const HISTORY_LIMIT = 500
 const WHEEL_LINES = 3
 // header + title + prompt box + status bar
 const FIXED_ROWS = 1 + 1 + 3 + 1
+/** Terminal row (1-based) where the message pane starts: below the header and the title row. */
+const PANE_TOP_ROW = 3
 const MIN_PANE_ROWS = 3
 /** A second Ctrl+C within this window quits. */
 const QUIT_WINDOW_MS = 2000
+const NOTIFY = process.env.PAGER_NO_NOTIFY !== '1'
+/** OSC 9;4 taskbar progress: Windows Terminal and a few others; elsewhere it could print garbage. */
+const TASKBAR_PROGRESS = process.env.WT_SESSION !== undefined || ['iTerm.app', 'ghostty', 'WezTerm'].includes(process.env.TERM_PROGRAM ?? '')
 
 type Overlay = 'palette' | 'help' | null
 
@@ -45,6 +51,8 @@ export function App({ engine, onExit }: Props) {
   const [toasts, setToasts] = useState<ToastItem[]>([])
   const [overlay, setOverlay] = useState<Overlay>(null)
   const [quitArmed, setQuitArmed] = useState(false)
+  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set())
+  const [foldsOn, setFoldsOn] = useState(true)
   const nextToastId = useRef(0)
   const quitTimer = useRef<NodeJS.Timeout | undefined>(undefined)
 
@@ -87,23 +95,54 @@ export function App({ engine, onExit }: Props) {
     return () => void process.stdout.write('\x1b]0;\x07')
   }, [unread])
 
+  // Unfocused attention: ring when something new arrives or the agents finish, and show indeterminate taskbar progress while they run.
+  const focused = useTerminalFocus()
+  const prevUnread = useRef(unread)
+  const prevActive = useRef(agentsActive)
+  useEffect(() => {
+    const arrived = unread > prevUnread.current || (agentsActive === 0 && prevActive.current > 0)
+    if (NOTIFY && !focused && arrived) process.stdout.write('\x07')
+    prevUnread.current = unread
+    prevActive.current = agentsActive
+  }, [unread, agentsActive, focused])
+  useEffect(() => {
+    if (!NOTIFY || !TASKBAR_PROGRESS) return
+    process.stdout.write(`\x1b]9;4;${agentsActive > 0 ? '3;0' : '0;0'}\x07`)
+    return () => void process.stdout.write('\x1b]9;4;0;0\x07')
+  }, [agentsActive])
+
   const matches = overlay === null ? matchCommands(input.text) : []
   const paneRows = Math.max(MIN_PANE_ROWS, rows - FIXED_ROWS - matches.length)
   const mainWidth = columns - (sidebarShown ? SIDEBAR_WIDTH : 0)
   const activeConv = convs.find((c) => c.id === activeId)
 
   const lines: Line[] = activeId
-    ? buildLines(engine.messages(activeId, HISTORY_LIMIT), mainWidth - 2, theme)
+    ? buildLines(engine.messages(activeId, HISTORY_LIMIT), mainWidth - 2, theme, new Date(), { enabled: foldsOn, expanded })
     : plainLines(engine.home(), mainWidth - 2)
   const { visible, maxOffset } = windowLines(lines, paneRows, offset)
+  // New content while scrolled up must not move what the user is reading.
+  const seen = useRef({ id: activeId, len: lines.length })
+  useEffect(() => {
+    const grew = lines.length - seen.current.len
+    if (seen.current.id === activeId && offset > 0 && grew > 0) setOffset((o) => o + grew)
+    seen.current = { id: activeId, len: lines.length }
+  }, [lines.length, activeId, offset])
   const showBanner = activeId === null && engine.welcome() && paneRows >= BANNER_ROWS
 
   const onScroll = useCallback(
     (dir: 1 | -1) => setOffset(Math.min(maxOffset, Math.max(0, offset + dir * Math.max(1, paneRows - 2)))),
     [maxOffset, offset, paneRows],
   )
-  useMouseWheel((dir) => {
-    if (overlay === null) setOffset((o) => Math.min(maxOffset, Math.max(0, o + dir * WHEEL_LINES)))
+  useMouse({
+    onWheel: (dir) => {
+      if (overlay === null) setOffset((o) => Math.min(maxOffset, Math.max(0, o + dir * WHEEL_LINES)))
+    },
+    onClick: ({ x, y }) => {
+      if (overlay !== null || x <= (sidebarShown ? SIDEBAR_WIDTH : 0)) return
+      // The pane's lines are bottom-aligned and start below the header and title rows.
+      const key = visible[y - (PANE_TOP_ROW + paneRows - visible.length)]?.fold
+      if (key !== undefined) setExpanded((prev) => new Set(prev).add(key))
+    },
   })
   const onSwitch = (dir: 1 | -1): void => {
     const ids = [null, ...convs.map((c) => c.id), ROOM_ID]
@@ -129,7 +168,7 @@ export function App({ engine, onExit }: Props) {
   const inRoom = activeId === ROOM_ID
   const title = inRoom ? '⌁ agents' : activeConv ? (activeConv.kind === 'group' ? `#${activeConv.title}` : activeConv.title) : 'home'
   const placeholder = inRoom
-    ? 'Ask @omp, @claude, @opencode or @hermes'
+    ? 'Ask @omp, @claude, @opencode or @hermes (@omp>claude chains)'
     : activeConv
       ? `Message ${title} or type / for commands`
       : 'Type / for commands'
@@ -161,6 +200,7 @@ export function App({ engine, onExit }: Props) {
     { label: 'Change my name…', hint: '/name', run: () => setInput(setText('/name ')) },
     { label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: 'Ctrl+B', run: () => engine.toggleSidebar() },
     { label: 'Keyboard shortcuts', hint: '?', run: () => setOverlay('help') },
+    { label: foldsOn ? 'Show long messages in full' : 'Fold long messages', hint: 'Ctrl+T', run: () => setFoldsOn((v) => !v) },
     ...THEMES.map(
       (t): PaletteItem => ({
         label: `Theme: ${t.name}`,
@@ -172,6 +212,7 @@ export function App({ engine, onExit }: Props) {
     ...AGENT_NAMES.map(
       (n): PaletteItem => ({ label: `Ask ${n}…`, hint: `/agent ${n}`, run: () => setInput(setText(`/agent ${n} `)) }),
     ),
+    { label: 'Chain agents…', hint: '/agent chain', run: () => setInput(setText('/agent chain omp>claude ')) },
     { label: 'Check agents', hint: '/agent check', run: () => void engine.submit('/agent check') },
     ...(agentsActive > 0 ? [{ label: 'Stop all agents', hint: '/agent stop', run: () => void engine.submit('/agent stop') }] : []),
     ...room.runs
@@ -250,6 +291,8 @@ export function App({ engine, onExit }: Props) {
               onSidebar={() => engine.toggleSidebar()}
               onHelp={() => setOverlay('help')}
               onQuit={onExit}
+              history={engine.history()}
+              onToggleFolds={() => setFoldsOn((v) => !v)}
             />
           </Box>
         </Box>

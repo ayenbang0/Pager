@@ -24,16 +24,27 @@ export function killTree(child: ChildProcess): void {
   }
 }
 
-function collect(stream: NodeJS.ReadableStream, cap: number): () => string {
+function collect(stream: NodeJS.ReadableStream | null, cap: number): () => string {
   const chunks: Buffer[] = []
   let size = 0
-  stream.on('data', (c: Buffer) => {
+  stream?.on('data', (c: Buffer) => {
     if (size >= cap) return
     const part = c.length > cap - size ? c.subarray(0, cap - size) : c
     chunks.push(part)
     size += part.length
   })
   return () => Buffer.concat(chunks).toString('utf8')
+}
+
+/** Spawns `bin` without a shell, in its own process group (POSIX) so killTree can reach the whole tree. */
+export function startProcess(bin: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; stdin: 'ignore' | 'pipe' }): ChildProcess {
+  return spawn(bin, args, {
+    cwd: opts.cwd,
+    env: opts.env,
+    stdio: [opts.stdin, 'pipe', 'pipe'],
+    windowsHide: true,
+    detached: process.platform !== 'win32',
+  })
 }
 
 /** Runs `bin` without a shell; the prompt travels as one argv element. */
@@ -43,13 +54,7 @@ export function runProcess(
   opts: { cwd: string; env: NodeJS.ProcessEnv; timeoutMs: number; onSpawn?: (child: ChildProcess) => void },
 ): Promise<ProcResult> {
   const { promise, resolve, reject } = Promise.withResolvers<ProcResult>()
-  const child = spawn(bin, args, {
-    cwd: opts.cwd,
-    env: opts.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    windowsHide: true,
-    detached: process.platform !== 'win32',
-  })
+  const child = startProcess(bin, args, { cwd: opts.cwd, env: opts.env, stdin: 'ignore' })
   const stdout = collect(child.stdout, STDOUT_CAP)
   const stderr = collect(child.stderr, STDERR_CAP)
   let timedOut = false

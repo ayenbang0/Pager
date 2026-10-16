@@ -44,7 +44,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/group members` | List members of the open group |
 | `/group leave` | Leave the open group permanently |
 | `/theme [name]` | Show or switch the color theme: `omp` (default), `terminal`, `mono`, `ocean`, `amber`, `light` (saved) |
-| `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `runs`, `stop`, `merge`, `drop`, `check` |
+| `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `chain`, `memory`, `commands`, `runs`, `stop`, `merge`, `drop`, `check` |
 | `/quit` | Exit |
 
 ## Keys
@@ -53,12 +53,14 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 |---|---|
 | Enter | Send / run command |
 | Tab, Up/Down | Complete the highlighted command / move in the palette (or input history) |
+| Right, End, Tab | Accept the dim suggestion pager shows from earlier input |
 | Ctrl+P | Command palette: switch conversation, accept/decline, change theme, and more |
 | ? (empty prompt) | Keyboard shortcut help |
 | Alt+Up / Alt+Down | Previous / next conversation (home is first) |
 | Ctrl+O / Ctrl+N | Same, for terminals that do not send Alt+arrows (macOS Terminal.app by default) |
 | Ctrl+B | Toggle the sidebar (saved) |
 | Mouse wheel / trackpad scroll, PgUp / PgDn | Scroll messages (3 lines per wheel notch). With the wheel active, hold Shift (Option in iTerm2) to select text with the mouse |
+| Ctrl+T, click `▸ N more lines` | Fold / expand long messages (over 30 rows) |
 | Ctrl+A / Ctrl+E, Home / End | Start / end of line |
 | Alt+B / Alt+F, Ctrl+Left / Right | Word left / right (Option+Left / Right on macOS; Option+B / F also works without "Option as Meta") |
 | Alt+Backspace | Delete word back (Option+Delete on macOS) |
@@ -75,9 +77,14 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `PAGER_BOOTSTRAP` | Comma-separated `host:port` DHT bootstrap nodes (default: public HyperDHT) |
 | `PAGER_REDUCE_MOTION` | Set to `1` to disable animations (connecting spinner, toast countdown bars) |
 | `PAGER_NO_UPDATE_CHECK` | Set to `1` to skip the daily check for a newer release |
-| `PAGER_NO_MOUSE` | Set to `1` to leave the mouse alone (no wheel scrolling; plain drag selects text) |
+| `PAGER_NO_MOUSE` | Set to `1` to leave the mouse alone (no wheel scrolling or click-to-expand; plain drag selects text) |
+| `PAGER_NO_NOTIFY` | Set to `1` to turn off the bell when pager is unfocused and the taskbar progress indicator |
+| `PAGER_NO_ACP` | Set to `1` to run every agent one-shot instead of over ACP |
+| `PAGER_ACP_LOG` | Path of a file that receives the ACP JSON-RPC traffic (debugging) |
 
-Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar), `update.json` (cached latest version and check time), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
+Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar), `history.json` (your last 500 inputs, for Up and the dim suggestion), `update.json` (cached latest version and check time), `agents-room.jsonl` (agents room transcript), `agent-sessions.json` (agent session ids), `memory/` (shared agent notes per repository), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
+
+When pager is not focused (terminals that report focus: Windows Terminal, iTerm2, kitty, Ghostty, WezTerm, tmux with `focus-events`) it rings the bell when a message arrives or the agents finish, and Windows Terminal, iTerm2, Ghostty and WezTerm also show an indeterminate progress indicator while agents run.
 
 ### Updating
 
@@ -118,15 +125,17 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 /agent claude fix the flaky retry test     # starts a run; replies appear in the ⌁ agents room
 @omp add unit tests for src/db.ts           # same, typed inside the agents room
 /agent runs | stop [run] | merge <run> | drop <run|all> | check
+/agent chain omp>claude <task> | memory [add <text>|clear] | commands <name> | cli <name> <args>
 ```
 
 - **Isolation.** Every run gets its own git worktree and branch `pager/<agent>-<id>` under `<data dir>/worktrees/`. Agents start from `HEAD` (uncommitted edits are not visible). Pager commits each run's work automatically. Runs are headless and **auto-approve their own tool use**: the worktree isolates git state, not the shell, so an agent can still touch files outside it or use the network. Only run agents on tasks and repositories you trust them with.
 - **Cooperation.** An agent can end its reply with `@@ask <agent>` … `@@end` blocks. Pager runs the asked agent on top of the asker's commit, then resumes the asker with the replies. Runs in one task are strictly sequential and stacked, so agents on different models and APIs never write the same files at once. Limits: 3 concurrent runs, delegation depth 3, 10 runs per task, 15 minutes per run.
+- **Chains.** `/agent chain omp>claude <task>` (or `@omp>claude <task>` in the room) does not depend on an agent volunteering `@@ask`: the first agent works, and each next one starts on top of the previous commit with the original task plus the previous reply and the instruction to review it and fix what it finds. Up to 4 agents; the chain stops at the first failed step.
 - **Merging.** Nothing reaches your checkout until you `/agent merge <run>`. It refuses on a dirty checkout, and on a conflict it aborts, names the conflicting files and leaves the tree untouched. Merging a run also retires the earlier runs it was built on. Pager warns when separate tasks change the same files.
-- **Invocations.** `omp -p --no-session`, `claude -p --permission-mode bypassPermissions`, `opencode run --auto`, `hermes chat -Q --oneshot --yolo`. `/agent check` asks each one to reply `PAGER_OK` so you can verify your installs.
-- **Persistence.** Runs and the room transcript live in memory only. After a restart, leftover worktrees stay in `<data dir>/worktrees/`; remove one with `git worktree remove --force <dir>` and `git branch -D pager/<id>` (`/agent drop` only knows runs from the current session).
-- **Memory.** Each run is a fresh, one-shot process (a native session cannot be resumed across worktrees), so continuity comes from the prompt: every run gets the shared room transcript (the last 40 messages, up to 60k characters, including what other agents said and which files they changed), and a resumed agent also gets its own earlier reply back. Follow-ups in the room therefore remember earlier work, but only what was said in the room, not an agent's private reasoning.
-- **Agent commands.** `/agent cli <name> <args>` (or `@name !<args>` in the room) runs the agent's own CLI, for example `/agent cli claude mcp list` or `/agent cli opencode models`, and posts the output. It is non-interactive, so commands that open a TUI or ask questions time out. A task that starts with `/` (for example `/agent claude /review`) is sent to the agent verbatim so its own slash command runs; such a run does not get the pager preamble, so it cannot delegate.
+- **Invocations.** `omp`, `opencode` and `hermes` run as Agent Client Protocol servers (`<agent> acp`, one process per run in the run's worktree): their reply streams live into the room (text plus `⚙`/`✓` tool lines, then one final message and a `used N tools` line), and permission requests are auto-approved like the other agents' flags. If the ACP handshake fails, the run falls back to the one-shot call (`omp -p --no-session`, `opencode run --auto`, `hermes chat -Q --oneshot --yolo`) with a notice. `claude` has no ACP mode and always runs `claude -p --permission-mode bypassPermissions`. `/agent check` asks each one to reply `PAGER_OK` (and whether ACP starts) so you can verify your installs. `PAGER_NO_ACP=1` forces one-shot everywhere; `PAGER_ACP_LOG=<file>` records the JSON-RPC traffic.
+- **Persistence.** The room transcript is saved to `<data dir>/agents-room.jsonl` (last 500 messages) and survives restarts. Runs themselves live in memory only: after a restart, leftover worktrees stay in `<data dir>/worktrees/`; remove one with `git worktree remove --force <dir>` and `git branch -D pager/<id>` (`/agent drop` only knows runs from the current session).
+- **Memory.** Three layers. The room transcript (the last 40 messages, up to 60k characters, including what other agents said and which files they changed) goes into every prompt. A repository-scoped notes file (`<data dir>/memory/<repo>.md`, passed as a `--- MEMORY ---` section, newest 8k characters) carries durable facts across restarts: agents add one with an `@@remember` … `@@end` block (up to 5 per reply), you manage it with `/agent memory [add <text>|clear]`. And `hermes` keeps its own ACP session between tasks (`omp` and `opencode` cannot resume a session across worktrees, so they rely on the first two layers).
+- **Agent commands.** `/agent cli <name> <args>` (or `@name !<args>` in the room) runs the agent's own CLI, for example `/agent cli claude mcp list` or `/agent cli opencode models`, and posts the output. It is non-interactive, so commands that open a TUI or ask questions time out. A task that starts with `/` (for example `/agent claude /review`) is sent to the agent verbatim so its own slash command runs; such a run does not get the pager preamble, so it cannot delegate. `/agent commands <name>` lists the slash commands an ACP agent advertises.
 
 ## Limitations
 

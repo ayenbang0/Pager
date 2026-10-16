@@ -1,4 +1,4 @@
-import type { AgentName } from './adapters.js'
+import { isAgentName, type AgentName } from './adapters.js'
 
 export const TASK_MARKER = '--- TASK ---'
 export const REPLIES_MARKER = '--- REPLIES ---'
@@ -8,6 +8,11 @@ export const REQUEST_MAX_CHARS = 8000
 export const CONTEXT_MESSAGES = 40
 export const CONTEXT_MESSAGE_CHARS = 4000
 export const PROMPT_MAX_CHARS = 60_000
+export const MEMORY_MARKER = '--- MEMORY ---'
+export const MEMORY_MAX_CHARS = 8000
+export const MEMORY_FILE_MAX_CHARS = 16_000
+export const MAX_NOTES_PER_RUN = 5
+export const NOTE_MAX_CHARS = 500
 
 export interface Ask {
   agent: string
@@ -29,6 +34,21 @@ export function parseAsks(text: string): { clean: string; asks: Ask[] } {
   return { clean, asks }
 }
 
+const REMEMBER_BLOCK = /^[ \t]*@@remember[ \t]*\r?\n([\s\S]*?)\r?\n[ \t]*@@end[ \t]*$/gm
+
+/** Extracts `@@remember` blocks as one-line notes (first MAX_NOTES_PER_RUN kept); all matched blocks leave `clean`. */
+export function parseRemember(text: string): { clean: string; notes: string[] } {
+  const notes: string[] = []
+  const clean = text
+    .replace(REMEMBER_BLOCK, (_m, body: string) => {
+      const note = body.replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX_CHARS)
+      if (note !== '' && notes.length < MAX_NOTES_PER_RUN) notes.push(note)
+      return ''
+    })
+    .trim()
+  return { clean, notes }
+}
+
 const preamble = (agent: string, peers: string, branch: string): string =>
   [
     `You are "${agent}", one of several coding agents (${peers}) collaborating through pager. You work alone in an isolated git worktree on branch ${branch}; nobody else edits your files. Your edits are committed automatically when you finish, and later agents in this task continue from your commit.`,
@@ -38,18 +58,21 @@ const preamble = (agent: string, peers: string, branch: string): string =>
     '@@end',
     'Each request runs after you finish, in order, on top of your commit; you are then resumed with every reply and with your own earlier reply. Ask only agents from the list above, never yourself. Delegate when another agent is better placed (a second opinion or review, a different model, a separate part of the work); do the work yourself otherwise. Do not run git commands that change branches or the worktree location.',
     'The ROOM section below is the shared transcript of this session, including what the other agents said and which files they changed. Treat it as your memory.',
+    'To keep a durable fact for future tasks in this repository, write a block: @@remember, the fact on the next line, then @@end (one fact per block). The MEMORY section below holds what earlier sessions kept.',
   ].join('\n')
 
 export function buildPrompt(input: {
   agent: AgentName
   branch: string
   peers: AgentName[]
+  memory: string
   room: { author: string; text: string }[]
   task: string
 }): string {
   const head = preamble(input.agent, input.peers.filter((p) => p !== input.agent).join(', '), input.branch)
   const room = input.room.slice(-CONTEXT_MESSAGES).map((m) => `[${m.author}] ${m.text.slice(0, CONTEXT_MESSAGE_CHARS)}`)
-  const assemble = (task: string): string => [head, '--- ROOM ---', ...room, TASK_MARKER, task].join('\n')
+  const memory = input.memory.trim() === '' ? [] : [MEMORY_MARKER, input.memory.slice(-MEMORY_MAX_CHARS)]
+  const assemble = (task: string): string => [head, ...memory, '--- ROOM ---', ...room, TASK_MARKER, task].join('\n')
   let prompt = assemble(input.task)
   while (prompt.length > PROMPT_MAX_CHARS && room.length > 0) {
     room.shift()
@@ -66,6 +89,33 @@ export function buildPrompt(input: {
 export function withReplies(task: string, replies: { run: string; text: string }[], earlier = ''): string {
   const joined = `${task}\n\n${REPLIES_MARKER}\n${replies.map((r) => `[${r.run}] ${r.text}`).join('\n\n')}`
   return earlier === '' ? joined : `${joined}\n\n${EARLIER_MARKER}\n${earlier}`
+}
+
+export const MAX_CHAIN = 4
+
+/** `omp>claude` → ['omp', 'claude']; undefined unless 2..MAX_CHAIN known agents. */
+export function parseChain(spec: string): AgentName[] | undefined {
+  const parts = spec.toLowerCase().split('>')
+  if (parts.length < 2 || parts.length > MAX_CHAIN) return undefined
+  const agents: AgentName[] = []
+  for (const p of parts) {
+    if (!isAgentName(p)) return undefined
+    agents.push(p)
+  }
+  return agents
+}
+
+/** The task for the next agent in a chain: review what the previous one did. */
+export function chainTask(task: string, prev: { run: string; text: string }): string {
+  return [
+    `Another agent (${prev.run}) already worked on this task; its work is committed as HEAD of your worktree (see \`git show HEAD\`).`,
+    `Original task: ${task}`,
+    '',
+    `${prev.run} replied:`,
+    prev.text,
+    '',
+    'Review that work against the task, fix any problems you find, and reply with a short verdict.',
+  ].join('\n')
 }
 
 /** Splits a command line into arguments; single or double quotes group words, backslashes stay literal. */

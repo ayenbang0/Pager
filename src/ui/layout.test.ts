@@ -66,3 +66,36 @@ test('windowLines keeps the newest lines at offset 0 and clamps offsets', () => 
   assert.deepEqual(far.visible.map((l) => l.key), ['0', '1', '2', '3'])
   assert.deepEqual(windowLines(lines, 20, 5).visible.length, 10)
 })
+
+const long = (rows: number): string => Array.from({ length: rows }, (_, i) => `row ${i}`).join('\n')
+
+test('a long text message folds to head + marker + tail; the marker row carries the fold key', () => {
+  const lines = buildLines([msg({ text: long(40) })], 80, T, NOW)
+  assert.equal(lines.length, 12 + 1 + 6)
+  assert.deepEqual(lines.flatMap((l, i) => (l.fold === undefined ? [] : [i])), [12])
+  assert.equal(lines[0]?.fold, undefined)
+  assert.match(plain(lines[12]!), /▸ 22 more lines/)
+  assert.equal(lines[12]?.fold, 'k')
+  assert.match(plain(lines.at(-1)!), /row 39$/)
+})
+
+test('expanded, disabled and system messages are never folded', () => {
+  assert.equal(buildLines([msg({ text: long(40) })], 80, T, NOW, { enabled: true, expanded: new Set(['k']) }).length, 40)
+  assert.equal(buildLines([msg({ text: long(40) })], 80, T, NOW, { enabled: false, expanded: new Set() }).length, 40)
+  assert.equal(buildLines([msg({ kind: 'system', text: long(40) })], 80, T, NOW).length, 40)
+})
+
+test('markdown messages render headings, bullets, code fences and inline spans', () => {
+  const text = '# Title\n- item `x` and **b**\n```js\nlet a\n```'
+  const lines = buildLines([msg({ text, markdown: true })], 80, T, NOW)
+  assert.deepEqual(lines.map((l) => plain(l).slice('09:05 bob  '.length).trimStart()), ['Title', '• item x and b', '▎ js', '▎ let a'])
+  assert.deepEqual(lines[0]?.segs.at(-1), { text: 'Title', bold: true, color: T.accent })
+  assert.deepEqual(lines[1]?.segs.find((s) => s.text === 'x'), { text: 'x', color: T.info })
+  assert.deepEqual(lines[1]?.segs.find((s) => s.text === 'b'), { text: 'b', bold: true })
+  assert.equal(lines[3]?.segs.at(-1)?.color, T.info)
+})
+
+test('the same text without the markdown flag stays literal', () => {
+  const lines = buildLines([msg({ text: '# Title\n`x`' })], 80, T, NOW)
+  assert.deepEqual(lines.map((l) => plain(l).slice('09:05 bob  '.length).trimStart()), ['# Title', '`x`'])
+})

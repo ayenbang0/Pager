@@ -14,7 +14,8 @@ export const KEY_SECTIONS: readonly KeySection[] = [
       ['Alt+Up / Alt+Down', 'Previous / next conversation'],
       ['Ctrl+O / Ctrl+N', 'Previous / next conversation (any terminal)'],
       ['Ctrl+B', 'Toggle sidebar'],
-      ['PgUp / PgDn', 'Scroll messages'],
+      ['PgUp / PgDn / wheel', 'Scroll messages'],
+      ['Ctrl+T / click "▸ N more lines"', 'Fold / expand long messages'],
       ['?', 'This help (on an empty prompt)'],
     ],
   },
@@ -24,6 +25,7 @@ export const KEY_SECTIONS: readonly KeySection[] = [
       ['/', 'Open the command menu'],
       ['Tab', 'Complete the highlighted entry'],
       ['Up / Down', 'Pick an entry, or recall earlier input'],
+      ['Right / End / Tab', 'Accept the dim suggestion from earlier input'],
     ],
   },
   {

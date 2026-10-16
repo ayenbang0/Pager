@@ -10,6 +10,10 @@ export interface AdapterSpec {
   bin: string
   args(prompt: string, cwd: string): string[]
   extract(stdout: string): string
+  /** Args after `bin` that start the agent's ACP server over stdio; absent = one-shot only. */
+  acp?: string[]
+  /** False keeps ACP streaming but drops native session resume (default true). */
+  resume?: boolean
 }
 
 const cleanOutput = (s: string): string => stripVTControlCharacters(s).trim()
@@ -25,12 +29,16 @@ function hermesExtract(s: string): string {
   return lines.join('\n').trim()
 }
 
-// Headless, one-shot, auto-approving (runs only inside a throwaway worktree), stateless.
+// One-shot runs are headless, auto-approving (runs only inside a throwaway worktree) and stateless.
+// `acp` adds the args that start the agent's Agent Client Protocol server: pager then streams its
+// replies live and keeps its native session between tasks (see acp.ts). claude has no ACP mode.
 export const ADAPTERS: Record<AgentName, AdapterSpec> = {
   omp: {
     bin: 'omp',
     args: (prompt, cwd) => ['-p', '--no-session', '--cwd', cwd, prompt],
     extract: cleanOutput,
+    acp: ['acp'],
+    resume: false, // session/load fails when the cwd differs from the session's (each run has its own worktree)
   },
   claude: {
     bin: 'claude',
@@ -41,11 +49,14 @@ export const ADAPTERS: Record<AgentName, AdapterSpec> = {
     bin: 'opencode',
     args: (prompt, cwd) => ['run', '--auto', '--dir', cwd, prompt],
     extract: cleanOutput,
+    acp: ['acp'],
+    resume: false, // session/load succeeds but keeps working in the old worktree, ignoring the new cwd
   },
   hermes: {
     bin: 'hermes',
     args: (prompt, cwd) => ['chat', '-Q', '--oneshot', '--yolo', '--in', cwd, '-q', prompt],
     extract: hermesExtract,
+    acp: ['acp'],
   },
 }
 

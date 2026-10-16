@@ -22,8 +22,6 @@ import {
 } from './inputBuffer.js'
 import { useTheme } from './theme.js'
 
-const HISTORY_MAX = 100
-
 interface Props {
   value: InputBuffer
   /** Functional update so keystrokes arriving before a re-render never overwrite each other. */
@@ -42,6 +40,9 @@ interface Props {
   onSidebar(): void
   onHelp(): void
   onQuit(): void
+  /** Earlier submitted lines, oldest first. */
+  history: readonly string[]
+  onToggleFolds(): void
 }
 
 export function Prompt({
@@ -58,12 +59,18 @@ export function Prompt({
   onSidebar,
   onHelp,
   onQuit,
+  history,
+  onToggleFolds,
 }: Props) {
   const theme = useTheme()
   const [selected, setSelected] = useState(0)
-  const history = useRef<string[]>([])
   const historyPos = useRef<number | null>(null)
   const selectedRow = Math.min(selected, Math.max(0, matches.length - 1))
+  // Dim completion from earlier input, offered only when the cursor is at the end and no command menu is open.
+  const ghost =
+    matches.length === 0 && value.text !== '' && value.cursor === value.text.length
+      ? (history.findLast((h) => h.length > value.text.length && h.startsWith(value.text))?.slice(value.text.length) ?? '')
+      : ''
 
   usePaste((text) => onEdit((b) => insert(b, text)), { isActive: active })
 
@@ -113,16 +120,15 @@ export function Prompt({
             return onEdit(deleteToStart)
           case 'k':
             return onEdit(deleteToEnd)
+          case 't':
+            return onToggleFolds()
           default:
             return
         }
       }
       if (key.return) {
         const text = value.text
-        if (text.trim() !== '') {
-          history.current = [...history.current.filter((h) => h !== text), text].slice(-HISTORY_MAX)
-          historyPos.current = null
-        }
+        if (text.trim() !== '') historyPos.current = null
         onEdit(() => emptyInput)
         setSelected(0)
         onSubmit(text)
@@ -131,6 +137,7 @@ export function Prompt({
       if (key.tab) {
         const spec = matches[selectedRow]
         if (spec) onEdit(() => setText(completion(value.text, spec)))
+        else if (ghost !== '') onEdit(() => setText(value.text + ghost))
         return
       }
       if (key.upArrow || key.downArrow) {
@@ -139,17 +146,16 @@ export function Prompt({
           setSelected((selectedRow + dir + matches.length) % matches.length)
           return
         }
-        const past = history.current
-        const next = (historyPos.current ?? past.length) + dir
-        if (next < 0 || next > past.length) return
-        historyPos.current = next === past.length ? null : next
-        onEdit(() => setText(past[next] ?? ''))
+        const next = (historyPos.current ?? history.length) + dir
+        if (next < 0 || next > history.length) return
+        historyPos.current = next === history.length ? null : next
+        onEdit(() => setText(history[next] ?? ''))
         return
       }
       if (key.leftArrow) return onEdit(moveLeft)
-      if (key.rightArrow) return onEdit(moveRight)
+      if (key.rightArrow) return ghost === '' ? onEdit(moveRight) : onEdit(() => setText(value.text + ghost))
       if (key.home) return onEdit(home)
-      if (key.end) return onEdit(end)
+      if (key.end) return ghost === '' ? onEdit(end) : onEdit(() => setText(value.text + ghost))
       if (key.backspace) return onEdit(backspace)
       if (key.delete) return onEdit(deleteForward)
       if (key.escape) return onEdit(() => emptyInput)
@@ -162,6 +168,11 @@ export function Prompt({
   )
 
   const { before, at, after } = splitAtCursor(value)
+  // The first suggested character sits under the cursor block so the suggestion reads as one word.
+  const ghostChars = [...ghost]
+  const ghostHead = ghostChars[0]
+  const ghostTail = ghostChars.slice(1).join('')
+
   return (
     <Box flexDirection="column">
       {matches.map((m, i) => (
@@ -181,8 +192,11 @@ export function Prompt({
           ) : (
             <>
               {before}
-              <Text inverse={active}>{at === '' ? ' ' : at}</Text>
+              <Text inverse={active} dimColor={at === '' && ghostHead !== undefined}>
+                {at !== '' ? at : (ghostHead ?? ' ')}
+              </Text>
               {after}
+              <Text dimColor>{ghostTail}</Text>
             </>
           )}
         </Text>

@@ -10,11 +10,12 @@ import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from
 import { loadOrCreateIdentity, saveName } from './identity.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from './ingest.js'
 import { Net, type PeerLink } from './net.js'
+import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
 import { loadSettings, saveSettings, type Settings } from './settings.js'
 import { findTheme, THEMES } from './themes.js'
 import { isNewer, latestVersion } from './update.js'
 import { VERSION } from './version.js'
-import { splitArgs } from './agents/protocol.js'
+import { parseChain, splitArgs } from './agents/protocol.js'
 import type { Frame } from './wire.js'
 
 export type ToastKind = 'info' | 'success' | 'warn' | 'error'
@@ -46,6 +47,8 @@ export interface MessageView {
   mine: boolean
   kind: 'text' | 'system'
   text: string
+  /** Render Markdown (agent replies only; peer text stays literal). */
+  markdown?: boolean
   status: 'pending' | 'delivered' | null
 }
 export interface EngineOptions {
@@ -95,6 +98,7 @@ export class Engine extends EventEmitter {
   private closed = false
   private update: string | null = null
   private prefs: Settings
+  private input: string[]
 
   static async open(opts: EngineOptions): Promise<Engine> {
     const engine = new Engine(opts)
@@ -106,6 +110,7 @@ export class Engine extends EventEmitter {
     super()
     this.dir = opts.dir
     this.prefs = loadSettings(opts.dir)
+    this.input = loadHistory(opts.dir)
     const identity = loadOrCreateIdentity(opts.dir)
     this.secretKey = identity.keyPair.secretKey
     this.store = new Store(path.join(opts.dir, 'pager.db'))
@@ -263,9 +268,20 @@ export class Engine extends EventEmitter {
     this.updateSettings({ sidebar: !this.prefs.sidebar })
   }
 
+  /** Submitted lines, oldest first (persisted across restarts). */
+  history(): readonly string[] {
+    return this.input
+  }
+
   async submit(input: string): Promise<void> {
     const text = input.trim()
     if (text === '') return
+    this.input = [...this.input.filter((h) => h !== text), text].slice(-HISTORY_MAX)
+    try {
+      saveHistory(this.dir, this.input)
+    } catch {
+      // History is a convenience; never block sending.
+    }
     if (text.startsWith('//')) return this.sendText(text.slice(1))
     if (text.startsWith('/')) return this.runCommand(text)
     return this.sendText(text)
@@ -319,7 +335,8 @@ export class Engine extends EventEmitter {
   }
 
   private async cmdAgent(rest: string, args: string[]): Promise<void> {
-    const usage = '/agent <omp|claude|opencode|hermes> <task> | cli <name> <args> | runs | stop [id] | merge <id> | drop <id|all> | check'
+    const usage =
+      '/agent <omp|claude|opencode|hermes> <task> | chain a>b <task> | cli <name> <args> | memory [add <text>|clear] | commands <name> | runs | stop [id] | merge <id> | drop <id|all> | check'
     const sub = (args[0] ?? '').toLowerCase()
     if (sub === '') return this.toast('info', usage)
     if (isAgentName(sub)) {
@@ -339,6 +356,34 @@ export class Engine extends EventEmitter {
         }
         this.activate(ROOM_ID)
         void this.agents.cli(agent, argv)
+        return
+      }
+      case 'chain': {
+        const body = rest.slice(sub.length).trim()
+        const spec = body.split(/\s/, 1)[0] ?? ''
+        const task = body.slice(spec.length).trim()
+        const steps = parseChain(spec)
+        if (steps === undefined || task === '') {
+          return this.toast('error', 'Usage: /agent chain <a>><b>[><c>] <task>  (agents: omp, claude, opencode, hermes)')
+        }
+        this.activate(ROOM_ID)
+        void this.agents.chain(steps, task)
+        return
+      }
+      case 'commands': {
+        const name = (args[1] ?? '').toLowerCase()
+        if (!isAgentName(name)) return this.toast('error', 'Usage: /agent commands <omp|claude|opencode|hermes>')
+        this.activate(ROOM_ID)
+        void this.agents.commands(name)
+        return
+      }
+      case 'memory': {
+        const action = (args[1] ?? 'show').toLowerCase()
+        if (action !== 'show' && action !== 'add' && action !== 'clear') {
+          return this.toast('error', 'Usage: /agent memory [add <text>|clear]')
+        }
+        this.activate(ROOM_ID)
+        void this.agents.memory(action, rest.slice(sub.length).trim().slice((args[1] ?? '').length).trim())
         return
       }
       case 'runs':

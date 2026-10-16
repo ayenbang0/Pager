@@ -193,3 +193,68 @@ test('check reports ok, failed and missing agents', () =>
       },
     },
   ))
+
+test('the room survives a restart without counting as unread, and corrupt lines are skipped', async () => {
+  const repo = makeRepo()
+  const dataDir = tmp('pager-data-')
+  try {
+    const first = new Orchestrator({ dataDir, workdir: repo, adapters: fakes })
+    await first.ask('omp', 'ECHO remembered')
+    await first.close()
+    fs.appendFileSync(path.join(dataDir, 'agents-room.jsonl'), 'not json\n{"n":"x"}\n')
+    const second = new Orchestrator({ dataDir, workdir: repo, adapters: fakes })
+    try {
+      assert.ok(texts(second).includes('you: @omp ECHO remembered'))
+      assert.ok(texts(second).some((t) => t.endsWith(': remembered')))
+      assert.equal(second.room().unread, 0)
+      await second.ask('omp', 'ECHO again')
+      assert.equal(new Set(second.messages(100).map((m) => m.key)).size, second.messages(100).length)
+    } finally {
+      await second.close()
+    }
+  } finally {
+    for (const d of [repo, dataDir]) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5 })
+  }
+})
+
+test('facts an agent keeps with @@remember reach later prompts until cleared', () =>
+  withOrch(async ({ orch }) => {
+    await orch.ask('omp', 'REMEMBER use tabs\nECHO noted')
+    assert.ok(texts(orch).some((t) => t.endsWith(': noted')))
+    assert.ok(!texts(orch).some((t) => t.includes('@@remember')))
+    await orch.ask('claude', 'MEM')
+    assert.ok(texts(orch).some((t) => /^claude-\w+: mem: - \d{4}-\d{2}-\d{2} \(omp\) use tabs$/.test(t)))
+    await orch.memory('add', 'run npm test')
+    await orch.memory('show')
+    assert.ok(texts(orch).some((t) => t.startsWith('pager: memory (2 notes):')))
+    await orch.memory('clear')
+    await orch.ask('omp', 'MEM')
+    assert.ok(texts(orch).some((t) => t.endsWith(': mem: none')))
+  }))
+
+test('a chain runs each agent on top of the previous commit and hands over its reply', () =>
+  withOrch(async ({ orch, repo }) => {
+    await orch.chain(['omp', 'claude'], 'WRITE a.txt=1')
+    const [first, second] = orch.room().runs
+    assert.ok(first && second)
+    assert.equal(first.agent, 'omp')
+    assert.equal(second.agent, 'claude')
+    assert.equal(git(repo, 'show', `pager/${second.id}:a.txt`), '1')
+    assert.ok(texts(orch).includes(`${second.id}: chained from ${first.id}`))
+  }))
+
+test('a chain stops when a step fails', () =>
+  withOrch(async ({ orch }) => {
+    await orch.chain(['omp', 'claude'], 'FAIL')
+    assert.equal(orch.room().runs.length, 1)
+    assert.ok(texts(orch).includes('pager: chain stopped: the previous step failed'))
+  }))
+
+test('@a>b in the room starts a chain; an unknown name is rejected', () =>
+  withOrch(async ({ orch, toasts }) => {
+    orch.say('@omp>claude ECHO hi')
+    await waitFor(() => orch.room().runs.length === 2 && orch.room().runs.every((r) => r.state === 'done'))
+    orch.say('@omp>nope hi')
+    assert.equal(toasts.at(-1)?.kind, 'warn')
+    assert.equal(orch.room().runs.length, 2)
+  }))
