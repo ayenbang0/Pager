@@ -2,6 +2,7 @@
 import type { Engine } from './engine.js'
 import { acquireLock, AlreadyRunningError } from './lock.js'
 import { dataDir } from './paths.js'
+import { MOUSE_OFF } from './ui/mouse.js'
 import { isNewer, latestVersion, runUpdate } from './update.js'
 import { VERSION } from './version.js'
 
@@ -75,6 +76,7 @@ async function shutdown(code: number, error?: unknown): Promise<void> {
   shuttingDown = true
   app.unmount()
   await app.waitUntilExit().catch(() => {})
+  process.stdout.write(MOUSE_OFF) // the terminal outlives us; never leave mouse reporting on
   await engine.close().catch(() => {})
   release()
   if (error !== undefined) process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`)

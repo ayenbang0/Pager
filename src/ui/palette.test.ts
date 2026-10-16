@@ -21,7 +21,7 @@ test('theme names complete after "/theme "', () => {
 })
 
 test('agent names and subcommands complete after "/agent "', () => {
-  assert.deepEqual(matchCommands('/agent cl').map((c) => c.name), ['claude'])
+  assert.deepEqual(matchCommands('/agent cl').map((c) => c.name), ['claude', 'cli'])
   assert.equal(matchCommands('/agent ').length, 6)
   assert.deepEqual(matchCommands('/agent claude fix').length, 0)
 })

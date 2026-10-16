@@ -8,6 +8,7 @@ const prompt = process.argv[2] ?? ''
 const self = /You are "(\w+)"/.exec(prompt)?.[1] ?? 'unknown'
 const [task = '', replyText] = (prompt.split(TASK_MARKER)[1] ?? '').split(REPLIES_MARKER)
 const replies = replyText !== undefined
+if (!prompt.includes(TASK_MARKER)) console.log(`raw: ${prompt}`) // verbatim slash-command prompts carry no preamble
 
 if (process.env.TEST_AGENT_PIDFILE !== undefined) fs.appendFileSync(process.env.TEST_AGENT_PIDFILE, `${process.pid}\n`)
 

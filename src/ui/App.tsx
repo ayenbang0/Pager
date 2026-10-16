@@ -16,11 +16,14 @@ import { StatusBar } from './StatusBar.js'
 import { ThemeContext } from './theme.js'
 import { Toasts, TOAST_LIFETIME_MS, type ToastItem } from './Toasts.js'
 import { useEngine } from './useEngine.js'
+import { useMouseWheel } from './useMouseWheel.js'
 
 const MIN_COLUMNS = 60
 const MIN_ROWS = 12
 const SIDEBAR_MIN_COLUMNS = 80
 const HISTORY_LIMIT = 500
+/** Lines per wheel notch; trackpads send many notches, so this feels smooth rather than jumpy. */
+const WHEEL_LINES = 3
 // header + title + prompt box + status bar
 const FIXED_ROWS = 1 + 1 + 3 + 1
 const MIN_PANE_ROWS = 3
@@ -99,6 +102,9 @@ export function App({ engine, onExit }: Props) {
     (dir: 1 | -1) => setOffset(Math.min(maxOffset, Math.max(0, offset + dir * Math.max(1, paneRows - 2)))),
     [maxOffset, offset, paneRows],
   )
+  useMouseWheel((dir) => {
+    if (overlay === null) setOffset((o) => Math.min(maxOffset, Math.max(0, o + dir * WHEEL_LINES)))
+  })
   const onSwitch = (dir: 1 | -1): void => {
     const ids = [null, ...convs.map((c) => c.id), ROOM_ID]
     const at = Math.max(0, ids.indexOf(activeId))

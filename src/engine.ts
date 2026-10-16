@@ -14,6 +14,7 @@ import { loadSettings, saveSettings, type Settings } from './settings.js'
 import { findTheme, THEMES } from './themes.js'
 import { isNewer, latestVersion } from './update.js'
 import { VERSION } from './version.js'
+import { splitArgs } from './agents/protocol.js'
 import type { Frame } from './wire.js'
 
 export type ToastKind = 'info' | 'success' | 'warn' | 'error'
@@ -318,7 +319,7 @@ export class Engine extends EventEmitter {
   }
 
   private async cmdAgent(rest: string, args: string[]): Promise<void> {
-    const usage = '/agent <omp|claude|opencode|hermes> <task> | runs | stop [id] | merge <id> | drop <id|all> | check'
+    const usage = '/agent <omp|claude|opencode|hermes> <task> | cli <name> <args> | runs | stop [id] | merge <id> | drop <id|all> | check'
     const sub = (args[0] ?? '').toLowerCase()
     if (sub === '') return this.toast('info', usage)
     if (isAgentName(sub)) {
@@ -330,6 +331,16 @@ export class Engine extends EventEmitter {
     }
     const target = args[1]
     switch (sub) {
+      case 'cli': {
+        const [name = '', ...argv] = splitArgs(rest.slice(sub.length))
+        const agent = name.toLowerCase()
+        if (!isAgentName(agent) || argv.length === 0) {
+          return this.toast('error', 'Usage: /agent cli <omp|claude|opencode|hermes> <cli arguments>')
+        }
+        this.activate(ROOM_ID)
+        void this.agents.cli(agent, argv)
+        return
+      }
       case 'runs':
         this.activate(ROOM_ID)
         return this.agents.list()

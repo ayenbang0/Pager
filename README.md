@@ -58,7 +58,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | Alt+Up / Alt+Down | Previous / next conversation (home is first) |
 | Ctrl+O / Ctrl+N | Same, for terminals that do not send Alt+arrows (macOS Terminal.app by default) |
 | Ctrl+B | Toggle the sidebar (saved) |
-| PgUp / PgDn | Scroll messages |
+| Mouse wheel / trackpad scroll, PgUp / PgDn | Scroll messages (3 lines per wheel notch). With the wheel active, hold Shift (Option in iTerm2) to select text with the mouse |
 | Ctrl+A / Ctrl+E, Home / End | Start / end of line |
 | Alt+B / Alt+F, Ctrl+Left / Right | Word left / right (Option+Left / Right on macOS; Option+B / F also works without "Option as Meta") |
 | Alt+Backspace | Delete word back (Option+Delete on macOS) |
@@ -75,6 +75,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `PAGER_BOOTSTRAP` | Comma-separated `host:port` DHT bootstrap nodes (default: public HyperDHT) |
 | `PAGER_REDUCE_MOTION` | Set to `1` to disable animations (connecting spinner, toast countdown bars) |
 | `PAGER_NO_UPDATE_CHECK` | Set to `1` to skip the daily check for a newer release |
+| `PAGER_NO_MOUSE` | Set to `1` to leave the mouse alone (no wheel scrolling; plain drag selects text) |
 
 Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar), `update.json` (cached latest version and check time), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
 
@@ -124,6 +125,8 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Merging.** Nothing reaches your checkout until you `/agent merge <run>`. It refuses on a dirty checkout, and on a conflict it aborts, names the conflicting files and leaves the tree untouched. Merging a run also retires the earlier runs it was built on. Pager warns when separate tasks change the same files.
 - **Invocations.** `omp -p --no-session`, `claude -p --permission-mode bypassPermissions`, `opencode run --auto`, `hermes chat -Q --oneshot --yolo`. `/agent check` asks each one to reply `PAGER_OK` so you can verify your installs.
 - **Persistence.** Runs and the room transcript live in memory only. After a restart, leftover worktrees stay in `<data dir>/worktrees/`; remove one with `git worktree remove --force <dir>` and `git branch -D pager/<id>` (`/agent drop` only knows runs from the current session).
+- **Memory.** Each run is a fresh, one-shot process (a native session cannot be resumed across worktrees), so continuity comes from the prompt: every run gets the shared room transcript (the last 40 messages, up to 60k characters, including what other agents said and which files they changed), and a resumed agent also gets its own earlier reply back. Follow-ups in the room therefore remember earlier work, but only what was said in the room, not an agent's private reasoning.
+- **Agent commands.** `/agent cli <name> <args>` (or `@name !<args>` in the room) runs the agent's own CLI, for example `/agent cli claude mcp list` or `/agent cli opencode models`, and posts the output. It is non-interactive, so commands that open a TUI or ask questions time out. A task that starts with `/` (for example `/agent claude /review`) is sent to the agent verbatim so its own slash command runs; such a run does not get the pager preamble, so it cannot delegate.
 
 ## Limitations
 

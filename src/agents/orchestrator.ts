@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { stripVTControlCharacters } from 'node:util'
 import type { ChildProcess } from 'node:child_process'
 import type { MessageView, Toast, ToastKind } from '../engine.js'
 import { ADAPTERS, AGENT_NAMES, findBinary, isAgentName, type AdapterSpec, type AgentName } from './adapters.js'
@@ -19,10 +20,11 @@ import {
   repoRoot,
 } from './git.js'
 import { killTree, runProcess } from './process.js'
-import { buildPrompt, parseAsks, withReplies, type Ask } from './protocol.js'
+import { buildPrompt, parseAsks, splitArgs, withReplies, type Ask } from './protocol.js'
 
 export const ROOM_ID = 'agents'
 export const MAX_CONCURRENT = 3
+export const CLI_OUTPUT_MAX = 100_000
 export const MAX_RUNS_PER_THREAD = 10
 export const MAX_ASK_DEPTH = 3
 export const RUN_TIMEOUT_MS = 900_000
@@ -149,8 +151,14 @@ export class Orchestrator extends EventEmitter {
     this.append('you', 'text', text)
     const m = /^@(\w+)\s+([\s\S]+)$/.exec(text.trim())
     const name = m?.[1]?.toLowerCase()
-    if (m?.[2] !== undefined && name !== undefined && isAgentName(name)) void this.ask(name, m[2].trim(), false)
-    else this.toast('warn', 'Start with @omp, @claude, @opencode or @hermes')
+    const rest = m?.[2]?.trim()
+    if (rest === undefined || name === undefined || !isAgentName(name)) {
+      this.toast('warn', 'Start with @omp, @claude, @opencode or @hermes')
+    } else if (rest.startsWith('!')) {
+      const argv = splitArgs(rest.slice(1))
+      if (argv.length === 0) this.toast('error', `Usage: @${name} !<cli arguments>`)
+      else void this.cli(name, argv)
+    } else void this.ask(name, rest, false)
   }
 
   ask(agent: AgentName, task: string, log = true): Promise<void> {
@@ -216,6 +224,28 @@ export class Orchestrator extends EventEmitter {
     if (this.runs.size === 0) return this.append('pager', 'system', 'No agent runs yet.')
     for (const r of this.runs.values()) {
       this.append('pager', 'system', `${r.id}  ${r.state}  ${r.files.length} file(s)${r.merged ? '  merged' : ''}`)
+    }
+  }
+
+  /** Runs the agent's own CLI with `argv` (e.g. `mcp list`, `models`) in the working directory and posts its output. */
+  cli(agent: AgentName, argv: string[]): Promise<void> {
+    const p = this.runCli(agent, argv)
+    this.inflight.add(p)
+    void p.finally(() => this.inflight.delete(p))
+    return p
+  }
+
+  private async runCli(agent: AgentName, argv: string[]): Promise<void> {
+    const found = await this.resolveBin(agent)
+    if ('error' in found) return this.toast('error', found.error)
+    this.append('you', 'text', `$ ${agent} ${argv.join(' ')}`)
+    try {
+      const res = await runProcess(found.bin, argv, { cwd: this.opts.workdir, env: this.env, timeoutMs: CHECK_TIMEOUT_MS })
+      const body = stripVTControlCharacters([res.stdout, res.stderr].map((s) => s.trim()).filter(Boolean).join('\n')).replaceAll('\r\n', '\n')
+      const status = res.timedOut ? '(timed out; only non-interactive commands work here)' : res.code === 0 ? '' : `(exit ${res.code})`
+      this.append(agent, 'text', [body.slice(0, CLI_OUTPUT_MAX), status].filter(Boolean).join('\n') || '(no output)')
+    } catch (err) {
+      this.append(agent, 'text', `(failed: ${errMsg(err)})`)
     }
   }
 
@@ -328,7 +358,7 @@ export class Orchestrator extends EventEmitter {
     while (result.asks.length > 0) {
       const replies: { run: string; text: string }[] = []
       for (const ask of result.asks) replies.push(await this.answer(thread, agent, ask, depth))
-      current = withReplies(current, replies)
+      current = withReplies(current, replies, result.text)
       result = await this.execute(thread, agent, current)
     }
     return result
@@ -416,13 +446,18 @@ export class Orchestrator extends EventEmitter {
     if (thread.cancelled) return this.cancelled(run)
     const peers: AgentName[] = []
     for (const n of AGENT_NAMES) if (!('error' in (await this.resolveBin(n)))) peers.push(n)
-    const prompt = buildPrompt({
-      agent: run.agent,
-      branch: run.branch,
-      peers,
-      room: this.log.filter((e) => e.kind === 'text').map((e) => ({ author: e.author, text: e.text })),
-      task,
-    })
+    // A task that is itself a slash command (e.g. "/review") goes to the agent verbatim so its own CLI interprets it.
+    const prompt = task.startsWith('/')
+      ? task
+      : buildPrompt({
+          agent: run.agent,
+          branch: run.branch,
+          peers,
+          room: this.log
+            .filter((e) => e.kind === 'text' || / changed \d+ file/.test(e.text))
+            .map((e) => ({ author: e.author, text: e.text })),
+          task,
+        })
     const adapter = this.adapters[run.agent]
     let res
     try {

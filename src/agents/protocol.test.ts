@@ -2,10 +2,14 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   buildPrompt,
+  CONTEXT_MESSAGE_CHARS,
+  CONTEXT_MESSAGES,
+  EARLIER_MARKER,
   parseAsks,
   PROMPT_MAX_CHARS,
   REPLIES_MARKER,
   REQUEST_MAX_CHARS,
+  splitArgs,
   TASK_MARKER,
   withReplies,
 } from './protocol.js'
@@ -50,8 +54,8 @@ test('buildPrompt lists peers without the agent itself', () => {
 })
 
 test('buildPrompt drops old room messages before touching the task', () => {
-  const room = Array.from({ length: 12 }, (_, i) => ({ author: 'you', text: `${i}`.padEnd(1500, 'x') }))
-  const task = 't'.repeat(10_000)
+  const room = Array.from({ length: CONTEXT_MESSAGES }, (_, i) => ({ author: 'you', text: `${i}`.padEnd(CONTEXT_MESSAGE_CHARS, 'x') }))
+  const task = 't'.repeat(PROMPT_MAX_CHARS - 10_000)
   const p = buildPrompt({ agent: 'omp', branch: 'b', peers: [], room, task })
   assert.ok(p.length <= PROMPT_MAX_CHARS)
   assert.ok(p.endsWith(task))
@@ -71,4 +75,18 @@ test('withReplies appends a marked replies section', () => {
     ]),
     `task\n\n${REPLIES_MARKER}\n[claude-1] ok\n\n[omp-2] fine`,
   )
+})
+
+test('withReplies carries the agent\'s own earlier reply so a resumed run remembers it', () => {
+  const out = withReplies('task', [{ run: 'omp-1', text: 'ok' }], 'I did X')
+  assert.ok(out.endsWith(`${EARLIER_MARKER}\nI did X`))
+})
+
+test('ask blocks may be indented', () => {
+  assert.deepEqual(parseAsks('done\n  @@ask omp\n  review it\n  @@end').asks, [{ agent: 'omp', request: 'review it' }])
+})
+
+test('splitArgs groups quoted words and keeps backslashes', () => {
+  assert.deepEqual(splitArgs('mcp add "my server" --path C:\\x\\y \'a b\' ""'), ['mcp', 'add', 'my server', '--path', 'C:\\x\\y', 'a b', ''])
+  assert.deepEqual(splitArgs('   '), [])
 })

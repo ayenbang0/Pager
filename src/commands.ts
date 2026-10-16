@@ -42,6 +42,7 @@ export const AGENT_ARGUMENTS: readonly CommandSpec[] = [
   { name: 'stop', usage: '/agent stop [run]', summary: 'Stop running agents' },
   { name: 'merge', usage: '/agent merge <run>', summary: 'Merge a finished run into this branch' },
   { name: 'drop', usage: '/agent drop <run|all>', summary: 'Discard finished runs' },
+  { name: 'cli', usage: '/agent cli <name> <args>', summary: "Run an agent's own CLI command (mcp list, models, ...)" },
   { name: 'check', usage: '/agent check', summary: 'Test that each agent CLI responds' },
 ]
 
