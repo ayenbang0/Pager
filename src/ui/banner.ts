@@ -12,7 +12,7 @@ export const LOGO: readonly string[] = Array.from({ length: 6 }, (_, row) => LET
 export const LOGO_WIDTH = LOGO[0]?.length ?? 0
 /** Frames the left-to-right reveal takes. */
 export const REVEAL_FRAMES = 24
-export const TAGLINE = 'peer-to-peer terminal chat'
+export const TAGLINE = 'a simpler way to chat'
 
 export interface Seg {
   text: string
@@ -74,4 +74,12 @@ export function tagline(frame: number, animate: boolean): string {
   const typed = Math.min(TAGLINE.length, Math.max(0, Math.floor((frame - REVEAL_FRAMES) * 1.5)))
   const cursor = Math.floor(frame / 6) % 2 === 0 ? '▌' : ' '
   return TAGLINE.slice(0, typed) + (typed < TAGLINE.length || frame >= REVEAL_FRAMES ? cursor : '')
+}
+
+const BARS = '▁▂▃▄▅▆▇█'
+
+/** One bar per value, scaled to the largest; zeros stay on the lowest bar so the row never has gaps. */
+export function sparkline(values: readonly number[]): string {
+  const max = Math.max(0, ...values)
+  return values.map((v) => (max === 0 ? BARS[0] : BARS[Math.min(BARS.length - 1, Math.round((v / max) * (BARS.length - 1)))])).join('')
 }

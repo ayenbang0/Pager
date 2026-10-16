@@ -6,7 +6,7 @@ import { MOUSE_OFF } from './ui/mouse.js'
 import { isNewer, latestVersion, runUpdate } from './update.js'
 import { VERSION } from './version.js'
 
-const USAGE = `pager: peer-to-peer terminal chat
+const USAGE = `pager: a simpler way to chat
 
 Usage: pager [update | -h | --help | -v | --version]
 

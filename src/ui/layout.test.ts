@@ -99,3 +99,31 @@ test('the same text without the markdown flag stays literal', () => {
   const lines = buildLines([msg({ text: '# Title\n`x`' })], 80, T, NOW)
   assert.deepEqual(lines.map((l) => plain(l).slice('09:05 bob  '.length).trimStart()), ['# Title', '`x`'])
 })
+
+test('a run of messages from one author names them once; a new speaker, or a system line between, names again', () => {
+  const ann = 'aa'.repeat(32)
+  const lines = buildLines(
+    [
+      msg({ key: '1', authorName: 'bob', text: 'one' }),
+      msg({ key: '2', authorName: 'bob', text: 'two' }),
+      msg({ key: '3', authorName: 'ann', authorKey: ann, text: 'three' }),
+      msg({ key: '4', authorName: 'ann', authorKey: ann, text: 'four' }),
+      msg({ key: '5', kind: 'system', text: 'ann left' }),
+      msg({ key: '6', authorName: 'ann', authorKey: ann, text: 'five' }),
+    ],
+    60,
+    T,
+    NOW,
+  )
+  assert.deepEqual(lines.map(plain), ['09:05 bob  one', '09:05      two', '09:05 ann  three', '09:05      four', '* ann left', '09:05 ann  five'])
+})
+
+test('messages that share a key but not a name (agent runs, you/pager) each show their name', () => {
+  const lines = buildLines(
+    [msg({ key: '1', authorName: 'omp-1', text: 'a' }), msg({ key: '2', authorName: 'omp-2', text: 'b' }), msg({ key: '3', authorName: 'omp-2', text: 'c' })],
+    60,
+    T,
+    NOW,
+  )
+  assert.deepEqual(lines.map(plain), ['09:05 omp-1  a', '09:05 omp-2  b', '09:05        c'])
+})

@@ -4,6 +4,8 @@ import type { BootstrapNode } from 'hyperdht'
 import { isAgentName, type AdapterSpec, type AgentName } from './agents/adapters.js'
 import { Orchestrator, ROOM_ID, type RoomView } from './agents/orchestrator.js'
 import { COMMANDS, parseCommand } from './commands.js'
+import { Terminal, TERM_ID, type TermEntry } from './terminal.js'
+import { DocStore, DOCS_ID, DOC_PREFIX, type DocInfo } from './docs/store.js'
 import { ContactCodeError, decodeContactCode, encodeContactCode } from './contactCode.js'
 import { Store, type Conv } from './db.js'
 import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from './events.js'
@@ -11,6 +13,7 @@ import { loadOrCreateIdentity, saveName } from './identity.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from './ingest.js'
 import { Net, type PeerLink } from './net.js'
 import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
+import { Suggester } from './suggest.js'
 import { loadSettings, saveSettings, type Settings } from './settings.js'
 import { findTheme, THEMES } from './themes.js'
 import { isNewer, latestVersion } from './update.js'
@@ -32,6 +35,21 @@ export interface ConvView {
   /** DM only. */
   online: boolean | null
   unread: number
+}
+/** Numbers behind the home screen. `week` holds text messages per day, oldest first, today last. */
+export interface HomeStats {
+  contacts: number
+  online: number
+  groups: number
+  pending: number
+  unread: number
+  sent: number
+  received: number
+  week: number[]
+  busiest: { title: string; count: number } | null
+  agentRuns: number
+  agentsRunning: number
+  mergeable: number
 }
 export interface PendingView {
   n: number
@@ -77,6 +95,10 @@ const MAX_INCOMING = 20
 const MAX_UNKNOWN_LINKS = 20
 const UNKNOWN_LINK_TTL_MS = 30_000
 const EVENTS_PER_FRAME = 100
+/** How many of the user's own sent messages seed the autocomplete at startup. */
+const SUGGEST_CORPUS = 2000
+/** A terminal command that ran this long rings an unfocused terminal when it ends. */
+const LONG_COMMAND_MS = 5000
 const EVENTS_BYTES_PER_FRAME = 200_000
 
 const hasControl = (s: string): boolean => /\p{Cc}/u.test(s)
@@ -91,6 +113,9 @@ export class Engine extends EventEmitter {
   private readonly store: Store
   private readonly net: Net
   private readonly agents: Orchestrator
+  private readonly term: Terminal
+  readonly docs: DocStore
+  private openDocId: string | null = null
   private readonly unknownTimers = new Set<NodeJS.Timeout>()
   private activeId: string | null = null
   /** Text set by /help and /code; null shows the welcome banner. */
@@ -99,6 +124,7 @@ export class Engine extends EventEmitter {
   private update: string | null = null
   private prefs: Settings
   private input: string[]
+  private readonly suggester = new Suggester()
 
   static async open(opts: EngineOptions): Promise<Engine> {
     const engine = new Engine(opts)
@@ -115,6 +141,11 @@ export class Engine extends EventEmitter {
     this.secretKey = identity.keyPair.secretKey
     this.store = new Store(path.join(opts.dir, 'pager.db'))
     this.me = { pk: identity.pk, code: encodeContactCode(identity.keyPair.publicKey), name: identity.name }
+    this.docs = new DocStore(identity.pk, (conv, body) => this.publishDoc(conv, body))
+    for (const ev of this.store.docEvents()) this.docs.applyEvent(ev)
+    this.docs.on('change', () => this.emit('change'))
+    for (const sent of this.store.sentTexts(this.me.pk, SUGGEST_CORPUS)) this.suggester.learn(sent)
+    for (const h of this.input) if (h.startsWith('/')) this.suggester.learn(h)
     this.net = new Net({
       keyPair: identity.keyPair,
       bootstrap: opts.bootstrap,
@@ -132,12 +163,25 @@ export class Engine extends EventEmitter {
     })
     this.net.on('frame', (link: PeerLink, frame: Frame) => this.onFrame(link, frame))
     this.net.on('close', () => this.emit('change'))
-    this.agents = new Orchestrator({ dataDir: opts.dir, workdir: opts.workdir ?? process.cwd(), adapters: opts.agentAdapters })
+    this.agents = new Orchestrator({
+      dataDir: opts.dir,
+      workdir: opts.workdir ?? process.cwd(),
+      adapters: opts.agentAdapters,
+      docs: {
+        list: (task) => this.docsNamedIn(task),
+        write: (name, text, append, base) => this.agentDocWrite(name, text, append, base),
+      },
+    })
     this.agents.on('change', () => {
       if (this.activeId === ROOM_ID) this.agents.markRead()
       this.emit('change')
     })
     this.agents.on('toast', (t: Toast) => this.emit('toast', t))
+    this.term = new Terminal(opts.workdir ?? process.cwd())
+    this.term.on('change', () => this.emit('change'))
+    this.term.on('finished', (e: TermEntry) => {
+      if (Date.now() - e.ts >= LONG_COMMAND_MS) this.emit('notify', 'terminal', `${e.command.slice(0, 60)} ${e.state === 'done' ? 'finished' : e.state}`)
+    })
   }
 
   // ---------------------------------------------------------------- queries
@@ -181,10 +225,45 @@ export class Engine extends EventEmitter {
     return this.homeLines === null
   }
 
+  /** Numbers for the home screen: people, message totals, the last seven days, and agent runs. */
+  stats(now = Date.now()): HomeStats {
+    const convs = this.convs()
+    const dayMs = 86_400_000
+    const startOfToday = new Date(now).setHours(0, 0, 0, 0)
+    const { sent, received, recent } = this.store.textStats(this.me.pk, startOfToday - 6 * dayMs)
+    const week = Array.from({ length: 7 }, () => 0)
+    const perConv = new Map<string, number>()
+    for (const m of recent) {
+      const day = Math.min(6, Math.max(0, 6 - Math.floor((startOfToday + dayMs - 1 - m.ts) / dayMs)))
+      week[day] = (week[day] ?? 0) + 1
+      perConv.set(m.conv, (perConv.get(m.conv) ?? 0) + 1)
+    }
+    let busiest: HomeStats['busiest'] = null
+    for (const c of convs) {
+      const count = perConv.get(c.id) ?? 0
+      if (count > (busiest?.count ?? 0)) busiest = { title: c.kind === 'group' ? `#${c.title}` : c.title, count }
+    }
+    const room = this.agents.room()
+    return {
+      contacts: convs.filter((c) => c.kind === 'dm').length,
+      online: convs.filter((c) => c.online === true).length,
+      groups: convs.filter((c) => c.kind === 'group').length,
+      pending: this.pendingItems().length,
+      unread: convs.reduce((sum, c) => sum + c.unread, 0),
+      sent,
+      received,
+      week,
+      busiest,
+      agentRuns: room.runs.length,
+      agentsRunning: room.runs.filter((r) => r.state === 'running' || r.state === 'queued').length,
+      mergeable: room.runs.filter((r) => r.mergeable).length,
+    }
+  }
+
   home(): string[] {
     return (
       this.homeLines ?? [
-        'pager · peer-to-peer terminal chat',
+        'pager · a simpler way to chat',
         '',
         `You            ${this.me.name}`,
         'Contact code',
@@ -193,12 +272,30 @@ export class Engine extends EventEmitter {
         'Get started',
         '  1. Send your contact code to a friend',
         '  2. They run /add <your code>; you run /accept 1',
-        '  3. Ctrl+P opens the command palette, ? shows shortcuts',
+        '  3. Ctrl+P opens the command palette, Ctrl+G shows shortcuts',
       ]
     )
   }
 
+  /** The Terminal tab: each command, then its output as a reply. */
+  private termMessages(limit: number): MessageView[] {
+    const out: MessageView[] = []
+    for (const e of this.term.list()) {
+      out.push({ key: `t${e.n}`, ts: e.ts, authorName: path.basename(e.cwd) || e.cwd, authorKey: 'term', mine: true, kind: 'text', text: e.command, status: null })
+      const lines = [...e.lines, e.partial]
+      while (lines.at(-1) === '') lines.pop()
+      if (e.dropped > 0) lines.unshift(`… ${e.dropped} earlier lines dropped`)
+      if (e.state === 'stopped') lines.push('(stopped)')
+      else if (e.state === 'failed' && e.code !== null && lines.length === 0) lines.push(`exit ${e.code}`)
+      else if (e.state === 'failed' && e.code !== null) lines.push(`(exit ${e.code})`)
+      if (lines.length > 0) out.push({ key: `t${e.n}o`, ts: e.ts, authorName: e.state === 'running' ? 'running…' : 'output', authorKey: 'term-out', mine: false, kind: 'text', text: lines.join('\n'), status: null })
+    }
+    return out.slice(-limit)
+  }
+
   messages(convId: string, limit: number): MessageView[] {
+    if (convId === TERM_ID) return this.termMessages(limit)
+    if (convId === DOCS_ID) return []
     if (convId === ROOM_ID) return this.agents.messages(limit)
     const conv = this.store.getConv(convId)
     if (!conv) return []
@@ -248,10 +345,146 @@ export class Engine extends EventEmitter {
     return this.agents.room()
   }
 
+  /** Ctrl+C in the Terminal tab: stop the running command. False when there is nothing to stop. */
+  interrupt(): boolean {
+    return this.activeId === TERM_ID && this.term.stop()
+  }
+
+  terminal(): { running: boolean; cwd: string } {
+    return { running: this.term.running, cwd: this.term.cwd }
+  }
+
+  // ---------------------------------------------------------------- docs
+
+  /** Documents across all conversations, newest edit first, with where each one lives. */
+  docList(): (DocInfo & { where: string })[] {
+    const titles = new Map(this.convs().map((c) => [c.id, c.kind === 'group' ? `#${c.title}` : c.title]))
+    return this.docs.list().map((d) => ({ ...d, where: titles.get(d.conv) ?? 'unknown chat' }))
+  }
+
+  /** The document open in the Docs tab, or null for the list. */
+  openedDoc(): string | null {
+    return this.docs.info(this.openDocId ?? '') ? this.openDocId : null
+  }
+
+  /** Show a document in the Docs tab (null = the list). */
+  openDoc(id: string | null): void {
+    this.openDocId = id
+    this.activate(DOCS_ID)
+  }
+
+  /** Names of collaborators who edited this document in the last 30 seconds. */
+  docEditors(id: string): string[] {
+    return this.docs.activeEditors(id).map((pk) => this.nameOf(pk))
+  }
+
+  /** Create a document. It is shared with `convId`; without one it goes to the private "notes" group. Returns an error message or the new id. */
+  newDoc(name: string, convId?: string): { id: string } | { error: string } {
+    const conv = convId ?? this.notesConv()
+    const made = this.docs.create(conv, name)
+    return typeof made === 'string' ? { error: made } : { id: made.id }
+  }
+
+  private notesConv(): string {
+    const existing = this.store.listConvs().find((c) => c.kind === 'group' && c.state === 'active' && c.creator === this.me.pk && c.title === 'notes')
+    if (existing) return existing.id
+    const now = Date.now()
+    const id = newGroupId()
+    this.store.upsertConv({ id, kind: 'group', title: 'notes', creator: this.me.pk, peer: null, state: 'active', readAt: now, createdAt: now })
+    return id
+  }
+
+  private publishDoc(convId: string, body: string): void {
+    const conv = this.store.getConv(convId)
+    if (!conv || conv.state !== 'active') return
+    const event = this.appendEvent(convId, 'text', body)
+    for (const pk of this.otherMembers(conv)) this.sendEvents(this.net.link(pk), convId, [event])
+  }
+
+  /** Documents the user named as #name in an agent task. Shared documents are peer-writable, so nothing is included implicitly. */
+  private docsNamedIn(task: string): { name: string; text: string }[] {
+    const found = new Map<string, { name: string; text: string }>()
+    for (const m of task.matchAll(/(?:^|\s)#([\w.-]+)/g)) {
+      const d = this.docs.find(m[1] ?? '')
+      if (d) found.set(d.id, { name: d.name, text: this.docs.text(d.id) })
+    }
+    return [...found.values()]
+  }
+
+  /** Agents write as this user: the edit is attributed to the local identity. */
+  private agentDocWrite(name: string, text: string, append: boolean, base: string): string | null {
+    const doc = this.docs.find(name)
+    if (!doc) return 'no single document has that name'
+    const current = this.docs.text(doc.id)
+    if (!append && current !== base) return 'it changed while the agent worked'
+    const next = append ? `${current}${current === '' || current.endsWith('\n') ? '' : '\n'}${text}` : text
+    this.docs.setText(doc.id, next)
+    return null
+  }
+
+  private cmdDoc(args: string[]): void {
+    const usage = 'Usage: /doc new <name> [in <chat>] | open <name> | rm <name> | rename <name> <new name> | list'
+    const sub = (args[0] ?? '').toLowerCase()
+    if (sub === '') return this.openDoc(null)
+    // "<name> [in <chat>]": names repeat across chats, so an ambiguous one must be narrowed, never guessed.
+    const need = (words: string[]): DocInfo | undefined => {
+      const at = words.findIndex((a) => a.toLowerCase() === 'in')
+      const name = (at < 0 ? words : words.slice(0, at)).join(' ')
+      let conv: string | undefined
+      if (at >= 0) {
+        const res = this.resolve(this.convs(), words.slice(at + 1).join(' '), (c) => c.title, (c) => c.peer)
+        if ('error' in res) return void this.toast('error', res.error)
+        conv = res.item.id
+      }
+      const all = this.docs.matches(name, conv)
+      if (all.length === 0) return void this.toast('error', `No document named ${name}`)
+      if (all.length > 1) return void this.toast('error', `${name} exists in several chats; add "in <chat>"`)
+      return all[0]
+    }
+    if (sub === 'new') {
+      const tail = args.slice(1)
+      const at = tail.findIndex((a) => a.toLowerCase() === 'in')
+      const name = (at < 0 ? tail : tail.slice(0, at)).join(' ')
+      let conv: string | undefined
+      if (at >= 0) {
+        const res = this.resolve(this.convs(), tail.slice(at + 1).join(' '), (c) => c.title, (c) => c.peer)
+        if ('error' in res) return this.toast('error', res.error)
+        conv = res.item.id
+      }
+      const made = this.newDoc(name, conv)
+      if ('error' in made) return this.toast('error', made.error)
+      return this.openDoc(made.id)
+    }
+    if (sub === 'open') {
+      const d = need(args.slice(1))
+      if (d) this.openDoc(d.id)
+      return
+    }
+    if (sub === 'rm') {
+      const d = need(args.slice(1))
+      if (!d) return
+      this.docs.remove(d.id)
+      this.toast('info', `Removed ${d.name} for everyone in its chat`)
+      return
+    }
+    if (sub === 'rename') {
+      const d = need([args[1] ?? ''])
+      if (!d) return
+      const err = this.docs.rename(d.id, args.slice(2).join(' '))
+      if (err) this.toast('error', err)
+      return
+    }
+    if (sub === 'list') {
+      const docs = this.docList()
+      return this.setHome(docs.length === 0 ? ['No documents yet. /doc new <name> creates one.'] : ['Documents:', ...docs.map((d) => `  ${d.name.padEnd(28)} ${d.where}`)])
+    }
+    this.toast('error', usage)
+  }
+
   activate(convId: string | null): void {
-    if (convId === ROOM_ID) {
-      this.agents.markRead()
-      this.activeId = ROOM_ID
+    if (convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID) {
+      if (convId === ROOM_ID) this.agents.markRead()
+      this.activeId = convId
       this.emit('change')
       return
     }
@@ -273,10 +506,16 @@ export class Engine extends EventEmitter {
     return this.input
   }
 
+  /** What to append after `text`, learned from the user's own messages and commands. */
+  suggest(text: string): string {
+    return this.suggester.complete(text)
+  }
+
   async submit(input: string): Promise<void> {
     const text = input.trim()
     if (text === '') return
     this.input = [...this.input.filter((h) => h !== text), text].slice(-HISTORY_MAX)
+    this.suggester.learn(text, this.activeId !== TERM_ID)
     try {
       saveHistory(this.dir, this.input)
     } catch {
@@ -292,6 +531,8 @@ export class Engine extends EventEmitter {
     this.closed = true
     for (const t of this.unknownTimers) clearTimeout(t)
     this.unknownTimers.clear()
+    this.term.close()
+    this.docs.close()
     await this.agents.close()
     await this.net.stop()
     this.store.close()
@@ -303,7 +544,11 @@ export class Engine extends EventEmitter {
     const { name, args, rest } = parseCommand(line)
     switch (name) {
       case 'help':
-        return this.setHome(['Commands:', ...COMMANDS.map((c) => `  ${c.usage.padEnd(34)} ${c.summary}`), '', 'Press ? for keyboard shortcuts.'])
+        return this.setHome(['Commands:', ...COMMANDS.map((c) => `  ${c.usage.padEnd(34)} ${c.summary}`), '', 'Press Ctrl+G for keyboard shortcuts.'])
+      case 'terminal':
+        return this.activate(TERM_ID)
+      case 'doc':
+        return this.cmdDoc(args)
       case 'code':
         return this.setHome([`Your name: ${this.me.name}`, `Your contact code: ${this.me.code}`, 'Share it so others can /add you.'])
       case 'name':
@@ -538,7 +783,10 @@ export class Engine extends EventEmitter {
   }
 
   private cmdOpen(query: string): void {
-    if (query.trim().toLowerCase() === 'agents') return this.activate(ROOM_ID)
+    const target = query.trim().toLowerCase()
+    if (target === 'agents') return this.activate(ROOM_ID)
+    if (target === 'terminal') return this.activate(TERM_ID)
+    if (target === 'docs') return this.activate(DOCS_ID)
     const res = this.resolve(this.convs(), query, (c) => c.title, (c) => c.peer)
     if ('error' in res) {
       this.toast('error', res.error)
@@ -922,8 +1170,11 @@ export class Engine extends EventEmitter {
       if (!checkEvent(this.store, this.me.pk, link.pk, ev).ok) continue
       if (!this.store.insertEvent(ev, Date.now())) continue
       touched.add(ev.author)
-      if (ev.kind === 'text') this.onIncomingText(ev)
-      else membership = true
+      if (ev.kind === 'text') {
+        // Document operations share the chat log but are never chat messages.
+        if (ev.body.startsWith(DOC_PREFIX)) this.docs.applyEvent(ev)
+        else this.onIncomingText(ev)
+      } else membership = true
     }
     for (const author of touched) link.send({ t: 'ack', conv: convId, author, seq: this.store.lastSeq(convId, author) })
     if (membership) {
@@ -937,12 +1188,14 @@ export class Engine extends EventEmitter {
     if (ev.author === this.me.pk) return
     const conv = this.store.getConv(ev.conv)
     if (!conv) return
+    const who = this.nameOf(ev.author)
+    const snippet = ev.body.slice(0, 60)
+    // Always announced, even in the open conversation: an unfocused terminal still needs to ring.
+    this.emit('notify', conv.kind === 'group' ? `#${conv.title}` : who, conv.kind === 'group' ? `${who}: ${snippet}` : snippet)
     if (this.activeId === conv.id) {
       this.store.markRead(conv.id, Date.now())
       return
     }
-    const snippet = ev.body.slice(0, 60)
-    const who = this.nameOf(ev.author)
     this.toast('info', conv.kind === 'group' ? `#${conv.title} ${who}: ${snippet}` : `${who}: ${snippet}`)
   }
 
@@ -971,6 +1224,7 @@ export class Engine extends EventEmitter {
       return
     }
     if (this.activeId === ROOM_ID) return this.agents.say(text)
+    if (this.activeId === TERM_ID) return this.term.run(text)
     const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
     if (!conv) {
       this.toast('warn', 'Open a conversation first (Ctrl+P) or /add a contact')

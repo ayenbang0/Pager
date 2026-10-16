@@ -31,6 +31,8 @@ import {
   parseAsks,
   parseChain,
   parseRemember,
+  parseDocEdits,
+  docCap,
   splitArgs,
   withReplies,
   type Ask,
@@ -62,11 +64,19 @@ export interface RoomView {
   unread: number
   runs: RunView[]
 }
+export interface DocsPort {
+  /** The documents the local user named in `task` (as #name); never any others, because peers can edit shared documents. */
+  list(task: string): { name: string; text: string }[]
+  /** Replace (or append to) the named document. `base` is the text the agent saw: a replace is refused if the document changed since. Returns null on success, else the reason. */
+  write(name: string, text: string, append: boolean, base: string): string | null
+}
 export interface OrchestratorOptions {
   dataDir: string
   workdir: string
   /** Test seam: replaces entries of ADAPTERS. */
   adapters?: Partial<Record<AgentName, AdapterSpec>>
+  /** Shared documents: agents see them in the prompt and may edit them with @@doc blocks. */
+  docs?: DocsPort
   limits?: Partial<{ maxConcurrent: number; maxRunsPerThread: number; runTimeoutMs: number }>
 }
 
@@ -690,6 +700,7 @@ export class Orchestrator extends EventEmitter {
     const peers: AgentName[] = []
     for (const n of AGENT_NAMES) if (!('error' in (await this.resolveBin(n)))) peers.push(n)
     // A task that is itself a slash command (e.g. "/review") goes to the agent verbatim so its own CLI interprets it.
+    const shownDocs = task.startsWith('/') ? [] : (this.opts.docs?.list(task) ?? [])
     const prompt = task.startsWith('/')
       ? task
       : buildPrompt({
@@ -697,6 +708,7 @@ export class Orchestrator extends EventEmitter {
           branch: run.branch,
           peers,
           memory: this.readMemory(thread.root),
+          docs: shownDocs,
           room: this.log
             .filter((e) => e.kind === 'text' || / changed \d+ file/.test(e.text))
             .map((e) => ({ author: e.author, text: e.text })),
@@ -720,7 +732,9 @@ export class Orchestrator extends EventEmitter {
     if (reply.stopReason === 'cancelled') return failed('agent cancelled the turn')
 
     const parsed = parseAsks(reply.text)
-    const { clean, notes } = parseRemember(parsed.clean)
+    const { clean: afterNotes, notes } = parseRemember(parsed.clean)
+    const docParsed = parseDocEdits(afterNotes)
+    const clean = docParsed.clean
     try {
       await commitAll(run.dir, `agent(${run.agent}): ${(task.split('\n', 1)[0] ?? '').slice(0, 72)}\n\nPager-Run: ${run.id}`)
       run.files = await changedFiles(run.dir, thread.start)
@@ -730,10 +744,24 @@ export class Orchestrator extends EventEmitter {
     thread.tip = run.branch
     run.state = 'done'
     for (const note of notes) this.addMemory(thread.root, run.agent, note)
+    // Only documents this run was shown may be edited, and a replace only when the agent saw the whole document and nobody changed it since.
+    const touched: string[] = []
+    const refused: string[] = []
+    for (const e of docParsed.edits) {
+      const seen = shownDocs.find((d) => d.name.toLowerCase() === e.name.toLowerCase())
+      let why: string | null = null
+      if (!seen) why = 'it was not shown to the agent'
+      else if (!e.append && (seen.text.length > docCap(shownDocs.length) || e.cut)) why = 'a replacement needs the whole document, which was cut'
+      else why = this.opts.docs ? this.opts.docs.write(seen.name, e.text, e.append, seen.text) : 'documents are unavailable'
+      if (why === null) touched.push(e.name)
+      else refused.push(`${e.name} (${why})`)
+    }
     const text = clean === '' ? '(no output)' : clean
     settle(text)
     const used = live.summary()
     if (used !== '') this.append('pager', 'system', `${run.id} ${used}`)
+    if (touched.length > 0) this.append('pager', 'system', `${run.id} edited ${[...new Set(touched)].join(', ')}`)
+    if (refused.length > 0) this.append('pager', 'system', `${run.id} could not edit ${refused.join('; ')}`)
     if (reply.stopReason === 'max_tokens' || reply.stopReason === 'max_turn_requests') {
       this.append('pager', 'system', `${run.id} stopped early: ${reply.stopReason}`)
     }

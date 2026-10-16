@@ -42,6 +42,8 @@ interface Props {
   onQuit(): void
   /** Earlier submitted lines, oldest first. */
   history: readonly string[]
+  /** What to append after the typed text, or ''. */
+  suggest(text: string): string
   onToggleFolds(): void
 }
 
@@ -60,17 +62,15 @@ export function Prompt({
   onHelp,
   onQuit,
   history,
+  suggest,
   onToggleFolds,
 }: Props) {
   const theme = useTheme()
   const [selected, setSelected] = useState(0)
   const historyPos = useRef<number | null>(null)
   const selectedRow = Math.min(selected, Math.max(0, matches.length - 1))
-  // Dim completion from earlier input, offered only when the cursor is at the end and no command menu is open.
-  const ghost =
-    matches.length === 0 && value.text !== '' && value.cursor === value.text.length
-      ? (history.findLast((h) => h.length > value.text.length && h.startsWith(value.text))?.slice(value.text.length) ?? '')
-      : ''
+  // Dim completion learned from the user's own messages, offered only when the cursor is at the end and no command menu is open.
+  const ghost = matches.length === 0 && value.cursor === value.text.length ? suggest(value.text) : ''
 
   usePaste((text) => onEdit((b) => insert(b, text)), { isActive: active })
 
@@ -122,6 +122,8 @@ export function Prompt({
             return onEdit(deleteToEnd)
           case 't':
             return onToggleFolds()
+          case 'g':
+            return onHelp()
           default:
             return
         }
@@ -161,7 +163,6 @@ export function Prompt({
       if (key.escape) return onEdit(() => emptyInput)
       if (key.pageUp) return onScroll(1)
       if (key.pageDown) return onScroll(-1)
-      if (input === '?' && value.text === '') return onHelp()
       if (input !== '') onEdit((b) => insert(b, input))
     },
     { isActive: active },

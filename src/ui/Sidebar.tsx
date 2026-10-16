@@ -1,6 +1,8 @@
 import { Box, Text } from 'ink'
 import type { ConvView, PendingView } from '../engine.js'
 import { ROOM_ID, type RoomView, type RunView } from '../agents/orchestrator.js'
+import { TERM_ID } from '../terminal.js'
+import { DOCS_ID } from '../docs/store.js'
 import { Spinner } from './Spinner.js'
 import { useTheme } from './theme.js'
 
@@ -59,9 +61,10 @@ interface Props {
   pending: PendingView[]
   room: RoomView
   activeId: string | null
+  terminalRunning: boolean
 }
 
-export function Sidebar({ convs, pending, room, activeId }: Props) {
+export function Sidebar({ convs, pending, room, activeId, terminalRunning }: Props) {
   const theme = useTheme()
   const dms = convs.filter((c) => c.kind === 'dm')
   const groups = convs.filter((c) => c.kind === 'group')
@@ -100,6 +103,9 @@ export function Sidebar({ convs, pending, room, activeId }: Props) {
           ))}
         </>
       ) : null}
+      <Text dimColor>TOOLS</Text>
+      <Row label="▸ terminal" active={activeId === TERM_ID} badge={terminalRunning ? 1 : 0} />
+      <Row label="▤ docs" active={activeId === DOCS_ID} />
       <Text dimColor>AGENTS</Text>
       <Row label="⌁ agents" active={activeId === ROOM_ID} badge={room.unread} />
       {room.runs.slice(-5).map((r) => (

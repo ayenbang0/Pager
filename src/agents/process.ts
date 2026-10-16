@@ -36,13 +36,18 @@ function collect(stream: NodeJS.ReadableStream | null, cap: number): () => strin
   return () => Buffer.concat(chunks).toString('utf8')
 }
 
-/** Spawns `bin` without a shell, in its own process group (POSIX) so killTree can reach the whole tree. */
-export function startProcess(bin: string, args: string[], opts: { cwd: string; env: NodeJS.ProcessEnv; stdin: 'ignore' | 'pipe' }): ChildProcess {
+/** Spawns `bin` without a shell, in its own process group (POSIX) so killTree can reach the whole tree. `verbatim` passes Windows arguments unquoted (cmd /s /c). */
+export function startProcess(
+  bin: string,
+  args: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv; stdin: 'ignore' | 'pipe'; verbatim?: boolean },
+): ChildProcess {
   return spawn(bin, args, {
     cwd: opts.cwd,
     env: opts.env,
     stdio: [opts.stdin, 'pipe', 'pipe'],
     windowsHide: true,
+    windowsVerbatimArguments: opts.verbatim,
     detached: process.platform !== 'win32',
   })
 }

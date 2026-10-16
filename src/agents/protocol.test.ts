@@ -12,6 +12,8 @@ import {
   NOTE_MAX_CHARS,
   parseAsks,
   parseChain,
+  parseDocEdits,
+  DOCS_MARKER,
   parseRemember,
   PROMPT_MAX_CHARS,
   REPLIES_MARKER,
@@ -134,4 +136,28 @@ test('chainTask names the previous run and carries the original task and its rep
   assert.match(t, /^Another agent \(omp-1\) already worked on this task/)
   assert.match(t, /Original task: add x/)
   assert.match(t, /omp-1 replied:\ndid x/)
+})
+
+test('@@doc and @@docappend blocks become edits and leave the reply clean; extra blocks are dropped', () => {
+  const reply = ['Done.', '@@doc plan.md', '# Plan', '', 'step', '@@end', 'More text', '@@docappend notes.md', 'one more line', '@@end'].join('\n')
+  const { clean, edits } = parseDocEdits(reply)
+  assert.equal(clean, 'Done.\n\nMore text')
+  assert.deepEqual(edits, [
+    { name: 'plan.md', append: false, text: '# Plan\n\nstep', cut: false },
+    { name: 'notes.md', append: true, text: 'one more line', cut: false },
+  ])
+  const many = Array.from({ length: 9 }, (_, i) => `@@doc d${i}.md\nx\n@@end`).join('\n')
+  assert.equal(parseDocEdits(many).edits.length, 5)
+  assert.equal(parseDocEdits(many).clean, '')
+})
+
+test('buildPrompt includes a DOCS section only when documents exist, and caps its size', () => {
+  const none = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '', room: [], task: 't' })
+  assert.equal(none.includes(DOCS_MARKER), false)
+  const some = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '', docs: [{ name: 'plan.md', text: '# Plan' }], room: [], task: 't' })
+  assert.ok(some.indexOf(DOCS_MARKER) > 0 && some.indexOf(DOCS_MARKER) < some.indexOf('--- ROOM ---'))
+  assert.ok(some.includes('## plan.md\n# Plan'))
+  const big = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '', docs: [{ name: 'a.md', text: 'x'.repeat(50_000) }], room: [], task: 't' })
+  assert.ok(big.includes('[truncated'))
+  assert.ok(big.length < 20_000)
 })

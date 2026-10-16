@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { bannerRows, LOGO, LOGO_WIDTH, mix, REVEAL_FRAMES, tagline, TAGLINE, type Seg } from './banner.js'
+import { bannerRows, LOGO, LOGO_WIDTH, mix, REVEAL_FRAMES, sparkline, tagline, TAGLINE, type Seg } from './banner.js'
 
 const plain = (rows: Seg[][]): string[] => rows.map((r) => r.map((s) => s.text).join(''))
 
@@ -41,4 +41,9 @@ test('tagline types out after the reveal and is whole when static', () => {
   assert.equal(tagline(0, false), TAGLINE)
   assert.equal(tagline(REVEAL_FRAMES, true).replace('▌', '').trim(), '')
   assert.ok(tagline(REVEAL_FRAMES + 100, true).startsWith(TAGLINE))
+})
+
+test('sparkline scales to the largest value and keeps zeros on the lowest bar', () => {
+  assert.equal(sparkline([0, 0, 0]), '▁▁▁')
+  assert.equal(sparkline([0, 4, 8]), '▁▅█')
 })

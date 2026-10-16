@@ -17,6 +17,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'open', usage: '/open <name>', summary: 'Open a conversation' },
   { name: 'remove', usage: '/remove <name>', summary: 'Remove a contact' },
   { name: 'group', usage: '/group new|invite|members|leave', summary: 'Manage groups' },
+  { name: 'terminal', usage: '/terminal', summary: 'Open the built-in terminal tab' },
+  { name: 'doc', usage: '/doc new <name> [in <chat>]', summary: 'Shared Markdown documents (Docs tab)' },
   { name: 'agent', usage: '/agent <name> <task>', summary: 'Run coding agents in isolated worktrees' },
   { name: 'update', usage: '/update', summary: 'Check for a newer pager version' },
   { name: 'theme', usage: '/theme [name]', summary: 'Show or switch the color theme' },

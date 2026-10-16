@@ -1,8 +1,8 @@
 // Fake coding agent used by orchestrator and engine tests: `node testAgent.js <prompt>`.
-// Task lines: WRITE f=x | APPEND f=x | ASK agent: request | ECHO text | HAS f | SLEEP ms | FAIL | LOOP agent | REMEMBER text | MEM
+// Task lines: WRITE f=x | APPEND f=x | ASK agent: request | ECHO text | HAS f | SLEEP ms | FAIL | LOOP agent | REMEMBER text | MEM | DOCEDIT name=text | DOCSEEN
 import fs from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
-import { MEMORY_MARKER, REPLIES_MARKER, TASK_MARKER } from './protocol.js'
+import { DOCS_MARKER, MEMORY_MARKER, REPLIES_MARKER, TASK_MARKER } from './protocol.js'
 
 const prompt = process.argv[2] ?? ''
 const self = /You are "(\w+)"/.exec(prompt)?.[1] ?? 'unknown'
@@ -30,6 +30,12 @@ for (const line of task.split('\n')) {
     console.log(`@@ask ${arg}\nLOOP ${self}\n@@end`)
   } else if (op === 'REMEMBER') {
     console.log(`@@remember\n${arg}\n@@end`)
+  } else if (op === 'DOCEDIT') {
+    const eq = arg.indexOf('=')
+    console.log(`@@doc ${arg.slice(0, eq)}\n${arg.slice(eq + 1)}\n@@end`)
+  } else if (op === 'DOCSEEN') {
+    const section = prompt.split(DOCS_MARKER)[1]?.split('--- ROOM ---')[0]
+    console.log(`docs: ${[...(section ?? '').matchAll(/^## (\S+)/gm)].map((m) => m[1]).join(',') || 'none'}`)
   } else if (op === 'MEM') {
     const memory = prompt.split(MEMORY_MARKER)[1]?.split('--- ROOM ---')[0]?.trim()
     console.log(`mem: ${memory ?? 'none'}`)

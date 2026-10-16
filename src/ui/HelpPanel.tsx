@@ -9,12 +9,12 @@ interface Props {
   onClose(): void
 }
 
-/** Replaces the message pane. Any of Esc, Enter, q or ? closes it. Rows are never squeezed; a short terminal clips the bottom. */
+/** Replaces the message pane. Any of Esc, Enter, q or Ctrl+G closes it. Rows are never squeezed; a short terminal clips the bottom. */
 export function HelpPanel({ height, onClose }: Props) {
   const theme = useTheme()
   useInput((input, key) => {
     if (key.eventType === 'release') return
-    if (key.escape || key.return || input === 'q' || input === '?' || (key.ctrl && input === 'c')) onClose()
+    if (key.escape || key.return || input === 'q' || (key.ctrl && (input === 'g' || input === 'c'))) onClose()
   })
   return (
     <Box height={height} flexDirection="column" overflow="hidden" paddingX={1}>

@@ -1,6 +1,6 @@
 # pager
 
-Peer-to-peer terminal chat for developers. A full-screen TUI: add people with a shareable contact code, chat 1:1 or in groups, with in-app toasts. No server: peers find each other over the [HyperDHT](https://github.com/holepunchto/hyperdht) and connect directly. History is stored locally in SQLite.
+A simpler way to chat. A full-screen TUI: add people with a shareable contact code, chat 1:1 or in groups, with in-app toasts. No server: peers find each other over the [HyperDHT](https://github.com/holepunchto/hyperdht) and connect directly. History is stored locally in SQLite.
 
 ## Install
 
@@ -20,7 +20,7 @@ The npm package is named `pager-cli`; the command is `pager` (`npm link` puts it
 
 ## Quick start
 
-1. Run `pager`. The home view shows **your contact code** (`pgr1-…`); `/code` shows it again.
+1. Run `pager`. The home view shows **your contact code** (`pgr1-…`) beside a summary: contacts and who is online, messages sent and received, a 7-day activity chart, and agent runs. `/code` shows the code again.
 2. Send your code to a friend. They run `/add <your code> [note]`.
 3. You get a toast and a **PENDING** entry in the sidebar. Run `/accept 1`.
 4. Both of you now see each other under **DIRECT** (`●` online, `○` offline). `/open <name>`, type a message, press Enter.
@@ -44,6 +44,8 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/group members` | List members of the open group |
 | `/group leave` | Leave the open group permanently |
 | `/theme [name]` | Show or switch the color theme: `omp` (default), `terminal`, `mono`, `ocean`, `amber`, `light` (saved) |
+| `/terminal` | Open the built-in Terminal tab |
+| `/doc new <name> [in <chat>]` | Create a shared Markdown document; also `open`, `rename`, `rm`, `list`. Without `in <chat>` it is private |
 | `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `chain`, `memory`, `commands`, `runs`, `stop`, `merge`, `drop`, `check` |
 | `/quit` | Exit |
 
@@ -53,9 +55,9 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 |---|---|
 | Enter | Send / run command |
 | Tab, Up/Down | Complete the highlighted command / move in the palette (or input history) |
-| Right, End, Tab | Accept the dim suggestion pager shows from earlier input |
+| Right, End, Tab | Accept the dim suggestion. It learns from what you type: whole lines you have sent before (most-used first), then your own vocabulary and the words you usually put after each word. Shell lines in the Terminal tab are learned as whole lines only |
 | Ctrl+P | Command palette: switch conversation, accept/decline, change theme, and more |
-| ? (empty prompt) | Keyboard shortcut help |
+| Ctrl+G | Keyboard shortcut help (no printable key is a shortcut, so every character, `?` included, types normally) |
 | Alt+Up / Alt+Down | Previous / next conversation (home is first) |
 | Ctrl+O / Ctrl+N | Same, for terminals that do not send Alt+arrows (macOS Terminal.app by default) |
 | Ctrl+B | Toggle the sidebar (saved) |
@@ -66,7 +68,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | Alt+Backspace | Delete word back (Option+Delete on macOS) |
 | Ctrl+W, Ctrl+U, Ctrl+K | Delete word back, to line start, to line end |
 | Esc | Clear the input (closes the palette / help) |
-| Ctrl+C | Clear the input; on an empty prompt press again within 2 s to quit |
+| Ctrl+C | Clear the input; on an empty prompt press again within 2 s to quit. In the Terminal tab it stops the running command; in the Docs editor it copies |
 | Ctrl+D (empty prompt) | Quit |
 
 ## Configuration
@@ -84,7 +86,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 
 Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar), `history.json` (your last 500 inputs, for Up and the dim suggestion), `update.json` (cached latest version and check time), `agents-room.jsonl` (agents room transcript), `agent-sessions.json` (agent session ids), `memory/` (shared agent notes per repository), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
 
-When pager is not focused (terminals that report focus: Windows Terminal, iTerm2, kitty, Ghostty, WezTerm, tmux with `focus-events`) it rings the bell when a message arrives or the agents finish, and Windows Terminal, iTerm2, Ghostty and WezTerm also show an indeterminate progress indicator while agents run.
+When pager is not focused (terminals that report focus: Windows Terminal, iTerm2, kitty, Ghostty, WezTerm, tmux with `focus-events`) it rings the bell when a message arrives or the agents finish, and Windows Terminal, iTerm2, Ghostty and WezTerm also show an indeterminate progress indicator while agents run. A message that arrives in the conversation you are looking at rings too, and ghostty, WezTerm and iTerm2 also get a desktop notification (sender and a preview); other terminals rely on the bell.
 
 ### Updating
 
@@ -117,6 +119,20 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Groups.** The creator invites contacts with signed `member-add` events (max 16). Members connect to each other directly. `member-leave` is permanent for that group. New members receive the full history.
 - **Hardening.** Frames are newline-delimited JSON, validated with zod, capped at 256 KiB, and peer-supplied text containing control characters (terminal escape injection) is rejected.
 
+## Terminal tab
+
+`▸ terminal` in the sidebar (or `/terminal`, or the palette) runs shell commands without leaving pager: each line runs in your shell (`cmd` on Windows, `$SHELL` elsewhere) in a persistent directory (`cd` works, `clear` empties the tab), output streams in with escape codes stripped, and a line typed while a command runs goes to its stdin. Ctrl+C stops the command; one that ran over 5 s rings an unfocused terminal when it ends. There is no pseudo-terminal, so full-screen programs (vim, htop) do not work. A line that must start with `/` is typed with `//`.
+
+## Docs tab
+
+`▤ docs` (or `/open docs`) is a Markdown editor for notes, plans and specs that several people edit at once. A document belongs to a conversation: `/doc new plan in team` shares it with everyone in `team`; plain `/doc new plan` goes into a private `notes` group. Open one from the list (PgUp/PgDn or click, then Enter) or with `/doc open plan`.
+
+- **Editing is vim.** Normal, insert, visual and visual-line modes; counts; `h j k l w b e 0 ^ $ gg G { } f t ; ,`; operators `d c y > <` with motions and the text objects `iw aw ip ap` and quotes/brackets; `x X D C s S p P J r ~ u Ctrl+R`; `o` and Enter continue Markdown lists; `/` search with `n N`; `:w :q :wq :qa :rename <name> :<line>` and `:%s/pat/rep/g`. Dot-repeat, macros and registers other than the unnamed one are not implemented.
+- **Everything else still works.** Click places the cursor, the wheel scrolls, Ctrl+C copies the selection (or the current line), Ctrl+V or your terminal's paste inserts, Ctrl+Z undoes and Ctrl+Y redoes (your own changes only, even while others type). Yanks also go to the system clipboard.
+- **Live collaboration.** Edits are a text CRDT (RGA) carried as signed events in the conversation, so they sync like messages: concurrent edits merge without conflicts, an offline collaborator catches up on reconnect, and documents survive restarts. The status line shows who edited in the last 30 s. Document operations are hidden from the chat; older pager versions in the same chat will see them as unreadable lines.
+- **Agents.** An agent sees a document only when you name it in the task as `#name` (for example `/agent claude tighten the intro in #plan`). The text is passed in a `--- DOCS ---` section (up to 12k characters) labelled as data, and the agent edits it by ending its reply with `@@doc <name>` … `@@end` (replaces the document; only the changed middle is applied, so concurrent edits elsewhere survive) or `@@docappend <name>` … `@@end`. It can only edit documents it was shown, cannot create or delete any, and edits as you. **Treat shared documents as untrusted input:** collaborators can write anything into them, and agents auto-approve their own tool use, so name only documents whose authors you trust. Nothing is ever included implicitly.
+- **Limits.** Deleting a document hides it for everyone; its operations stay in the log. Positions count UTF-16 units, so wide characters can misalign the cursor column.
+
 ## Coding agents
 
 `/agent` runs the coding agents installed on your machine (`omp`, `claude`, `opencode`, `hermes`) and lets them hand work to each other. It works only inside a git repository with at least one commit, and only on what you type locally: nothing from a peer or a chat can ever start or steer an agent.
@@ -142,7 +158,7 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - Messages only flow while both peers are online at the same time (no relay or store-and-forward server).
 - `identity.json` and `pager.db` are not encrypted at rest.
 - Display names are self-declared and can collide or impersonate; use the public-key prefix with `/open` and `/remove` to disambiguate.
-- Input is single-line; pasted newlines become spaces.
+- Chat input is single-line; pasted newlines become spaces (documents take multi-line text).
 - Some carrier NATs cannot be hole-punched by HyperDHT; those peers cannot connect directly.
 
 ## Development

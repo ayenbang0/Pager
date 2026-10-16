@@ -232,6 +232,69 @@ test('facts an agent keeps with @@remember reach later prompts until cleared', (
     assert.ok(texts(orch).some((t) => t.endsWith(': mem: none')))
   }))
 
+test('agents see only the documents the task names, edit only those, and refusals are reported', () => {
+  const docs = new Map([
+    ['plan.md', 'old plan'],
+    ['secret.md', 'peer text'],
+    ['big.md', 'x'.repeat(20_000)],
+  ])
+  const writes: string[] = []
+  const port = {
+    list: (task: string) => [...docs].filter(([name]) => task.includes(`#${name}`)).map(([name, text]) => ({ name, text })),
+    write: (name: string, text: string, append: boolean, base: string) => {
+      if (!append && docs.get(name) !== base) return 'it changed while the agent worked'
+      writes.push(name)
+      docs.set(name, append ? `${docs.get(name)}${text}` : text)
+      return null
+    },
+  }
+  return withOrch(
+    async ({ orch }) => {
+      await orch.ask('omp', 'DOCSEEN')
+      assert.ok(texts(orch).some((t) => t.endsWith(': docs: none')))
+      await orch.ask('omp', 'see #plan.md\nDOCSEEN\nDOCEDIT plan.md=new plan\nDOCEDIT secret.md=hacked')
+      assert.ok(texts(orch).some((t) => t.endsWith(': docs: plan.md')))
+      assert.equal(docs.get('plan.md'), 'new plan')
+      assert.equal(docs.get('secret.md'), 'peer text')
+      assert.ok(texts(orch).some((t) => /^pager: omp-\w+ edited plan\.md$/.test(t)))
+      assert.ok(texts(orch).some((t) => /^pager: omp-\w+ could not edit secret\.md \(it was not shown to the agent\)$/.test(t)))
+      assert.ok(!texts(orch).some((t) => t.includes('@@doc')))
+      // A replacement of a document the prompt had to cut would delete the part the agent never saw.
+      await orch.ask('omp', 'see #big.md\nDOCEDIT big.md=short')
+      assert.equal(docs.get('big.md')?.length, 20_000)
+      assert.ok(texts(orch).some((t) => /could not edit big\.md \(a replacement needs the whole document/.test(t)))
+      assert.deepEqual(writes, ['plan.md'])
+    },
+    { docs: port },
+  )
+})
+
+test('a replace is refused when the document changed while the agent worked', () => {
+  const docs = new Map([['plan.md', 'v1']])
+  const port = {
+    list: (task: string) => {
+      if (!task.includes('#plan.md')) return []
+      const snapshot = { name: 'plan.md', text: docs.get('plan.md') ?? '' }
+      // Real child process: the collaborator types after the agent got its snapshot and while it is still working.
+      setTimeout(() => docs.set('plan.md', 'v1 plus a human edit'), 150)
+      return [snapshot]
+    },
+    write: (name: string, text: string, _append: boolean, base: string) => {
+      if (docs.get(name) !== base) return 'it changed while the agent worked'
+      docs.set(name, text)
+      return null
+    },
+  }
+  return withOrch(
+    async ({ orch }) => {
+      await orch.ask('omp', 'see #plan.md\nSLEEP 700\nDOCEDIT plan.md=agent version')
+      assert.equal(docs.get('plan.md'), 'v1 plus a human edit')
+      assert.ok(texts(orch).some((t) => /could not edit plan\.md \(it changed while the agent worked\)/.test(t)))
+    },
+    { docs: port },
+  )
+})
+
 test('a chain runs each agent on top of the previous commit and hands over its reply', () =>
   withOrch(async ({ orch, repo }) => {
     await orch.chain(['omp', 'claude'], 'WRITE a.txt=1')

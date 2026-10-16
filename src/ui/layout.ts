@@ -120,15 +120,22 @@ export function buildLines(
   folds: FoldState = DEFAULT_FOLDS,
 ): Line[] {
   const lines: Line[] = []
+  let prevAuthor: string | null = null
   for (const m of messages) {
     if (m.kind === 'system') {
       wrap(`* ${m.text}`, width).forEach((text, i) => {
         lines.push({ key: `${m.key}:${i}`, segs: [{ text: i === 0 ? text : `  ${text}`, dim: true, italic: true }] })
       })
+      prevAuthor = null
       continue
     }
     const prefix = stamp(m.ts, now)
     const author = truncate(m.authorName, MAX_AUTHOR_COLUMNS)
+    // A run of messages from one person names them once; the body column stays aligned.
+    // Name as well as key: agent runs share a key (omp-1 / omp-2) and "you" / "pager" share the zero key.
+    const who = `${m.authorKey}\0${m.authorName}`
+    const sameAsPrev = prevAuthor === who
+    prevAuthor = who
     const bodyCol = stringWidth(prefix) + 1 + stringWidth(author) + 2
     const suffix = m.status === null ? 0 : 2
     const columns = Math.max(MIN_BODY_COLUMNS, width - bodyCol - suffix)
@@ -149,7 +156,7 @@ export function buildLines(
           ? [
               { text: prefix, dim: true },
               { text: ' ' },
-              { text: author, bold: true, color: m.mine ? theme.mine : colorFor(theme, m.authorKey) },
+              { text: sameAsPrev ? ' '.repeat(stringWidth(author)) : author, bold: !sameAsPrev, color: m.mine ? theme.mine : colorFor(theme, m.authorKey) },
               { text: '  ' },
               ...row,
             ]

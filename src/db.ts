@@ -1,5 +1,9 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
+import { DOC_PREFIX } from './docs/store.js'
 import type { PagerEvent } from './events.js'
+
+/** LIKE pattern matching document-operation event bodies (see DOC_PREFIX). */
+const DOC_LIKE = `${DOC_PREFIX}%`
 
 export type PeerState = 'outgoing' | 'incoming' | 'accepted' | 'blocked'
 export interface Peer {
@@ -193,12 +197,40 @@ export class Store {
       .map((r) => r.author as string)
   }
 
+  /** The bodies of the last `limit` text messages `author` sent, oldest first. */
+  sentTexts(author: string, limit: number): string[] {
+    const rows = this.db
+      .prepare("SELECT body FROM events WHERE kind = 'text' AND author = ? AND body NOT LIKE ? ORDER BY ts DESC, seq DESC LIMIT ?")
+      .all(author, DOC_LIKE, limit)
+    return rows.reverse().map((r) => r.body as string)
+  }
+
+  /** Text message totals for `me`, plus the (ts, conv, mine) of every text since `since` for activity charts. */
+  textStats(me: string, since: number): { sent: number; received: number; recent: { ts: number; conv: string; mine: boolean }[] } {
+    const totals = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(author = ?), 0) AS sent, COALESCE(SUM(author <> ?), 0) AS received FROM events WHERE kind = 'text' AND body NOT LIKE ?",
+      )
+      .get(me, me, DOC_LIKE)
+    const rows = this.db.prepare("SELECT ts, conv, author FROM events WHERE kind = 'text' AND ts >= ? AND body NOT LIKE ?").all(since, DOC_LIKE)
+    return {
+      sent: (totals?.sent as number) ?? 0,
+      received: (totals?.received as number) ?? 0,
+      recent: rows.map((r) => ({ ts: r.ts as number, conv: r.conv as string, mine: r.author === me })),
+    }
+  }
+
   /** The last `limit` rows ordered by (ts, author, seq) ascending. */
   listMessages(conv: string, limit: number): StoredEvent[] {
     const rows = this.db
-      .prepare('SELECT * FROM events WHERE conv = ? ORDER BY ts DESC, author DESC, seq DESC LIMIT ?')
-      .all(conv, limit)
+      .prepare('SELECT * FROM events WHERE conv = ? AND body NOT LIKE ? ORDER BY ts DESC, author DESC, seq DESC LIMIT ?')
+      .all(conv, DOC_LIKE, limit)
     return rows.reverse().map((r) => ({ ...toEvent(r), recvAt: r.recv_at as number }))
+  }
+
+  /** Every document operation event, in the order they were written. */
+  docEvents(): PagerEvent[] {
+    return this.db.prepare('SELECT * FROM events WHERE body LIKE ? ORDER BY ts, author, seq').all(DOC_LIKE).map(toEvent)
   }
 
   /** Text events from others received after the conv's read_at. */
@@ -206,9 +238,9 @@ export class Store {
     const r = this.db
       .prepare(
         `SELECT COUNT(*) AS n FROM events e JOIN convs c ON c.id = e.conv
-         WHERE e.conv = ? AND e.kind = 'text' AND e.author <> ? AND e.recv_at > c.read_at`,
+         WHERE e.conv = ? AND e.kind = 'text' AND e.author <> ? AND e.recv_at > c.read_at AND e.body NOT LIKE ?`,
       )
-      .get(conv, me)
+      .get(conv, me, DOC_LIKE)
     return (r?.n as number) ?? 0
   }
 
