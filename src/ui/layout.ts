@@ -1,6 +1,7 @@
 import stringWidth from 'string-width'
 import wrapAnsi from 'wrap-ansi'
 import type { MessageView } from '../engine.js'
+import { DEFAULT_THEME, type Theme } from '../themes.js'
 
 export interface Seg {
   text: string
@@ -14,12 +15,11 @@ export interface Line {
   segs: Seg[]
 }
 
-const AUTHOR_COLORS = ['magenta', 'yellow', 'green', 'blue', 'red', 'cyan']
 const MAX_AUTHOR_COLUMNS = 20
 const MIN_BODY_COLUMNS = 10
 
-export function colorFor(key: string): string {
-  return AUTHOR_COLORS[Number.parseInt(key.slice(0, 8), 16) % AUTHOR_COLORS.length] ?? 'white'
+export function colorFor(theme: Theme, key: string): string {
+  return theme.authors[Number.parseInt(key.slice(0, 8), 16) % theme.authors.length] ?? theme.accent
 }
 
 const two = (n: number): string => String(n).padStart(2, '0')
@@ -46,7 +46,7 @@ function wrap(text: string, columns: number): string[] {
   return wrapAnsi(text, Math.max(1, columns), { hard: true, trim: false }).split('\n')
 }
 
-export function buildLines(messages: MessageView[], width: number, now: Date = new Date()): Line[] {
+export function buildLines(messages: MessageView[], width: number, theme: Theme = DEFAULT_THEME, now: Date = new Date()): Line[] {
   const lines: Line[] = []
   for (const m of messages) {
     if (m.kind === 'system') {
@@ -66,13 +66,13 @@ export function buildLines(messages: MessageView[], width: number, now: Date = n
           ? [
               { text: prefix, dim: true },
               { text: ' ' },
-              { text: author, bold: true, color: m.mine ? 'cyan' : colorFor(m.authorKey) },
+              { text: author, bold: true, color: m.mine ? theme.mine : colorFor(theme, m.authorKey) },
               { text: '  ' },
               { text: row },
             ]
           : [{ text: ' '.repeat(bodyCol) }, { text: row }]
-      if (i === rows.length - 1 && m.status === 'delivered') segs.push({ text: ' ✓', color: 'green' })
-      if (i === rows.length - 1 && m.status === 'pending') segs.push({ text: ' …', color: 'yellow' })
+      if (i === rows.length - 1 && m.status === 'delivered') segs.push({ text: ' ✓', color: theme.success })
+      if (i === rows.length - 1 && m.status === 'pending') segs.push({ text: ' …', color: theme.warning })
       lines.push({ key: `${m.key}:${i}`, segs })
     })
   }
@@ -89,5 +89,8 @@ export function windowLines(lines: Line[], height: number, offsetFromBottom: num
 
 /** Unstyled wrapped lines (home view). */
 export function plainLines(texts: string[], width: number): Line[] {
-  return texts.flatMap((text, i) => wrap(text, width).map((row, j): Line => ({ key: `p${i}:${j}`, segs: [{ text: row }] })))
+  // An empty row would collapse to zero height in Ink; a space keeps the blank line.
+  return texts.flatMap((text, i) =>
+    wrap(text, width).map((row, j): Line => ({ key: `p${i}:${j}`, segs: [{ text: row === '' ? ' ' : row }] })),
+  )
 }

@@ -8,6 +8,8 @@ import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from
 import { loadOrCreateIdentity, saveName } from './identity.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from './ingest.js'
 import { Net, type PeerLink } from './net.js'
+import { loadSettings, saveSettings, type Settings } from './settings.js'
+import { findTheme, THEMES } from './themes.js'
 import type { Frame } from './wire.js'
 
 export type ToastKind = 'info' | 'success' | 'warn' | 'error'
@@ -78,8 +80,10 @@ export class Engine extends EventEmitter {
   private readonly net: Net
   private readonly unknownTimers = new Set<NodeJS.Timeout>()
   private activeId: string | null = null
-  private homeLines: string[]
+  /** Text set by /help and /code; null shows the welcome banner. */
+  private homeLines: string[] | null = null
   private closed = false
+  private prefs: Settings
 
   static async open(opts: EngineOptions): Promise<Engine> {
     const engine = new Engine(opts)
@@ -90,15 +94,11 @@ export class Engine extends EventEmitter {
   private constructor(opts: EngineOptions) {
     super()
     this.dir = opts.dir
+    this.prefs = loadSettings(opts.dir)
     const identity = loadOrCreateIdentity(opts.dir)
     this.secretKey = identity.keyPair.secretKey
     this.store = new Store(path.join(opts.dir, 'pager.db'))
     this.me = { pk: identity.pk, code: encodeContactCode(identity.keyPair.publicKey), name: identity.name }
-    this.homeLines = [
-      'Welcome to pager.',
-      `Your contact code: ${this.me.code}`,
-      'Share it. Add someone with /add <code>. Type /help for commands.',
-    ]
     this.net = new Net({
       keyPair: identity.keyPair,
       bootstrap: opts.bootstrap,
@@ -155,7 +155,20 @@ export class Engine extends EventEmitter {
   }
 
   home(): string[] {
-    return this.homeLines
+    return (
+      this.homeLines ?? [
+        'pager · peer-to-peer terminal chat',
+        '',
+        `You            ${this.me.name}`,
+        'Contact code',
+        `  ${this.me.code}`,
+        '',
+        'Get started',
+        '  1. Send your contact code to a friend',
+        '  2. They run /add <your code>; you run /accept 1',
+        '  3. Ctrl+P opens the command palette, ? shows shortcuts',
+      ]
+    )
   }
 
   messages(convId: string, limit: number): MessageView[] {
@@ -187,6 +200,10 @@ export class Engine extends EventEmitter {
     return this.net.listening
   }
 
+  settings(): Readonly<Settings> {
+    return this.prefs
+  }
+
   /** Links whose peer is an accepted contact or a member of an active group. */
   onlineCount(): number {
     const groupMates = new Set<string>()
@@ -206,6 +223,10 @@ export class Engine extends EventEmitter {
     }
     this.activeId = convId
     this.emit('change')
+  }
+
+  toggleSidebar(): void {
+    this.updateSettings({ sidebar: !this.prefs.sidebar })
   }
 
   async submit(input: string): Promise<void> {
@@ -231,7 +252,7 @@ export class Engine extends EventEmitter {
     const { name, args, rest } = parseCommand(line)
     switch (name) {
       case 'help':
-        return this.setHome(['Commands:', ...COMMANDS.map((c) => `  ${c.usage.padEnd(34)} ${c.summary}`)])
+        return this.setHome(['Commands:', ...COMMANDS.map((c) => `  ${c.usage.padEnd(34)} ${c.summary}`), '', 'Press ? for keyboard shortcuts.'])
       case 'code':
         return this.setHome([`Your name: ${this.me.name}`, `Your contact code: ${this.me.code}`, 'Share it so others can /add you.'])
       case 'name':
@@ -248,6 +269,8 @@ export class Engine extends EventEmitter {
         return this.cmdRemove(rest)
       case 'group':
         return this.cmdGroup(args[0]?.toLowerCase(), rest.slice((args[0] ?? '').length).trim())
+      case 'theme':
+        return this.cmdTheme(rest)
       case 'quit':
         this.emit('quit')
         return
@@ -259,6 +282,31 @@ export class Engine extends EventEmitter {
   private setHome(lines: string[]): void {
     this.homeLines = lines
     this.activate(null)
+  }
+
+  private updateSettings(patch: Partial<Settings>): void {
+    this.prefs = { ...this.prefs, ...patch }
+    try {
+      saveSettings(this.dir, this.prefs)
+    } catch {
+      this.toast('warn', 'Could not save settings; the change lasts until you quit')
+    }
+    this.emit('change')
+  }
+
+  private cmdTheme(name: string): void {
+    const names = THEMES.map((t) => t.name).join(', ')
+    if (name === '') {
+      this.toast('info', `Theme: ${this.prefs.theme}. Available: ${names}`)
+      return
+    }
+    const theme = findTheme(name)
+    if (!theme) {
+      this.toast('error', `Unknown theme "${name.slice(0, 20)}". Available: ${names}`)
+      return
+    }
+    this.updateSettings({ theme: theme.name })
+    this.toast('success', `Theme: ${theme.name}`)
   }
 
   private cmdName(next: string): void {
@@ -780,7 +828,7 @@ export class Engine extends EventEmitter {
     }
     const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
     if (!conv) {
-      this.toast('warn', 'Open a conversation first (Ctrl+N) or /add a contact')
+      this.toast('warn', 'Open a conversation first (Ctrl+P) or /add a contact')
       return
     }
     if (conv.state !== 'active' || (conv.kind === 'dm' && this.store.getPeer(conv.peer ?? '')?.state !== 'accepted')) {

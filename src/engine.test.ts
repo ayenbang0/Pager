@@ -170,3 +170,17 @@ test('name change propagates to contacts', async () => {
   await a.engine.submit('/name alicia')
   await waitFor(() => b.engine.convs().some((v) => v.title === 'alicia'), 15_000, 'new name')
 })
+
+test('/theme switches, persists across restarts, and rejects unknown names', async () => {
+  const a = await boot('alice')
+  await a.engine.submit('/theme MONO')
+  assert.equal(a.engine.settings().theme, 'mono')
+  assert.equal(a.toasts.at(-1)?.kind, 'success')
+  await a.engine.submit('/theme nope')
+  assert.equal(a.engine.settings().theme, 'mono')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  a.engine.toggleSidebar()
+  await a.engine.close()
+  const again = await boot('alice', a.dir)
+  assert.deepEqual(again.engine.settings(), { theme: 'mono', sidebar: false })
+})

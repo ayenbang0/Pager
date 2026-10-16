@@ -14,15 +14,25 @@ test('group subcommands after "/group "', () => {
   assert.deepEqual(matchCommands('/group invite bo'), [])
 })
 
-test('plain text and command arguments show nothing', () => {
-  assert.deepEqual(matchCommands('hello'), [])
-  assert.deepEqual(matchCommands('/add x'), [])
+test('theme names complete after "/theme "', () => {
+  assert.deepEqual(matchCommands('/theme mo').map((c) => c.name), ['mono'])
+  assert.ok(matchCommands('/theme ').length >= 2)
+  assert.deepEqual(matchCommands('/theme mono x'), [])
 })
 
-test('completion keeps the /group prefix', () => {
+test('plain text, unknown commands and free-form arguments show nothing', () => {
+  assert.deepEqual(matchCommands('hello'), [])
+  assert.deepEqual(matchCommands('/add x'), [])
+  assert.deepEqual(matchCommands('/constructor x'), [])
+  assert.deepEqual(matchCommands('/__proto__ x'), [])
+})
+
+test('completion keeps the command prefix', () => {
   const [group] = matchCommands('/gr')
   const [invite] = matchCommands('/group i')
-  assert.ok(group && invite)
+  const [mono] = matchCommands('/theme mo')
+  assert.ok(group && invite && mono)
   assert.equal(completion('/gr', group), '/group ')
   assert.equal(completion('/group i', invite), '/group invite ')
+  assert.equal(completion('/theme mo', mono), '/theme mono ')
 })

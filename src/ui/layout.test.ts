@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { MessageView } from '../engine.js'
+import { DEFAULT_THEME, findTheme } from '../themes.js'
 import { buildLines, windowLines, type Line } from './layout.js'
 
 const NOW = new Date(2024, 4, 10, 15, 0)
+const T = DEFAULT_THEME
 
 function msg(over: Partial<MessageView>): MessageView {
   return {
@@ -21,7 +23,7 @@ function msg(over: Partial<MessageView>): MessageView {
 const plain = (l: Line): string => l.segs.map((s) => s.text).join('')
 
 test('wrapped continuation lines indent to the body column', () => {
-  const lines = buildLines([msg({ text: 'aaaa bbbb cccc dddd eeee ffff' })], 28, NOW)
+  const lines = buildLines([msg({ text: 'aaaa bbbb cccc dddd eeee ffff' })], 28, T, NOW)
   assert.ok(lines.length > 1)
   assert.equal(plain(lines[0]!).startsWith('09:05 bob  aaaa'), true)
   const bodyCol = '09:05 bob  '.length
@@ -31,19 +33,28 @@ test('wrapped continuation lines indent to the body column', () => {
 
 test('date prefix only when the message is not from today', () => {
   const old = msg({ ts: new Date(2024, 4, 9, 23, 59).getTime() })
-  assert.equal(plain(buildLines([old], 60, NOW)[0]!).startsWith('05-09 23:59 bob'), true)
+  assert.equal(plain(buildLines([old], 60, T, NOW)[0]!).startsWith('05-09 23:59 bob'), true)
 })
 
 test('own message status markers sit at the end of the last line', () => {
-  const pending = buildLines([msg({ mine: true, status: 'pending' })], 40, NOW)
+  const pending = buildLines([msg({ mine: true, status: 'pending' })], 40, T, NOW)
   assert.equal(plain(pending.at(-1)!).endsWith(' …'), true)
-  const delivered = buildLines([msg({ mine: true, status: 'delivered' })], 40, NOW)
+  const delivered = buildLines([msg({ mine: true, status: 'delivered' })], 40, T, NOW)
   assert.equal(plain(delivered.at(-1)!).endsWith(' ✓'), true)
 })
 
 test('system messages are dim italic with no author column', () => {
-  const [line] = buildLines([msg({ kind: 'system', text: 'bob left' })], 40, NOW)
+  const [line] = buildLines([msg({ kind: 'system', text: 'bob left' })], 40, T, NOW)
   assert.deepEqual(line?.segs, [{ text: '* bob left', dim: true, italic: true }])
+})
+
+test('author and status colors come from the theme', () => {
+  const ocean = findTheme('ocean')!
+  const [mine] = buildLines([msg({ mine: true, status: 'delivered' })], 40, ocean, NOW)
+  assert.equal(mine?.segs.find((s) => s.text === 'bob')?.color, ocean.mine)
+  assert.equal(mine?.segs.find((s) => s.text === ' ✓')?.color, ocean.success)
+  const [other] = buildLines([msg({})], 40, ocean, NOW)
+  assert.ok(ocean.authors.includes(other?.segs.find((s) => s.text === 'bob')?.color ?? ''))
 })
 
 test('windowLines keeps the newest lines at offset 0 and clamps offsets', () => {

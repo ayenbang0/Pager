@@ -43,6 +43,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/group invite <name>` | Invite an accepted contact (creator only, max 16 members) |
 | `/group members` | List members of the open group |
 | `/group leave` | Leave the open group permanently |
+| `/theme [name]` | Show or switch the color theme: `omp` (default), `terminal`, `mono`, `ocean`, `amber`, `light` (saved) |
 | `/quit` | Exit |
 
 ## Keys
@@ -51,11 +52,17 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 |---|---|
 | Enter | Send / run command |
 | Tab, Up/Down | Complete the highlighted command / move in the palette (or input history) |
-| Ctrl+N / Ctrl+P | Next / previous conversation (home is first) |
+| Ctrl+P | Command palette: switch conversation, accept/decline, change theme, and more |
+| ? (empty prompt) | Keyboard shortcut help |
+| Alt+Up / Alt+Down | Previous / next conversation (home is first) |
+| Ctrl+B | Toggle the sidebar (saved) |
 | PgUp / PgDn | Scroll messages |
 | Ctrl+A / Ctrl+E, Home / End | Start / end of line |
-| Ctrl+W, Ctrl+U, Esc | Delete word, clear line |
-| Ctrl+C, or Ctrl+D on an empty line | Quit |
+| Alt+B / Alt+F, Ctrl+Left / Right | Word left / right |
+| Ctrl+W, Ctrl+U, Ctrl+K | Delete word back, to line start, to line end |
+| Esc | Clear the input (closes the palette / help) |
+| Ctrl+C | Clear the input; on an empty prompt press again within 2 s to quit |
+| Ctrl+D (empty prompt) | Quit |
 
 ## Configuration
 
@@ -63,8 +70,9 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 |---|---|
 | `PAGER_HOME` | Data directory (default `~/.pager`) |
 | `PAGER_BOOTSTRAP` | Comma-separated `host:port` DHT bootstrap nodes (default: public HyperDHT) |
+| `PAGER_REDUCE_MOTION` | Set to `1` to disable animations (connecting spinner, toast countdown bars) |
 
-Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `pager.lock` (one instance per directory).
+Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar), `pager.lock` (one instance per directory).
 
 ### Trying it on one machine
 
@@ -110,3 +118,7 @@ npm run typecheck
 ```
 
 Layout: `src/engine.ts` (contacts, groups, sync, commands), `src/ingest.ts` (event gate), `src/net.ts` (transport), `src/db.ts` (SQLite via `node:sqlite`), `src/wire.ts` (frames), `src/events.ts` (signed events), `src/ui/` (Ink components).
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE).

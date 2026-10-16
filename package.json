@@ -2,6 +2,7 @@
   "name": "pager-cli",
   "version": "0.1.0",
   "description": "Peer-to-peer terminal chat for developers",
+  "license": "Apache-2.0",
   "type": "module",
   "bin": {
     "pager": "dist/cli.js"

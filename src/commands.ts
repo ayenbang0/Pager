@@ -1,3 +1,5 @@
+import { THEMES } from './themes.js'
+
 export interface CommandSpec {
   name: string
   usage: string
@@ -14,6 +16,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'open', usage: '/open <name>', summary: 'Open a conversation' },
   { name: 'remove', usage: '/remove <name>', summary: 'Remove a contact' },
   { name: 'group', usage: '/group new|invite|members|leave', summary: 'Manage groups' },
+  { name: 'theme', usage: '/theme [name]', summary: 'Show or switch the color theme' },
   { name: 'quit', usage: '/quit', summary: 'Exit pager' },
 ]
 
@@ -23,6 +26,12 @@ export const GROUP_SUBCOMMANDS: readonly CommandSpec[] = [
   { name: 'members', usage: '/group members', summary: 'List members' },
   { name: 'leave', usage: '/group leave', summary: 'Leave this group for good' },
 ]
+
+export const THEME_ARGUMENTS: readonly CommandSpec[] = THEMES.map((t) => ({
+  name: t.name,
+  usage: `/theme ${t.name}`,
+  summary: t.description,
+}))
 
 /** `line` starts with '/'. `rest` is the text after the first token, trimmed. */
 export function parseCommand(line: string): { name: string; args: string[]; rest: string } {

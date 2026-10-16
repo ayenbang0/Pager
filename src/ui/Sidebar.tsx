@@ -1,5 +1,6 @@
 import { Box, Text } from 'ink'
 import type { ConvView, PendingView } from '../engine.js'
+import { useTheme } from './theme.js'
 
 export const SIDEBAR_WIDTH = 26
 
@@ -12,6 +13,7 @@ interface RowProps {
 }
 
 function Row({ label, active, color, dim, badge }: RowProps) {
+  const theme = useTheme()
   return (
     <Box justifyContent="space-between">
       <Box flexShrink={1}>
@@ -19,7 +21,7 @@ function Row({ label, active, color, dim, badge }: RowProps) {
           {label}
         </Text>
       </Box>
-      {badge ? <Text color="yellow"> {badge}</Text> : null}
+      {badge ? <Text color={theme.badge}> {badge}</Text> : null}
     </Box>
   )
 }
@@ -31,6 +33,7 @@ interface Props {
 }
 
 export function Sidebar({ convs, pending, activeId }: Props) {
+  const theme = useTheme()
   const dms = convs.filter((c) => c.kind === 'dm')
   const groups = convs.filter((c) => c.kind === 'group')
   return (
@@ -39,7 +42,7 @@ export function Sidebar({ convs, pending, activeId }: Props) {
       flexDirection="column"
       paddingX={1}
       borderStyle="single"
-      borderDimColor
+      borderColor={theme.border}
       borderTop={false}
       borderBottom={false}
       borderLeft={false}
@@ -53,7 +56,7 @@ export function Sidebar({ convs, pending, activeId }: Props) {
               key={c.id}
               label={`${c.online ? '●' : '○'} ${c.title}`}
               active={activeId === c.id}
-              color={c.online ? 'green' : undefined}
+              color={c.online ? theme.online : undefined}
               dim={!c.online}
               badge={c.unread}
             />
@@ -72,7 +75,7 @@ export function Sidebar({ convs, pending, activeId }: Props) {
         <>
           <Text dimColor>PENDING</Text>
           {pending.map((p) => (
-            <Row key={p.n} label={`${p.n} ${p.label} (${p.type})`} active={false} color="yellow" />
+            <Row key={p.n} label={`${p.n} ${p.label} (${p.type})`} active={false} color={theme.badge} />
           ))}
         </>
       ) : null}

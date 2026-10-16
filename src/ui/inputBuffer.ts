@@ -76,3 +76,27 @@ export function splitAtCursor(buf: InputBuffer): { before: string; at: string; a
   const stop = nextBoundary(buf.text, buf.cursor)
   return { before: buf.text.slice(0, buf.cursor), at: buf.text.slice(buf.cursor, stop), after: buf.text.slice(stop) }
 }
+
+/** Cursor to the start of the previous word. */
+export function moveWordLeft(buf: InputBuffer): InputBuffer {
+  let i = buf.cursor
+  while (i > 0 && /\s/.test(buf.text[i - 1] ?? '')) i--
+  while (i > 0 && !/\s/.test(buf.text[i - 1] ?? '')) i--
+  return { ...buf, cursor: i }
+}
+
+/** Cursor to the end of the next word. */
+export function moveWordRight(buf: InputBuffer): InputBuffer {
+  let i = buf.cursor
+  while (i < buf.text.length && /\s/.test(buf.text[i] ?? '')) i++
+  while (i < buf.text.length && !/\s/.test(buf.text[i] ?? '')) i++
+  return { ...buf, cursor: i }
+}
+
+export function deleteToEnd(buf: InputBuffer): InputBuffer {
+  return { text: buf.text.slice(0, buf.cursor), cursor: buf.cursor }
+}
+
+export function deleteToStart(buf: InputBuffer): InputBuffer {
+  return { text: buf.text.slice(buf.cursor), cursor: 0 }
+}
