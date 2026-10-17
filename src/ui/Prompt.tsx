@@ -1,7 +1,8 @@
+import { ctrlH } from './ctrlH.js'
 import { useRef, useState } from 'react'
 import { Box, Text, useInput, usePaste } from 'ink'
-import type { CommandSpec } from '../commands.js'
-import { completion } from './palette.js'
+import { readClipboard } from '../clipboard.js'
+import type { MenuItem } from './palette.js'
 import {
   backspace,
   deleteForward,
@@ -16,10 +17,14 @@ import {
   moveRight,
   moveWordLeft,
   moveWordRight,
+  replaceRange,
   setText,
   splitAtCursor,
   type InputBuffer,
 } from './inputBuffer.js'
+import { promptBorders, type PromptChip } from './chrome.js'
+import { SegLine } from './SegLine.js'
+import { fitSegs, selectedBar } from './segs.js'
 import { useTheme } from './theme.js'
 
 interface Props {
@@ -27,7 +32,8 @@ interface Props {
   /** Functional update so keystrokes arriving before a re-render never overwrite each other. */
   onEdit(update: (prev: InputBuffer) => InputBuffer): void
   placeholder: string
-  matches: CommandSpec[]
+  /** Rows of the menu above the prompt: command completions, or emoji for a `:name` before the cursor. */
+  menu: MenuItem[]
   /** False while an overlay owns the keyboard. */
   active: boolean
   onSubmit(text: string): void
@@ -45,13 +51,19 @@ interface Props {
   /** What to append after the typed text, or ''. */
   suggest(text: string): string
   onToggleFolds(): void
+  /** Columns the whole box (menu, borders) may use. */
+  width: number
+  /** Mode label on the top border: who the message goes to, or that it is a command. */
+  chip: PromptChip
+  /** Contextual keys, on the right of the bottom border. */
+  hint: string
 }
 
 export function Prompt({
   value,
   onEdit,
   placeholder,
-  matches,
+  menu,
   active,
   onSubmit,
   onScroll,
@@ -64,13 +76,16 @@ export function Prompt({
   history,
   suggest,
   onToggleFolds,
+  width,
+  chip,
+  hint,
 }: Props) {
   const theme = useTheme()
   const [selected, setSelected] = useState(0)
   const historyPos = useRef<number | null>(null)
-  const selectedRow = Math.min(selected, Math.max(0, matches.length - 1))
-  // Dim completion learned from the user's own messages, offered only when the cursor is at the end and no command menu is open.
-  const ghost = matches.length === 0 && value.cursor === value.text.length ? suggest(value.text) : ''
+  const selectedRow = Math.min(selected, Math.max(0, menu.length - 1))
+  // Dim completion learned from the user's own messages, offered only when the cursor is at the end and no menu is open.
+  const ghost = menu.length === 0 && value.cursor === value.text.length ? suggest(value.text) : ''
 
   usePaste((text) => onEdit((b) => insert(b, text)), { isActive: active })
 
@@ -122,6 +137,8 @@ export function Prompt({
             return onEdit(deleteToEnd)
           case 't':
             return onToggleFolds()
+          case 'v':
+            return void readClipboard().then((text) => onEdit((b) => insert(b, text)))
           case 'g':
             return onHelp()
           default:
@@ -137,15 +154,15 @@ export function Prompt({
         return
       }
       if (key.tab) {
-        const spec = matches[selectedRow]
-        if (spec) onEdit(() => setText(completion(value.text, spec)))
+        const item = menu[selectedRow]
+        if (item) onEdit(() => replaceRange(value, item.from, item.to, item.insert))
         else if (ghost !== '') onEdit(() => setText(value.text + ghost))
         return
       }
       if (key.upArrow || key.downArrow) {
         const dir = key.upArrow ? -1 : 1
-        if (matches.length > 0) {
-          setSelected((selectedRow + dir + matches.length) % matches.length)
+        if (menu.length > 0) {
+          setSelected((selectedRow + dir + menu.length) % menu.length)
           return
         }
         const next = (historyPos.current ?? history.length) + dir
@@ -158,7 +175,7 @@ export function Prompt({
       if (key.rightArrow) return ghost === '' ? onEdit(moveRight) : onEdit(() => setText(value.text + ghost))
       if (key.home) return onEdit(home)
       if (key.end) return ghost === '' ? onEdit(end) : onEdit(() => setText(value.text + ghost))
-      if (key.backspace) return onEdit(backspace)
+      if (key.backspace) return ctrlH.pending ? undefined : onEdit(backspace)
       if (key.delete) return onEdit(deleteForward)
       if (key.escape) return onEdit(() => emptyInput)
       if (key.pageUp) return onScroll(1)
@@ -174,21 +191,26 @@ export function Prompt({
   const ghostHead = ghostChars[0]
   const ghostTail = ghostChars.slice(1).join('')
 
+  const borders = promptBorders(width, chip, hint, active, theme)
+  const stops = active ? theme.gradient : [theme.border]
+  const slash = value.text.startsWith('/')
+
   return (
-    <Box flexDirection="column">
-      {matches.map((m, i) => (
-        <Box key={m.usage} paddingX={1}>
-          <Text inverse={i === selectedRow}>{m.usage}</Text>
-          <Text dimColor>  {m.summary}</Text>
-        </Box>
-      ))}
-      <Box borderStyle="round" borderColor={theme.border} paddingX={1}>
+    <Box flexDirection="column" width={width}>
+      {menu.map((m, i) => {
+        const row = [{ text: ` ${m.label}`, color: theme.text, bold: true }, { text: m.summary === '' ? '' : `  ${m.summary}`, color: theme.dim }]
+        return <SegLine key={m.label} segs={i === selectedRow ? selectedBar(row, width, theme) : fitSegs(row, width)} />
+      })}
+      <SegLine segs={borders.top} />
+      <Box width={width} borderStyle="bold" borderTop={false} borderBottom={false} borderLeftColor={stops[0]} borderRightColor={stops.at(-1)} paddingX={1}>
         <Text wrap="truncate-start">
-          <Text color={theme.accent}>❯ </Text>
+          <Text color={slash ? theme.accent2 : theme.glow} bold>
+            ❯{' '}
+          </Text>
           {value.text === '' ? (
             <>
               <Text inverse={active}> </Text>
-              <Text dimColor>{placeholder}</Text>
+              <Text color={theme.dim}>{placeholder}</Text>
             </>
           ) : (
             <>
@@ -197,11 +219,12 @@ export function Prompt({
                 {at !== '' ? at : (ghostHead ?? ' ')}
               </Text>
               {after}
-              <Text dimColor>{ghostTail}</Text>
+              <Text color={theme.dim}>{ghostTail}</Text>
             </>
           )}
         </Text>
       </Box>
+      <SegLine segs={borders.bottom} />
     </Box>
   )
 }

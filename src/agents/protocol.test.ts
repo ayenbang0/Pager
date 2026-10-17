@@ -5,130 +5,89 @@ import {
   chainTask,
   CONTEXT_MESSAGE_CHARS,
   CONTEXT_MESSAGES,
-  EARLIER_MARKER,
-  MAX_CHAIN,
-  MAX_NOTES_PER_RUN,
-  MEMORY_MARKER,
-  NOTE_MAX_CHARS,
-  parseAsks,
-  parseChain,
-  parseDocEdits,
   DOCS_MARKER,
-  parseRemember,
+  docCap,
+  DOCS_MAX_CHARS,
+  formatMessages,
+  MAX_CHAIN,
+  MEMORY_MARKER,
+  MESSAGES_MARKER,
+  parseChain,
   PROMPT_MAX_CHARS,
-  REPLIES_MARKER,
-  REQUEST_MAX_CHARS,
+  ROOM_MARKER,
   splitArgs,
-  TASK_MARKER,
-  withReplies,
 } from './protocol.js'
 
-test('parseAsks extracts several blocks and keeps surrounding prose', () => {
-  const { clean, asks } = parseAsks('Done.\n@@ask omp\nadd tests\n@@end\nmore\n@@ask Claude\nreview\nit\n@@end\nbye')
-  assert.deepEqual(asks, [
-    { agent: 'omp', request: 'add tests' },
-    { agent: 'claude', request: 'review\nit' },
+const base = { agent: 'omp', branch: 'pager/omp', board: '--- BOARD ---', memory: '', room: [], messages: 'go', tools: true }
+
+test('the prompt names the agent, its branch, and ends with the new messages', () => {
+  const p = buildPrompt({ ...base, messages: formatMessages([{ from: 'you', kind: 'user', text: 'go' }]) })
+  assert.match(p, /You are "omp"/)
+  assert.match(p, /branch pager\/omp/)
+  assert.ok(p.endsWith(`${MESSAGES_MARKER}\n[you user] go`))
+})
+
+test('messages show who spoke, of what kind, and who else heard it', () => {
+  const text = formatMessages([
+    { from: 'you', kind: 'user', text: 'split the work', also: ['claude'] },
+    { from: 'claude', kind: 'peer', text: 'taking the css' },
   ])
-  assert.equal(clean, 'Done.\n\nmore\n\nbye')
+  assert.equal(text, '[you user] (also sent to: claude) split the work\n[claude peer] taking the css')
 })
 
-test('parseAsks handles CRLF input', () => {
-  const { asks } = parseAsks('x\r\n@@ask omp\r\nhello\r\n@@end\r\n')
-  assert.deepEqual(asks, [{ agent: 'omp', request: 'hello' }])
+test('the board goes ahead of memory, documents and the room', () => {
+  const p = buildPrompt({ ...base, board: '--- BOARD ---\nGOAL: ship', memory: '- note', docs: [{ name: 'a.md', text: 'x' }], room: [{ author: 'you', text: 'hi' }] })
+  const at = (marker: string): number => p.indexOf(marker)
+  assert.ok(at('--- BOARD ---') > 0 && at('--- BOARD ---') < at(MEMORY_MARKER))
+  assert.ok(at(MEMORY_MARKER) < at(DOCS_MARKER) && at(DOCS_MARKER) < at(ROOM_MARKER) && at(ROOM_MARKER) < at(MESSAGES_MARKER))
 })
 
-test('an unterminated block stays in the text and yields no ask', () => {
-  const text = 'a\n@@ask omp\nnever closed'
-  assert.deepEqual(parseAsks(text), { clean: text, asks: [] })
+test('without tools the prompt says so instead of promising them', () => {
+  assert.match(buildPrompt({ ...base, tools: false }), /TOOLS: unavailable this turn/)
+  assert.doesNotMatch(buildPrompt({ ...base, tools: false }), /send_message/)
+  assert.match(buildPrompt(base), /send_message/)
 })
 
-test('only the first three asks are returned but all blocks are stripped', () => {
-  const blocks = ['a', 'b', 'c', 'd'].map((n) => `@@ask omp\n${n}\n@@end`).join('\n')
-  const { clean, asks } = parseAsks(`${blocks}\ntail`)
-  assert.deepEqual(asks.map((a) => a.request), ['a', 'b', 'c'])
-  assert.equal(clean, 'tail')
-})
-
-test('over-long requests are cut and empty ones ignored', () => {
-  const { asks } = parseAsks(`@@ask omp\n${'x'.repeat(REQUEST_MAX_CHARS + 50)}\n@@end\n@@ask omp\n  \n@@end`)
-  assert.equal(asks.length, 1)
-  assert.equal(asks[0]?.request.length, REQUEST_MAX_CHARS)
-})
-
-test('buildPrompt lists peers without the agent itself', () => {
-  const p = buildPrompt({ agent: 'omp', branch: 'pager/omp-1', peers: ['omp', 'claude'], memory: '', room: [], task: 'go' })
-  assert.match(p, /one of several coding agents \(claude\)/)
-  assert.match(p, /branch pager\/omp-1/)
-  assert.ok(p.endsWith(`${TASK_MARKER}\ngo`))
-})
-
-test('buildPrompt drops old room messages before touching the task', () => {
+test('old room messages are dropped before the messages are touched', () => {
   const room = Array.from({ length: CONTEXT_MESSAGES }, (_, i) => ({ author: 'you', text: `${i}`.padEnd(CONTEXT_MESSAGE_CHARS, 'x') }))
-  const task = 't'.repeat(PROMPT_MAX_CHARS - 10_000)
-  const p = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '', room, task })
+  const messages = 't'.repeat(PROMPT_MAX_CHARS - 10_000)
+  const p = buildPrompt({ ...base, room, messages })
   assert.ok(p.length <= PROMPT_MAX_CHARS)
-  assert.ok(p.endsWith(task))
+  assert.ok(p.endsWith(messages))
 })
 
-test('buildPrompt truncates a huge task as a last resort', () => {
-  const p = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '', room: [], task: 't'.repeat(PROMPT_MAX_CHARS * 2) })
+test('a huge message is truncated as a last resort', () => {
+  const p = buildPrompt({ ...base, messages: 't'.repeat(PROMPT_MAX_CHARS * 2) })
   assert.ok(p.length <= PROMPT_MAX_CHARS)
   assert.ok(p.endsWith('[truncated]'))
 })
 
-test('withReplies appends a marked replies section', () => {
-  assert.equal(
-    withReplies('task', [
-      { run: 'claude-1', text: 'ok' },
-      { run: 'omp-2', text: 'fine' },
-    ]),
-    `task\n\n${REPLIES_MARKER}\n[claude-1] ok\n\n[omp-2] fine`,
-  )
-})
-
-test('withReplies carries the agent\'s own earlier reply so a resumed run remembers it', () => {
-  const out = withReplies('task', [{ run: 'omp-1', text: 'ok' }], 'I did X')
-  assert.ok(out.endsWith(`${EARLIER_MARKER}\nI did X`))
-})
-
-test('ask blocks may be indented', () => {
-  assert.deepEqual(parseAsks('done\n  @@ask omp\n  review it\n  @@end').asks, [{ agent: 'omp', request: 'review it' }])
-})
-
-test('splitArgs groups quoted words and keeps backslashes', () => {
-  assert.deepEqual(splitArgs('mcp add "my server" --path C:\\x\\y \'a b\' ""'), ['mcp', 'add', 'my server', '--path', 'C:\\x\\y', 'a b', ''])
-  assert.deepEqual(splitArgs('   '), [])
-})
-
-test('parseRemember extracts one-line notes, tolerates indentation and strips every block', () => {
-  const { clean, notes } = parseRemember('Done.\n@@remember\nuse tabs\nfor indent\n@@end\n  @@remember\n  run npm test\n  @@end\nbye')
-  assert.deepEqual(notes, ['use tabs for indent', 'run npm test'])
-  assert.equal(clean, 'Done.\n\n\nbye')
-})
-
-test('parseRemember caps note length and count and drops empty notes', () => {
-  const long = parseRemember(`@@remember\n${'x'.repeat(NOTE_MAX_CHARS + 50)}\n@@end`)
-  assert.equal(long.notes[0]?.length, NOTE_MAX_CHARS)
-  const many = Array.from({ length: MAX_NOTES_PER_RUN + 2 }, (_, i) => `@@remember\nn${i}\n@@end`).join('\n')
-  assert.equal(parseRemember(many).notes.length, MAX_NOTES_PER_RUN)
-  assert.deepEqual(parseRemember('@@remember\n  \n@@end').notes, [])
-})
-
-test('buildPrompt places MEMORY before ROOM and still honors the size cap', () => {
-  const p = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '- 2024-01-01 (you) use tabs', room: [{ author: 'you', text: 'hi' }], task: 'go' })
-  assert.ok(p.indexOf(MEMORY_MARKER) > 0 && p.indexOf(MEMORY_MARKER) < p.indexOf('--- ROOM ---'))
+test('a MEMORY section appears only for non-blank memory and still honors the size cap', () => {
+  const p = buildPrompt({ ...base, memory: '- 2024-01-01 (you) use tabs', room: [{ author: 'you', text: 'hi' }] })
+  assert.ok(p.indexOf(MEMORY_MARKER) > 0 && p.indexOf(MEMORY_MARKER) < p.indexOf(ROOM_MARKER))
   assert.match(p, /use tabs/)
-  const big = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: 'm'.repeat(50_000), room: [], task: 't'.repeat(PROMPT_MAX_CHARS) })
-  assert.ok(big.length <= PROMPT_MAX_CHARS)
-  assert.doesNotMatch(buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '  ', room: [], task: 'go' }), /--- MEMORY ---/)
+  assert.ok(buildPrompt({ ...base, memory: 'm'.repeat(50_000), messages: 't'.repeat(PROMPT_MAX_CHARS) }).length <= PROMPT_MAX_CHARS)
+  assert.doesNotMatch(buildPrompt({ ...base, memory: '  ' }), /--- MEMORY ---/)
 })
 
-test('parseChain accepts 2..MAX_CHAIN known agents, case-insensitively', () => {
-  assert.deepEqual(parseChain('omp>claude'), ['omp', 'claude'])
-  assert.deepEqual(parseChain('OMP>Claude>hermes'), ['omp', 'claude', 'hermes'])
-  assert.equal(parseChain('omp'), undefined)
-  assert.equal(parseChain('omp>nope'), undefined)
-  assert.equal(parseChain(Array.from({ length: MAX_CHAIN + 1 }, () => 'omp').join('>')), undefined)
+test('a DOCS section appears only when documents exist, and its size is capped', () => {
+  assert.equal(buildPrompt(base).includes(DOCS_MARKER), false)
+  const some = buildPrompt({ ...base, docs: [{ name: 'plan.md', text: '# Plan' }] })
+  assert.ok(some.includes('## plan.md\n# Plan'))
+  const big = buildPrompt({ ...base, docs: [{ name: 'a.md', text: 'x'.repeat(50_000) }] })
+  assert.ok(big.includes('[truncated'))
+  assert.ok(big.length < 20_000)
+  assert.equal(docCap(2), DOCS_MAX_CHARS / 2)
+})
+
+test('parseChain accepts 2..MAX_CHAIN ready agents, case-insensitively', () => {
+  const names = ['omp', 'claude', 'hermes', 'ui']
+  assert.deepEqual(parseChain('omp>claude', names), ['omp', 'claude'])
+  assert.deepEqual(parseChain('OMP>Claude>hermes', names), ['omp', 'claude', 'hermes'])
+  assert.deepEqual(parseChain('omp>ui', names), ['omp', 'ui'])
+  assert.equal(parseChain('omp', names), undefined)
+  assert.equal(parseChain('omp>nope', names), undefined)
+  assert.equal(parseChain(Array.from({ length: MAX_CHAIN + 1 }, () => 'omp').join('>'), names), undefined)
 })
 
 test('chainTask names the previous run and carries the original task and its reply', () => {
@@ -138,26 +97,7 @@ test('chainTask names the previous run and carries the original task and its rep
   assert.match(t, /omp-1 replied:\ndid x/)
 })
 
-test('@@doc and @@docappend blocks become edits and leave the reply clean; extra blocks are dropped', () => {
-  const reply = ['Done.', '@@doc plan.md', '# Plan', '', 'step', '@@end', 'More text', '@@docappend notes.md', 'one more line', '@@end'].join('\n')
-  const { clean, edits } = parseDocEdits(reply)
-  assert.equal(clean, 'Done.\n\nMore text')
-  assert.deepEqual(edits, [
-    { name: 'plan.md', append: false, text: '# Plan\n\nstep', cut: false },
-    { name: 'notes.md', append: true, text: 'one more line', cut: false },
-  ])
-  const many = Array.from({ length: 9 }, (_, i) => `@@doc d${i}.md\nx\n@@end`).join('\n')
-  assert.equal(parseDocEdits(many).edits.length, 5)
-  assert.equal(parseDocEdits(many).clean, '')
-})
-
-test('buildPrompt includes a DOCS section only when documents exist, and caps its size', () => {
-  const none = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '', room: [], task: 't' })
-  assert.equal(none.includes(DOCS_MARKER), false)
-  const some = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '', docs: [{ name: 'plan.md', text: '# Plan' }], room: [], task: 't' })
-  assert.ok(some.indexOf(DOCS_MARKER) > 0 && some.indexOf(DOCS_MARKER) < some.indexOf('--- ROOM ---'))
-  assert.ok(some.includes('## plan.md\n# Plan'))
-  const big = buildPrompt({ agent: 'omp', branch: 'b', peers: [], memory: '', docs: [{ name: 'a.md', text: 'x'.repeat(50_000) }], room: [], task: 't' })
-  assert.ok(big.includes('[truncated'))
-  assert.ok(big.length < 20_000)
+test('splitArgs groups quoted words and keeps backslashes', () => {
+  assert.deepEqual(splitArgs('mcp add "my server" --path C:\\x\\y \'a b\' ""'), ['mcp', 'add', 'my server', '--path', 'C:\\x\\y', 'a b', ''])
+  assert.deepEqual(splitArgs('   '), [])
 })

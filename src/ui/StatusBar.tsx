@@ -1,45 +1,24 @@
-import { Box, Text } from 'ink'
-import { Spinner } from './Spinner.js'
+import { useEffect, useState } from 'react'
+import { Box } from 'ink'
+import { SpinnerLine } from './SpinnerLine.js'
+import { formatClock, statusSegments, type StatusInput } from './statusSegments.js'
 import { useTheme } from './theme.js'
 
-/** Below this width the hint is dropped so the counters never wrap. */
-const HINT_MIN_COLUMNS = 80
+const CLOCK_REFRESH_MS = 20_000
 
-interface Props {
-  columns: number
-  listening: boolean
-  online: number
-  unread: number
-  pending: number
-  agentsRunning: number
-  update: string | null
-  hint: string
-}
+type Props = Omit<StatusInput, 'clock'>
 
-export function StatusBar({ columns, listening, online, unread, pending, agentsRunning, update, hint }: Props) {
+/** The bottom row: colored pills for mode, connection, peers and agents, and the clock, painted across the full width. */
+export function StatusBar(props: Props) {
   const theme = useTheme()
+  const [clock, setClock] = useState(() => formatClock(new Date()))
+  useEffect(() => {
+    const timer = setInterval(() => setClock(formatClock(new Date())), CLOCK_REFRESH_MS)
+    return () => clearInterval(timer)
+  }, [])
   return (
-    <Box paddingX={1} justifyContent="space-between">
-      <Text wrap="truncate-end">
-        {listening ? (
-          <Text color={theme.online}>● connected</Text>
-        ) : (
-          <Text color={theme.warning}>
-            <Spinner color={theme.warning} /> connecting…
-          </Text>
-        )}
-        <Text dimColor> · {online} online</Text>
-        {unread > 0 ? <Text color={theme.badge}> · {unread} unread</Text> : null}
-        {pending > 0 ? <Text color={theme.badge}> · {pending} pending</Text> : null}
-        {agentsRunning > 0 ? (
-          <Text color={theme.badge}>
-            {' · '}
-            <Spinner color={theme.badge} /> {agentsRunning} agent{agentsRunning === 1 ? '' : 's'}
-          </Text>
-        ) : null}
-        {update !== null ? <Text color={theme.badge}> · ↑ {update} (pager update)</Text> : null}
-      </Text>
-      {columns >= HINT_MIN_COLUMNS ? <Text dimColor>{hint}</Text> : null}
+    <Box width={props.columns} height={1}>
+      <SpinnerLine segs={statusSegments({ ...props, clock }, theme)} />
     </Box>
   )
 }

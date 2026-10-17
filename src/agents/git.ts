@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 
@@ -96,4 +98,38 @@ export async function mergeBranch(
     await git(root, ['merge', '--abort']).catch(() => undefined)
     return { ok: false, conflicts, error: (err as Error).message }
   }
+}
+
+/** Creates the agent's worktree on its own branch, or re-attaches the branch when only the directory is gone. */
+export async function ensureWorktree(root: string, dir: string, branch: string, from: string): Promise<'created' | 'existing'> {
+  if (fs.existsSync(path.join(dir, '.git'))) return 'existing'
+  fs.mkdirSync(path.dirname(dir), { recursive: true })
+  await git(root, ['worktree', 'prune']).catch(() => undefined)
+  try {
+    await git(root, ['worktree', 'add', '-q', '-b', branch, dir, from])
+  } catch {
+    await git(root, ['worktree', 'add', '-q', dir, branch])
+  }
+  return 'created'
+}
+
+/** Merges `ref` (a sha or branch) into the worktree's branch. A conflict is aborted and reported, leaving the worktree as it was. */
+export async function syncWorktree(dir: string, ref: string): Promise<'ok' | 'conflict'> {
+  try {
+    await git(dir, ['-c', 'user.name=pager-agent', '-c', 'user.email=agents@pager.invalid', '-c', 'commit.gpgsign=false', 'merge', '--no-edit', ref])
+    return 'ok'
+  } catch {
+    await git(dir, ['merge', '--abort']).catch(() => undefined)
+    return 'conflict'
+  }
+}
+
+export async function currentSha(dir: string): Promise<string> {
+  return (await git(dir, ['rev-parse', 'HEAD'])).trim()
+}
+
+/** `git diff --stat` and the full diff between `from` and the worktree's HEAD, for review requests. */
+export async function diffSince(dir: string, from: string): Promise<{ stat: string; diff: string }> {
+  const [stat, diff] = await Promise.all([git(dir, ['diff', '--stat', `${from}..HEAD`]), git(dir, ['diff', `${from}..HEAD`])])
+  return { stat: stat.trim(), diff }
 }

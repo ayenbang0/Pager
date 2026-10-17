@@ -57,7 +57,7 @@ let engine: Engine
 try {
   // Dynamic for the same reason as above: keep native addons out of `pager update` / --help / --version.
   const { Engine } = await import('./engine.js')
-  engine = await Engine.open({ dir, bootstrap: bootstrap && bootstrap.length > 0 ? bootstrap : undefined })
+  engine = await Engine.open({ dir, bootstrap: bootstrap && bootstrap.length > 0 ? bootstrap : undefined, checkAgents: true })
 } catch (err) {
   release()
   process.stderr.write(`pager failed to start: ${err instanceof Error ? err.message : String(err)}\n`)

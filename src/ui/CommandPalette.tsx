@@ -1,7 +1,12 @@
 import { useState } from 'react'
-import { Box, Text, useInput, usePaste } from 'ink'
+import { Box, useInput, usePaste } from 'ink'
 import { fuzzyFilter } from './fuzzy.js'
 import { backspace, deleteWordBack, emptyInput, insert, moveLeft, moveRight, splitAtCursor, type InputBuffer } from './inputBuffer.js'
+import { OverlayCard } from './OverlayCard.js'
+import { CARD_CHROME_ROWS, fieldSegs, footerSegs, listWindow, moreSegs, type KeyHint } from './overlayRows.js'
+import { matchCount, noMatchSegs, paletteRow } from './paletteRows.js'
+import { SegLine } from './SegLine.js'
+import { segsWidth, type Seg } from './segs.js'
 import { useTheme } from './theme.js'
 
 export interface PaletteItem {
@@ -12,12 +17,18 @@ export interface PaletteItem {
 
 interface Props {
   items: readonly PaletteItem[]
-  /** Rows available, including the title and query lines. */
+  /** Rows available, including the card border and title. */
   height: number
   onClose(): void
 }
 
-const CHROME_ROWS = 3 // title + query + footer
+/** Card chrome plus the query row and the footer. */
+const CHROME_ROWS = CARD_CHROME_ROWS + 2
+const HINTS: readonly KeyHint[] = [
+  ['↑↓', 'move'],
+  ['Enter', 'run'],
+  ['Esc', 'close'],
+]
 
 /** Replaces the message pane. Enter runs the selection and closes; Esc closes. */
 export function CommandPalette({ items, height, onClose }: Props) {
@@ -27,8 +38,8 @@ export function CommandPalette({ items, height, onClose }: Props) {
   const matches = fuzzyFilter(items, query.text)
   const row = Math.min(selected, Math.max(0, matches.length - 1))
   const listRows = Math.max(1, height - CHROME_ROWS)
-  const start = Math.max(0, Math.min(row - Math.floor(listRows / 2), matches.length - listRows))
-  const shown = matches.slice(start, start + listRows)
+  const { start, end, above, below } = listWindow(matches.length, row, listRows)
+  const shown = matches.slice(start, end)
 
   const edit = (update: (prev: InputBuffer) => InputBuffer): void => {
     setQuery(update)
@@ -56,32 +67,26 @@ export function CommandPalette({ items, height, onClose }: Props) {
     if (input !== '' && !key.ctrl && !key.meta) edit((b) => insert(b, input))
   })
 
-  const { before, at, after } = splitAtCursor(query)
+  const text = splitAtCursor(query)
   return (
-    <Box height={height} flexDirection="column" overflow="hidden" paddingX={1}>
-      <Text bold color={theme.accent}>
-        Command palette
-      </Text>
-      <Text wrap="truncate-start">
-        <Text color={theme.accent}>❯ </Text>
-        {before}
-        <Text inverse>{at === '' ? ' ' : at}</Text>
-        {after}
-      </Text>
-      <Box flexDirection="column" flexGrow={1}>
-        {matches.length === 0 ? <Text dimColor>No matches</Text> : null}
-        {shown.map((item, i) => (
-          <Box key={`${start + i}:${item.label}`} justifyContent="space-between">
-            <Box flexShrink={1}>
-              <Text wrap="truncate-end" inverse={start + i === row}>
-                {item.label}
-              </Text>
+    <OverlayCard title="COMMAND PALETTE" height={height}>
+      {(inner) => {
+        const count = matchCount(matches.length, items.length, theme)
+        const prefix: Seg[] = [{ text: '❯ ', color: theme.glow, bg: theme.surface, bold: true }]
+        const field = fieldSegs(prefix, text, 'type to filter…', true, Math.max(4, inner - segsWidth(count) - 1), theme)
+        return (
+          <>
+            <SegLine segs={[...field, { text: ' ' }, ...count]} />
+            <Box flexDirection="column" flexGrow={1} overflow="hidden">
+              {matches.length === 0 ? <SegLine segs={noMatchSegs(theme)} /> : null}
+              {shown.map((item, i) => (
+                <SegLine key={`${start + i}:${item.label}`} segs={paletteRow(item, query.text, start + i === row, inner, theme)} />
+              ))}
             </Box>
-            {item.hint ? <Text dimColor> {item.hint}</Text> : null}
-          </Box>
-        ))}
-      </Box>
-      <Text dimColor>Up/Down select · Enter run · Esc close</Text>
-    </Box>
+            <SegLine segs={footerSegs(HINTS, moreSegs(above, below, theme), inner, theme)} />
+          </>
+        )
+      }}
+    </OverlayCard>
   )
 }

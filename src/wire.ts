@@ -22,7 +22,7 @@ const wireEvent = z.object({
 })
 
 const frameSchema = z.discriminatedUnion('t', [
-  z.object({ t: z.literal('hello'), v: z.literal(1), name }),
+  z.object({ t: z.literal('hello'), v: z.literal(1), name, caps: z.array(z.string().max(16)).max(8).optional() }),
   z.object({ t: z.literal('contact-request'), note: note.default('') }),
   z.object({ t: z.literal('contact-accept') }),
   z.object({ t: z.literal('group-invite'), conv: convId, title, creator: pkHex }),
@@ -37,6 +37,8 @@ const frameSchema = z.discriminatedUnion('t', [
   }),
   z.object({ t: z.literal('events'), conv: convId, events: z.array(wireEvent).max(100) }),
   z.object({ t: z.literal('ack'), conv: convId, author: pkHex, seq: z.number().int().min(0) }),
+  // The reader has seen `author`'s messages up to `seq` in `conv`. Only sent to peers whose hello lists the 'read' capability.
+  z.object({ t: z.literal('read'), conv: convId, author: pkHex, seq: z.number().int().min(0) }),
 ])
 
 export type Frame = z.infer<typeof frameSchema>

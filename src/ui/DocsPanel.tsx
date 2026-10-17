@@ -1,9 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
-import { Box, Text, useInput, usePaste } from 'ink'
-import { copyText, readClipboard } from '../docs/clipboard.js'
+import { Box, useInput, usePaste } from 'ink'
+import { copyText, readClipboard } from '../clipboard.js'
 import { clampCursor, handleKey, initialVim, selection, type Edit, type KeyInput, type VimState } from '../docs/vim.js'
-import { diffText, indexAtRow, lineKinds, rowOf, rowPieces, shiftIndex, wrapRows, type LineKind } from '../docs/view.js'
+import { diffText, indexAtRow, lineKinds, rowOf, shiftIndex, wrapRows } from '../docs/view.js'
 import type { Engine } from '../engine.js'
+import type { Theme } from '../themes.js'
+import { commandRow, docRowSegs, editorRowSegs, emptyListRows, frameBottom, frameTop, listFooter, listSummary, modePill, statusRow, syncPill, type DocRowInput, type Peer } from './docsChrome.js'
+import { BandTitle } from './kit.js'
+import { colorFor } from './look.js'
+import { SegLine } from './SegLine.js'
 import { useTheme } from './theme.js'
 
 /** What the app forwards to the panel: the mouse is owned by the app, not by components. */
@@ -38,19 +43,19 @@ interface Props extends DocsChords {
 /** Lines scrolled per wheel notch. */
 const WHEEL_ROWS = 3
 
-const ago = (ms: number, now: number): string => {
-  if (ms === 0) return 'new'
-  const s = Math.max(0, Math.floor((now - ms) / 1000))
-  if (s < 60) return 'just now'
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`
-  if (s < 86_400) return `${Math.floor(s / 3600)}h ago`
-  return `${Math.floor(s / 86_400)}d ago`
-}
+/** How often the editor checks whether its edits have gone out (the store publishes them from a timer and emits nothing). */
+const SYNC_POLL_MS = 400
 
 /** The Docs tab: a list of shared documents, or the vim-style editor for the open one. */
 export function DocsPanel(props: Props) {
   const id = props.engine.openedDoc()
   return id === null ? <DocList {...props} /> : <DocEditor key={id} {...props} docId={id} />
+}
+
+/** Collaborators editing a document right now, each with the color their messages use. */
+function peersOf(engine: Engine, id: string, theme: Theme): Peer[] {
+  const keys = engine.docs.activeEditors(id)
+  return engine.docEditors(id).map((name, i) => ({ name, color: colorFor(theme, keys[i] ?? '') }))
 }
 
 /** The document list. Selection and keys belong to the app (the prompt stays active below the list so slash commands keep working). */
@@ -69,51 +74,24 @@ function DocList({ engine, width, height, top, ctl, selected, onMove }: Props) {
     wheel: (dir) => onMove(-dir),
   }
 
+  const now = Date.now()
+  const inputs = docs.map((d): DocRowInput => ({ name: d.name, where: d.where, length: d.length, lastEdit: d.lastEdit, peers: peersOf(engine, d.id, theme), unsent: engine.docs.unsent(d.id) }))
+  const summary = { docs: docs.length, live: inputs.filter((d) => d.peers.length > 0).length, unsent: inputs.filter((d) => d.unsent).length }
+
   return (
-    <Box height={height} width={width} flexDirection="column" overflow="hidden" paddingX={1}>
-      <Box flexShrink={0}>
-        <Text bold color={theme.accent}>
-          Documents
-        </Text>
-        <Text dimColor> · shared Markdown, edited live with everyone in the chat</Text>
-      </Box>
-      <Text> </Text>
-      {docs.length === 0 ? (
-        <Text dimColor>No documents yet. /doc new &lt;name&gt; starts a private one; /doc new &lt;name&gt; in &lt;chat&gt; shares it.</Text>
-      ) : (
-        docs.slice(first, first + body).map((d, i) => {
-          const current = first + i === at
-          return (
-            <Box key={d.id}>
-              <Text wrap="truncate-end" inverse={current} color={current ? undefined : theme.accent}>
-                {current ? '▸ ' : '  '}
-                {d.name}
-              </Text>
-              <Text dimColor wrap="truncate-end">
-                {'  '}
-                {d.where} · {d.length} chars · {ago(d.lastEdit, Date.now())}
-              </Text>
-            </Box>
-          )
-        })
-      )}
+    <Box height={height} width={width} flexDirection="column" overflow="hidden">
+      <BandTitle title="DOCUMENTS" width={width} />
+      <SegLine segs={listSummary(summary, width, theme)} />
+      {docs.length === 0
+        ? emptyListRows(width, theme).map((segs, i) => <SegLine key={i} segs={segs} />)
+        : inputs.slice(first, first + body).map((input, i) => <SegLine key={docs[first + i]?.id ?? i} segs={docRowSegs(input, first + i === at, width, now, theme)} />)}
       <Box flexGrow={1} />
-      <Text dimColor wrap="truncate-end">
-        PgUp/PgDn or click to pick · Enter on an empty prompt opens · /doc rm name deletes
-      </Text>
+      <SegLine segs={listFooter(width, theme)} />
     </Box>
   )
 }
 
-const MODE_LABEL: Record<VimState['mode'], string> = {
-  normal: 'NORMAL',
-  insert: 'INSERT',
-  visual: 'VISUAL',
-  vline: 'V-LINE',
-  command: 'COMMAND',
-  search: 'SEARCH',
-}
-
+/** The vim-style editor in an accent frame: mode pill and sync state on the top border, the text with line numbers, a status row of pills under it. */
 function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPalette, onSidebar, onSwitch, onHelp, onQuit }: Props & { docId: string }) {
   const theme = useTheme()
   const docs = engine.docs
@@ -123,8 +101,17 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
   const vimRef = useRef(vim)
   const [scroll, setScroll] = useState(0)
   const lastText = useRef(text)
+  const unsent = docs.unsent(docId)
+  // Publishing happens on a timer inside the store, so nothing re-renders when it finishes: look again shortly.
+  const [, setPolled] = useState(unsent)
+  useEffect(() => {
+    const timer = setInterval(() => setPolled(docs.unsent(docId)), SYNC_POLL_MS)
+    return () => clearInterval(timer)
+  }, [docs, docId])
+  const peers = peersOf(engine, docId, theme)
 
-  const body = Math.max(1, height - 1)
+  // Top border, bottom border and the status row take three of the rows.
+  const body = Math.max(1, height - 3)
   const lines = text.split('\n').length
   const gutter = Math.max(3, String(lines).length + 1)
   const textWidth = Math.max(8, width - 2 - gutter)
@@ -224,8 +211,9 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
     click: (x, y) => {
       const v = vimRef.current
       if (v.mode === 'command' || v.mode === 'search') return
-      const row = scroll + (y - top)
-      if (y - top < 0 || y - top >= body || row >= rows.length) return
+      const at = y - top - 1
+      const row = scroll + at
+      if (at < 0 || at >= body || row >= rows.length) return
       const index = indexAtRow(rows, row, x - (left + 1 + gutter))
       commit(clampCursor({ ...v, cursor: index, goal: -1, pending: '', message: '' }, text), text, false)
     },
@@ -305,66 +293,26 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
   const cursorLine = rows[cursorRow]?.line ?? 0
   const lineStart = rows.find((r) => r.line === cursorLine)?.start ?? 0
   const visible = rows.slice(scroll, scroll + body)
-  const editors = engine.docEditors(docId)
-  const modeColor = vim.mode === 'insert' ? theme.success : vim.mode === 'visual' || vim.mode === 'vline' ? theme.warning : theme.accent
-  const style = (kind: LineKind | undefined): { bold?: boolean; dim?: boolean; italic?: boolean; color?: string } =>
-    kind === 'heading' ? { bold: true, color: theme.accent } : kind === 'code' ? { color: theme.info } : kind === 'quote' ? { dim: true, italic: true } : kind === 'rule' ? { dim: true } : {}
+  const first = theme.gradient[0] ?? theme.accent
+  const last = theme.gradient.at(-1) ?? theme.accent
+  const typing = vim.mode === 'command' || vim.mode === 'search'
 
   return (
     <Box height={height} width={width} flexDirection="column" overflow="hidden">
-      <Box height={body} flexDirection="column" overflow="hidden" paddingX={1}>
-        {visible.map((row) => {
-          const s = style(kinds[row.line])
-          const pieces = rowPieces(text, row, vim.cursor, sel)
-          return (
-            <Text key={row.start} wrap="truncate-end">
-              <Text color={row.line === cursorLine ? theme.accent : undefined} dimColor={row.line !== cursorLine}>
-                {row.first ? `${row.line + 1}`.padStart(gutter - 1) + ' ' : ' '.repeat(gutter)}
-              </Text>
-              {pieces.length === 0 ? <Text> </Text> : null}
-              {pieces.map((p, i) => (
-                <Text
-                  key={i}
-                  bold={s.bold || p.cursor}
-                  dimColor={s.dim}
-                  italic={s.italic}
-                  color={s.color}
-                  inverse={p.cursor}
-                  backgroundColor={p.selected && !p.cursor ? theme.border : undefined}
-                >
-                  {p.text}
-                </Text>
-              ))}
-            </Text>
-          )
-        })}
+      <SegLine segs={frameTop(width, modePill(vim.mode, theme), syncPill(unsent, theme), theme)} />
+      <Box height={body} width={width} flexDirection="column" overflow="hidden" borderStyle="round" borderTop={false} borderBottom={false} borderLeftColor={first} borderRightColor={last}>
+        {visible.map((row) => (
+          <SegLine key={row.start} segs={editorRowSegs(text, row, { gutter, onCursorLine: row.line === cursorLine, kind: kinds[row.line], cursor: vim.cursor, sel }, theme)} />
+        ))}
       </Box>
-      <Box paddingX={1} justifyContent="space-between">
-        {vim.mode === 'command' || vim.mode === 'search' ? (
-          <Text wrap="truncate-end">
-            {vim.mode === 'command' ? ':' : '/'}
-            {vim.cmdline}
-            <Text inverse> </Text>
-          </Text>
-        ) : (
-          <>
-            <Text wrap="truncate-end">
-              <Text bold inverse color={modeColor}>
-                {` ${MODE_LABEL[vim.mode]} `}
-              </Text>
-              <Text> {info?.name ?? 'document'}</Text>
-              <Text dimColor>
-                {' '}
-                {cursorLine + 1}:{vim.cursor - lineStart + 1}
-              </Text>
-              {editors.length > 0 ? <Text color={theme.online}> ● {editors.join(', ')} editing</Text> : null}
-            </Text>
-            <Text dimColor wrap="truncate-end">
-              {vim.message !== '' ? vim.message : vim.pending}
-            </Text>
-          </>
-        )}
-      </Box>
+      <SegLine segs={frameBottom(width, theme)} />
+      <SegLine
+        segs={
+          typing
+            ? commandRow(vim.mode === 'command' ? ':' : '/', vim.cmdline, width, theme)
+            : statusRow({ line: cursorLine + 1, col: vim.cursor - lineStart + 1, name: info?.name ?? 'document', peers, message: vim.message, pending: vim.pending }, width, theme)
+        }
+      />
     </Box>
   )
 }

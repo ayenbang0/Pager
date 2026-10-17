@@ -1,32 +1,92 @@
+import { COMMANDS } from '../commands.js'
+
 export interface KeySection {
   title: string
   rows: readonly (readonly [keys: string, action: string])[]
+  /** Set on an agent's own section: the help panel draws its heading in that agent's color. */
+  agent?: string
 }
 
-/** Shown by the help panel (Ctrl+G). Keep in sync with Prompt.tsx and App.tsx. */
+/** Shown by the help panel (Ctrl+G). Keep in sync with Prompt.tsx and App.tsx. Rows read as plain language: keys, then what they do. */
 export const KEY_SECTIONS: readonly KeySection[] = [
   {
-    title: 'Chat',
+    title: 'Move around',
     rows: [
-      ['Enter', 'Send message / run command'],
-      ['@name (agents room)', 'Ask a coding agent'],
-      ['Ctrl+P', 'Command palette'],
-      ['Alt+Up / Alt+Down', 'Previous / next conversation'],
-      ['Ctrl+O / Ctrl+N', 'Previous / next conversation (any terminal)'],
-      ['Ctrl+B', 'Toggle sidebar'],
+      ['Alt+Up / Alt+Down', 'Previous / next tab, in the order the sidebar lists them'],
+      ['Ctrl+O / Ctrl+N', 'Same, for terminals that do not send Alt+arrows'],
+      ['Ctrl+H', 'Jump to the Home tab'],
+      ['Ctrl+B', 'Show or hide the sidebar'],
+      ['Ctrl+P', 'Command palette: every action, searchable'],
       ['PgUp / PgDn / wheel', 'Scroll messages'],
       ['Ctrl+T / click "▸ N more lines"', 'Fold / expand long messages'],
       ['Ctrl+G', 'This help'],
-      ['Terminal tab', 'Run shell commands; cd works; Ctrl+C stops one'],
     ],
   },
   {
-    title: 'Commands',
+    title: 'Write',
     rows: [
-      ['/', 'Open the command menu'],
-      ['Tab', 'Complete the highlighted entry'],
-      ['Up / Down', 'Pick an entry, or recall earlier input'],
-      ['Right / End / Tab', 'Accept the dim suggestion; it learns from what you type'],
+      ['Enter', 'Send the message, or run the command'],
+      ['Esc', 'Clear what you typed (closes help and the palette)'],
+      ['Ctrl+A / Ctrl+E', 'Jump to the start / end of the line (Home / End too)'],
+      ['Ctrl+W / Ctrl+U / Ctrl+K', 'Delete the word before the cursor / everything before it / everything after it'],
+      ['Alt+B / Alt+F', 'Jump a word left / right (Option or Ctrl + Left / Right too)'],
+      ['Alt+Backspace', 'Delete the word before the cursor (Option+Delete on macOS)'],
+      [':name: then Tab', 'Emoji: type :fi and Tab inserts the first match; a finished :fire: is sent as 🔥'],
+      ['Right / End / Tab', 'Accept the grey suggestion; it learns from what you type'],
+    ],
+  },
+  {
+    title: 'Copy and paste',
+    rows: [
+      ['Drag with the mouse', 'Select text in a chat; letting go copies it'],
+      ['Ctrl+C', 'Copy the selection'],
+      ['Ctrl+V', "Paste from the clipboard (your terminal's own paste works too)"],
+      ['Shift+drag', 'Select with the terminal itself instead (Option+drag in iTerm2)'],
+    ],
+  },
+  {
+    title: 'Chats and agents',
+    rows: [
+      ['@name', 'Mention an agent so it hears the message'],
+      ['@a @b', 'Name several agents: each one hears it'],
+      ['@all', 'Every agent hears it'],
+      ['Ctrl+C', 'Stop the agent working in this tab'],
+    ],
+  },
+  {
+    title: 'Agents',
+    rows: [
+      ['/agent setup', 'See which agents are installed and add one: Enter adds, r rechecks, Esc closes'],
+      ['Alt+M', 'Model and effort of the agent in this tab (pick an agent first elsewhere)'],
+      ['Alt+Q', 'Jump to the agent that is waiting for your answer'],
+      ['/agent model|effort <name>', 'Open that picker; add a value to set it directly'],
+      ['/agent review on|off', 'Automatic peer review after an agent changes files'],
+      ['/agent usage [name]', "Provider limits and context use (agent's own /usage)"],
+      ['/agent compact <name>', "Shrink an agent's context (handoff or shake as a second word)"],
+      ['/agent goal <text>', 'The shared goal every agent sees; /agent memory for shared notes'],
+      ['/<command> in an agent tab', 'Run a command the agent advertises; pager commands win a clash (/agent <name> /<command>)'],
+      ['/new /clear /resume', 'Agents keep their session: /agent reset <name> starts over'],
+      ['/copy', 'Drag to select instead: letting go copies'],
+    ],
+  },
+  {
+    title: 'When an agent asks you',
+    rows: [
+      ['Up / Down', 'Move between the options'],
+      ['Space', 'Pick the option, or tick it when several can be chosen'],
+      ['Enter', 'Confirm this question; after the last one the answers are sent'],
+      ['Tab / Shift+Tab', 'Next / previous question'],
+      ['Other row', 'Type an answer of your own: every key types there, Backspace edits'],
+      ['Esc', 'Cancel: the agent is told you did not answer'],
+    ],
+  },
+  {
+    title: 'Terminal tab',
+    rows: [
+      ['Enter', 'Run the line in your shell; cd works'],
+      ['Typing while it runs', 'The line goes to the running command'],
+      ['Ctrl+C', 'Stop the running command'],
+      ['//', 'Start a line with a literal slash'],
     ],
   },
   {
@@ -42,20 +102,22 @@ export const KEY_SECTIONS: readonly KeySection[] = [
     ],
   },
   {
-    title: 'Editing',
+    title: 'Commands',
     rows: [
-      ['Ctrl+A / Ctrl+E', 'Line start / end'],
-      ['Alt+B / Alt+F', 'Word left / right (Option or Ctrl + Left / Right too)'],
-      ['Alt+Backspace', 'Delete word back (Option+Delete on macOS)'],
-      ['Ctrl+W / Ctrl+U / Ctrl+K', 'Delete word back / to start / to end'],
-      ['Esc', 'Clear the input, or close this panel'],
+      ['/', 'Open the command menu'],
+      ['Tab', 'Complete the highlighted entry'],
+      ['Up / Down', 'Pick an entry, or recall earlier input'],
     ],
   },
   {
-    title: 'Exit',
+    title: 'Leave',
     rows: [
-      ['Ctrl+C', 'Clear input; again on empty input to quit'],
-      ['Ctrl+D', 'Quit (empty input)'],
+      ['Ctrl+C twice', 'Clear the input first; again on an empty prompt to quit'],
+      ['Ctrl+D', 'Quit (empty prompt)'],
+      ['/quit  /exit', 'Quit pager'],
     ],
   },
 ]
+
+/** Every slash command, generated from the command table so the list cannot drift. */
+export const COMMAND_SECTION: KeySection = { title: 'All commands', rows: COMMANDS.map((c) => [c.usage, c.summary]) }

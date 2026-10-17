@@ -23,11 +23,39 @@ export interface AcpToolCall {
 export interface AcpCommand {
   name: string
   description: string
+  /** Hint shown for the argument, when the agent declares one. */
+  hint?: string
+}
+export interface AcpUsage {
+  used: number
+  size: number
+}
+export interface AcpConfigValue {
+  value: string
+  name: string
+}
+/** One session setting the agent lets the client change (model, thinking level, mode). */
+export interface AcpConfigOption {
+  id: string
+  name: string
+  category: string
+  current: string
+  options: AcpConfigValue[]
+}
+export interface McpServerSpec {
+  name: string
+  command: string
+  args: string[]
+  env: { name: string; value: string }[]
 }
 export interface AcpHandlers {
   onText(chunk: string): void
   onTool(call: AcpToolCall): void
   onCommands(commands: AcpCommand[]): void
+  onUsage(usage: AcpUsage): void
+  onConfig(options: AcpConfigOption[]): void
+  /** The agent asks the user a question (ACP `elicitation/create`). Resolve with the form content, or undefined when the user cancelled. */
+  onElicit(params: Record<string, unknown>): Promise<Record<string, unknown> | undefined>
 }
 
 type Json = Record<string, unknown>
@@ -135,8 +163,15 @@ export class AcpConnection {
     } else entry.resolve(isRecord(msg.result) ? msg.result : {})
   }
 
-  /** Pager runs agents in a throwaway worktree and always had auto-approval, so permission asks are granted. */
+  /** Pager runs agents in their own worktree and always had auto-approval, so permission asks are granted; questions go to the user. */
   private onRequest(id: number | string, method: string, params: Json): void {
+    if (method === 'elicitation/create' && this.handlers.onElicit !== undefined) {
+      void this.handlers
+        .onElicit(params)
+        .then((content) => this.send({ jsonrpc: '2.0', id, result: content === undefined ? { action: 'cancel' } : { action: 'accept', content } }))
+        .catch(() => this.send({ jsonrpc: '2.0', id, result: { action: 'cancel' } }))
+      return
+    }
     if (method !== 'session/request_permission') {
       this.send({ jsonrpc: '2.0', id, error: { code: JSON_RPC_METHOD_NOT_FOUND, message: 'Method not found' } })
       return
@@ -153,9 +188,7 @@ export class AcpConnection {
     switch (update.sessionUpdate) {
       case 'available_commands_update': {
         const list = Array.isArray(update.availableCommands) ? update.availableCommands.filter(isRecord) : []
-        this.handlers.onCommands?.(
-          list.flatMap((c) => (typeof c.name === 'string' ? [{ name: c.name, description: typeof c.description === 'string' ? c.description : '' }] : [])),
-        )
+        this.handlers.onCommands?.(list.flatMap(parseCommand))
         return
       }
       case 'agent_message_chunk': {
@@ -177,6 +210,14 @@ export class AcpConnection {
         this.handlers.onTool?.(call)
         return
       }
+      case 'usage_update': {
+        if (typeof update.used === 'number' && typeof update.size === 'number' && update.size > 0) this.handlers.onUsage?.({ used: update.used, size: update.size })
+        return
+      }
+      case 'config_option_update': {
+        this.handlers.onConfig?.(parseConfigOptions(update.configOptions))
+        return
+      }
       default:
         return // thoughts, plans, usage and mode changes are not shown
     }
@@ -193,34 +234,72 @@ function log(direction: '>' | '<', line: string): void {
   }
 }
 
-/** Handshake; resumes `resumeId` when the agent supports it, otherwise (or on failure) starts a fresh session. */
+/** One `availableCommands` entry; entries without a name are dropped. */
+function parseCommand(c: Json): AcpCommand[] {
+  if (typeof c.name !== 'string') return []
+  const hint = isRecord(c.input) && typeof c.input.hint === 'string' ? c.input.hint : undefined
+  return [{ name: c.name, description: typeof c.description === 'string' ? c.description : '', ...(hint === undefined ? {} : { hint }) }]
+}
+
+/** `configOptions` as ACP agents send them; groups are flattened and anything malformed is skipped. */
+export function parseConfigOptions(raw: unknown): AcpConfigOption[] {
+  const out: AcpConfigOption[] = []
+  for (const o of Array.isArray(raw) ? raw.filter(isRecord) : []) {
+    if (typeof o.id !== 'string' || !Array.isArray(o.options)) continue
+    const values: AcpConfigValue[] = []
+    for (const v of o.options.filter(isRecord)) {
+      const nested = Array.isArray(v.options) ? v.options.filter(isRecord) : [v]
+      for (const n of nested) if (typeof n.value === 'string') values.push({ value: n.value, name: typeof n.name === 'string' ? n.name : n.value })
+    }
+    out.push({
+      id: o.id,
+      name: typeof o.name === 'string' ? o.name : o.id,
+      category: typeof o.category === 'string' ? o.category : o.id,
+      current: typeof o.currentValue === 'string' ? o.currentValue : '',
+      options: values,
+    })
+  }
+  return out
+}
+
+export interface OpenedSession {
+  sessionId: string
+  resumed: boolean
+  configOptions: AcpConfigOption[]
+}
+
+/**
+ * Handshake; resumes `resumeId` when the agent supports it, otherwise (or on failure) starts a fresh session.
+ * `mcpServers` are attached to the session either way (the pager tool server), and the client advertises that it can show questions.
+ */
 export async function openSession(
   conn: AcpConnection,
-  opts: { cwd: string; resumeId?: string; timeoutMs: number },
-): Promise<{ sessionId: string; resumed: boolean }> {
+  opts: { cwd: string; resumeId?: string; timeoutMs: number; mcpServers?: McpServerSpec[] },
+): Promise<OpenedSession> {
   const init = await conn.request(
     'initialize',
     {
       protocolVersion: 1,
-      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false },
+      clientCapabilities: { fs: { readTextFile: false, writeTextFile: false }, terminal: false, elicitation: { form: {} } },
       clientInfo: { name: 'pager', title: 'pager', version: VERSION },
     },
     opts.timeoutMs,
   )
   const canLoad = isRecord(init.agentCapabilities) && init.agentCapabilities.loadSession === true
   const methodId = (Array.isArray(init.authMethods) ? init.authMethods : []).filter(isRecord).map((m) => m.id).find((id) => typeof id === 'string')
+  const mcpServers = opts.mcpServers ?? []
   if (opts.resumeId !== undefined && canLoad) {
     conn.muted = true
     try {
-      await conn.request('session/load', { sessionId: opts.resumeId, cwd: opts.cwd, mcpServers: [] }, opts.timeoutMs)
-      return { sessionId: opts.resumeId, resumed: true }
+      const loaded = await conn.request('session/load', { sessionId: opts.resumeId, cwd: opts.cwd, mcpServers }, opts.timeoutMs)
+      return { sessionId: opts.resumeId, resumed: true, configOptions: parseConfigOptions(loaded.configOptions) }
     } catch (err) {
       if (!(err instanceof AcpError)) throw err // the stored session is gone or unreadable: start a new one
     } finally {
       conn.muted = false
     }
   }
-  const create = (): Promise<Json> => conn.request('session/new', { cwd: opts.cwd, mcpServers: [] }, opts.timeoutMs)
+  const create = (): Promise<Json> => conn.request('session/new', { cwd: opts.cwd, mcpServers }, opts.timeoutMs)
   let created: Json
   try {
     created = await create()
@@ -230,7 +309,13 @@ export async function openSession(
     created = await create()
   }
   if (typeof created.sessionId !== 'string') throw new AcpError('session/new returned no sessionId')
-  return { sessionId: created.sessionId, resumed: false }
+  return { sessionId: created.sessionId, resumed: false, configOptions: parseConfigOptions(created.configOptions) }
+}
+
+/** Changes one session setting (`session/set_config_option`); the agent confirms with its full option list. */
+export async function setConfigOption(conn: AcpConnection, sessionId: string, configId: string, value: string): Promise<AcpConfigOption[]> {
+  const res = await conn.request('session/set_config_option', { sessionId, configId, value })
+  return parseConfigOptions(res.configOptions)
 }
 
 /** Sends one prompt turn; updates arrive through the connection's handlers. No timeout: the caller kills the child. */

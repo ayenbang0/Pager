@@ -71,6 +71,11 @@ export function setText(text: string): InputBuffer {
   return { text, cursor: text.length }
 }
 
+/** Swaps `text[from, to)` for `insertion`, cursor just after it; the text on either side stays. */
+export function replaceRange(buf: InputBuffer, from: number, to: number, insertion: string): InputBuffer {
+  return { text: buf.text.slice(0, from) + insertion + buf.text.slice(to), cursor: from + insertion.length }
+}
+
 /** The text before the cursor, the grapheme under it ('' at end), and the rest. */
 export function splitAtCursor(buf: InputBuffer): { before: string; at: string; after: string } {
   const stop = nextBoundary(buf.text, buf.cursor)

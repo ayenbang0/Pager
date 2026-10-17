@@ -6,7 +6,7 @@ import { encodeFrame, FrameDecoder, ProtocolError, type Frame } from './wire.js'
 export interface PeerLink {
   readonly pk: string
   readonly initiator: 'local' | 'remote'
-  hello: { name: string }
+  hello: { name: string; caps: readonly string[] }
   send(frame: Frame): boolean
   close(): void
 }
@@ -25,6 +25,8 @@ export interface NetOptions {
   backoff?: { baseMs: number; maxMs: number }
 }
 
+/** Optional protocol features this build speaks; peers that do not list one never receive its frames. */
+export const LOCAL_CAPS = ['read'] as const
 const HELLO_TIMEOUT_MS = 10_000
 const LISTEN_RETRY_MS = 30_000
 const STOP_GRACE_MS = 3_000
@@ -158,7 +160,7 @@ export class Net extends EventEmitter {
       socket.write(encodeFrame(frame))
       return true
     }
-    const sendHello = (): void => void sendFrame({ t: 'hello', v: 1, name: this.opts.getName() })
+    const sendHello = (): void => void sendFrame({ t: 'hello', v: 1, name: this.opts.getName(), caps: [...LOCAL_CAPS] })
     const helloTimer = setTimeout(() => socket.destroy(), HELLO_TIMEOUT_MS)
     helloTimer.unref()
 
@@ -183,9 +185,9 @@ export class Net extends EventEmitter {
             return
           }
           clearTimeout(helloTimer)
-          this.promote(session, frame.name, sendFrame)
+          this.promote(session, frame.name, frame.caps ?? [], sendFrame)
         } else if (frame.t === 'hello') {
-          session.link.hello = { name: frame.name }
+          session.link.hello = { name: frame.name, caps: frame.caps ?? [] }
           this.emit('hello', session.link)
         } else {
           this.emit('frame', session.link, frame)
@@ -217,7 +219,7 @@ export class Net extends EventEmitter {
   }
 
   /** Remote hello arrived: resolve duplicates, then publish the link. */
-  private promote(session: Session, name: string, sendFrame: (f: Frame) => boolean): void {
+  private promote(session: Session, name: string, caps: readonly string[], sendFrame: (f: Frame) => boolean): void {
     const existing = this.links_.get(session.pk)
     if (existing) {
       const initiatorOf = (s: Session): string => (s.initiator === 'local' ? this.myPk : s.pk)
@@ -238,7 +240,7 @@ export class Net extends EventEmitter {
     const link: PeerLink = {
       pk: session.pk,
       initiator: session.initiator,
-      hello: { name },
+      hello: { name, caps },
       send: sendFrame,
       close: () => session.socket.destroy(),
     }

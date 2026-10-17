@@ -1,24 +1,30 @@
 import { EventEmitter } from 'node:events'
 import path from 'node:path'
 import type { BootstrapNode } from 'hyperdht'
-import { isAgentName, type AdapterSpec, type AgentName } from './agents/adapters.js'
-import { Orchestrator, ROOM_ID, type RoomView } from './agents/orchestrator.js'
+import type { AdapterSpec } from './agents/adapters.js'
+import { PRESETS } from './agents/catalog.js'
+import { agentTabId, parseAgentTab } from './agents/ids.js'
+import { Orchestrator, ROOM_ID, type AgentStats, type RoomView, type SetupRow } from './agents/orchestrator.js'
+import type { AnswerMap, QuestionView } from './agents/questions.js'
 import { COMMANDS, parseCommand } from './commands.js'
-import { Terminal, TERM_ID, type TermEntry } from './terminal.js'
+import { Terminal, TERM_ID, type TermEntry, type TermState } from './terminal.js'
 import { DocStore, DOCS_ID, DOC_PREFIX, type DocInfo } from './docs/store.js'
 import { ContactCodeError, decodeContactCode, encodeContactCode } from './contactCode.js'
 import { Store, type Conv } from './db.js'
+import { COLOR_WORDS, parseColor } from './colors.js'
+import { expandEmoji } from './emoji.js'
 import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from './events.js'
 import { loadOrCreateIdentity, saveName } from './identity.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from './ingest.js'
 import { Net, type PeerLink } from './net.js'
 import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
 import { Suggester } from './suggest.js'
-import { loadSettings, saveSettings, type Settings } from './settings.js'
+import { DENSITIES, isDensity, loadSettings, parseBadge, saveSettings, type Settings } from './settings.js'
 import { findTheme, THEMES } from './themes.js'
 import { isNewer, latestVersion } from './update.js'
 import { VERSION } from './version.js'
 import { parseChain, splitArgs } from './agents/protocol.js'
+import { desktopNotify } from './desktop.js'
 import type { Frame } from './wire.js'
 
 export type ToastKind = 'info' | 'success' | 'warn' | 'error'
@@ -63,11 +69,13 @@ export interface MessageView {
   authorName: string
   authorKey: string
   mine: boolean
+  /** An agent teammate wrote it (its color may be personal). */
+  agent?: boolean
   kind: 'text' | 'system'
   text: string
   /** Render Markdown (agent replies only; peer text stays literal). */
   markdown?: boolean
-  status: 'pending' | 'delivered' | null
+  status: 'pending' | 'delivered' | 'read' | null
 }
 export interface EngineOptions {
   dir: string
@@ -77,7 +85,9 @@ export interface EngineOptions {
   /** Directory agents work against; must be inside a git repository. Defaults to the current directory. */
   workdir?: string
   /** Test seam: replaces the real agent CLIs. */
-  agentAdapters?: Partial<Record<AgentName, AdapterSpec>>
+  agentAdapters?: Record<string, AdapterSpec>
+  /** Probe the installed agent CLIs in the background at startup (the app turns this on; tests call checkAgents themselves). */
+  checkAgents?: boolean
 }
 
 interface PendingItem {
@@ -100,6 +110,8 @@ const SUGGEST_CORPUS = 2000
 /** A terminal command that ran this long rings an unfocused terminal when it ends. */
 const LONG_COMMAND_MS = 5000
 const EVENTS_BYTES_PER_FRAME = 200_000
+/** Home asks for the agent stats on every render; the log is only re-read after this long. */
+const AGENT_STATS_TTL_MS = 2000
 
 const hasControl = (s: string): boolean => /\p{Cc}/u.test(s)
 const pk8 = (pk: string): string => pk.slice(0, 8)
@@ -116,6 +128,7 @@ export class Engine extends EventEmitter {
   private readonly term: Terminal
   readonly docs: DocStore
   private openDocId: string | null = null
+  private statsCache: { at: number; value: AgentStats } | undefined
   private readonly unknownTimers = new Set<NodeJS.Timeout>()
   private activeId: string | null = null
   /** Text set by /help and /code; null shows the welcome banner. */
@@ -123,12 +136,21 @@ export class Engine extends EventEmitter {
   private closed = false
   private update: string | null = null
   private prefs: Settings
+  /** Whether the terminal window has focus (read receipts wait until you can actually see the chat). */
+  private focused = true
+  /** Peers with an open link, to tell the first connection from a reconnect. */
+  private readonly online = new Set<string>()
+  /** `conv:pk` to the highest of my message seqs that peer has told me they read. */
+  private readonly readBy = new Map<string, number>()
+  /** `conv:pk` to the highest seq of theirs I have told them I read. */
+  private readonly readSent = new Map<string, number>()
   private input: string[]
   private readonly suggester = new Suggester()
 
   static async open(opts: EngineOptions): Promise<Engine> {
     const engine = new Engine(opts)
     engine.net.start()
+    if (opts.checkAgents === true) void engine.checkAgents()
     return engine
   }
 
@@ -162,7 +184,10 @@ export class Engine extends EventEmitter {
       this.emit('change')
     })
     this.net.on('frame', (link: PeerLink, frame: Frame) => this.onFrame(link, frame))
-    this.net.on('close', () => this.emit('change'))
+    this.net.on('close', (pk: string) => {
+      this.online.delete(pk)
+      this.emit('change')
+    })
     this.agents = new Orchestrator({
       dataDir: opts.dir,
       workdir: opts.workdir ?? process.cwd(),
@@ -173,14 +198,16 @@ export class Engine extends EventEmitter {
       },
     })
     this.agents.on('change', () => {
-      if (this.activeId === ROOM_ID) this.agents.markRead()
+      const scope = parseAgentTab(this.activeId) ?? (this.activeId === ROOM_ID ? ROOM_ID : undefined)
+      if (scope !== undefined) this.agents.markRead(scope)
       this.emit('change')
     })
+    this.agents.on('notify', (title: string, body: string) => this.alert(title, body))
     this.agents.on('toast', (t: Toast) => this.emit('toast', t))
     this.term = new Terminal(opts.workdir ?? process.cwd())
     this.term.on('change', () => this.emit('change'))
     this.term.on('finished', (e: TermEntry) => {
-      if (Date.now() - e.ts >= LONG_COMMAND_MS) this.emit('notify', 'terminal', `${e.command.slice(0, 60)} ${e.state === 'done' ? 'finished' : e.state}`)
+      if (Date.now() - e.ts >= LONG_COMMAND_MS) this.alert('terminal', `${e.command.slice(0, 60)} ${e.state === 'done' ? 'finished' : e.state}`)
     })
   }
 
@@ -297,6 +324,8 @@ export class Engine extends EventEmitter {
     if (convId === TERM_ID) return this.termMessages(limit)
     if (convId === DOCS_ID) return []
     if (convId === ROOM_ID) return this.agents.messages(limit)
+    const agent = parseAgentTab(convId)
+    if (agent !== undefined) return this.agents.messages(limit, agent)
     const conv = this.store.getConv(convId)
     if (!conv) return []
     const others = this.otherMembers(conv)
@@ -311,7 +340,8 @@ export class Engine extends EventEmitter {
       let status: MessageView['status'] = null
       if (mine) {
         const delivered = others.length > 0 && others.every((pk) => this.store.getAck(convId, pk, this.me.pk) >= e.seq)
-        status = delivered ? 'delivered' : 'pending'
+        const read = delivered && others.every((pk) => (this.readBy.get(`${convId}:${pk}`) ?? 0) >= e.seq)
+        status = read ? 'read' : delivered ? 'delivered' : 'pending'
       }
       return { ...base, kind: 'text', text: e.body, status }
     })
@@ -345,13 +375,89 @@ export class Engine extends EventEmitter {
     return this.agents.room()
   }
 
-  /** Ctrl+C in the Terminal tab: stop the running command. False when there is nothing to stop. */
-  interrupt(): boolean {
-    return this.activeId === TERM_ID && this.term.stop()
+  /** Names of the agents that are installed and passed their readiness check, in team order. */
+  agentNames(): string[] {
+    return this.agents.names()
   }
 
-  terminal(): { running: boolean; cwd: string } {
-    return { running: this.term.running, cwd: this.term.cwd }
+  /** Probes the installed agent CLIs; resolves when every check is done. */
+  checkAgents(): Promise<void> {
+    return this.agents.refresh()
+  }
+
+  /** Every agent pager knows with its readiness, for the setup screen. */
+  agentSetup(): SetupRow[] {
+    return this.agents.setup()
+  }
+
+  /** Slash commands one ready agent advertises over ACP. */
+  agentCommands(name: string): { name: string; description: string; hint?: string }[] {
+    return this.agents.names().includes(name) ? this.agents.agentCommands(name) : []
+  }
+
+  /** Questions agents are waiting on, oldest first. */
+  questions(): QuestionView[] {
+    return this.agents.questions.views()
+  }
+
+  answerQuestion(id: string, answers: AnswerMap | null): void {
+    this.agents.questions.answer(id, answers)
+  }
+
+  /** Adds a teammate from the setup screen; returns the failure reason, if any. */
+  async addAgent(cli: string, name?: string): Promise<string | undefined> {
+    const added = await this.agents.addAgent(cli, name)
+    if (typeof added === 'string') return added
+    this.activate(agentTabId(added.name))
+    return undefined
+  }
+
+  /** Re-checks one agent CLI (setup screen). */
+  recheckAgent(cli: string): Promise<void> {
+    return this.agents.refresh([cli])
+  }
+
+  /** Per-agent totals, the 14-day activity strip and review verdicts. Cached briefly: Home asks on every render and the log is a file. */
+  agentStats(now = Date.now()): AgentStats {
+    if (this.statsCache === undefined || now - this.statsCache.at > AGENT_STATS_TTL_MS) this.statsCache = { at: now, value: this.agents.stats(now) }
+    return this.statsCache.value
+  }
+
+  /** The last `/usage` text each agent produced, for Home. */
+  agentUsages(): { agent: string; text: string; at: number }[] {
+    return this.agents.names().flatMap((agent) => {
+      const u = this.agents.usageOf(agent)
+      return u === undefined ? [] : [{ agent, text: u.text, at: u.at }]
+    })
+  }
+
+  /** Peer reviews running right now. */
+  agentReviewsPending(): number {
+    return this.agents.pendingReviews()
+  }
+
+  /** Whether automatic peer review is on. */
+  agentReview(): boolean {
+    return this.agents.registry.review
+  }
+
+  /** The shared goal every agent sees ('' when none). */
+  agentGoal(): string {
+    return this.agents.goal()
+  }
+
+  /** Ctrl+C in the Terminal tab: stop the running command. False when there is nothing to stop. */
+  interrupt(): boolean {
+    if (this.activeId === TERM_ID) return this.term.stop()
+    const agent = parseAgentTab(this.activeId)
+    if (agent === undefined || !this.agents.busy(agent)) return false
+    this.agents.stop(agent)
+    return true
+  }
+
+  terminal(): { running: boolean; cwd: string; last: { command: string; state: TermState; code: number | null } | null } {
+    const last = this.term.list().at(-1)
+    return { running: this.term.running, cwd: this.term.cwd, last: last === undefined ? null : { command: last.command, state: last.state, code: last.code } }
   }
 
   // ---------------------------------------------------------------- docs
@@ -482,8 +588,10 @@ export class Engine extends EventEmitter {
   }
 
   activate(convId: string | null): void {
-    if (convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID) {
+    const agent = parseAgentTab(convId)
+    if (convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID || agent !== undefined) {
       if (convId === ROOM_ID) this.agents.markRead()
+      if (agent !== undefined) this.agents.markRead(agent)
       this.activeId = convId
       this.emit('change')
       return
@@ -494,6 +602,7 @@ export class Engine extends EventEmitter {
       this.store.markRead(convId, Date.now())
     }
     this.activeId = convId
+    if (convId !== null) this.sendRead(convId)
     this.emit('change')
   }
 
@@ -567,68 +676,134 @@ export class Engine extends EventEmitter {
         return this.cmdGroup(args[0]?.toLowerCase(), rest.slice((args[0] ?? '').length).trim())
       case 'theme':
         return this.cmdTheme(rest)
+      case 'accent':
+        return this.cmdAccent(rest)
+      case 'badge':
+        return this.cmdBadge(rest)
+      case 'density':
+        return this.cmdDensity(rest)
+      case 'notify':
+        return this.cmdSwitch('notify', rest, 'Desktop notifications')
+      case 'sound':
+        return this.cmdSwitch('sound', rest, 'Notification sound')
       case 'update':
         return this.cmdUpdate()
       case 'agent':
         return this.cmdAgent(rest, args)
+      case 'exit':
       case 'quit':
         this.emit('quit')
         return
-      default:
+      default: {
+        // Not a pager command: in an agent's tab a command that agent advertises goes to it verbatim.
+        const agent = parseAgentTab(this.activeId)
+        if (agent !== undefined && this.agentCommands(agent).some((c) => c.name.toLowerCase() === name)) {
+          void this.agents.ask(agent, line.trim())
+          return
+        }
         this.toast('error', `Unknown command /${name}. Try /help`)
+      }
     }
   }
 
   private async cmdAgent(rest: string, args: string[]): Promise<void> {
     const usage =
-      '/agent <omp|claude|opencode|hermes> <task> | chain a>b <task> | cli <name> <args> | memory [add <text>|clear] | commands <name> | runs | stop [id] | merge <id> | drop <id|all> | check'
+      '/agent <name> <task> | new <cli> [name] | add <id> <command…> | remove <name> | setup | chain a>b <task> | model|effort <name> [value] | usage [name] | compact <name> | review on|off | goal <text> | memory [add <text>|clear] | commands <name> | cli <name> <args> | runs | stop [name|run] | merge <name|run> | drop <run|all|name> | reset <name> | check [name]'
     const sub = (args[0] ?? '').toLowerCase()
     if (sub === '') return this.toast('info', usage)
-    if (isAgentName(sub)) {
-      const task = rest.slice(sub.length).trim()
-      if (task === '') return this.toast('error', `Usage: /agent ${sub} <task>`)
-      this.activate(ROOM_ID)
-      void this.agents.ask(sub, task)
-      return
-    }
+    const names = this.agents.names()
     const target = args[1]
+    const after = rest.slice(sub.length).trim()
+    const nameArg = (target ?? '').toLowerCase()
+    const needName = (what: string): boolean => {
+      if (names.includes(nameArg)) return true
+      this.toast('error', `Usage: /agent ${what} <${names.join('|') || 'name'}>`)
+      return false
+    }
     switch (sub) {
+      case 'new': {
+        if (target === undefined) return this.toast('error', 'Usage: /agent new <cli> [name]  (see /agent setup)')
+        const added = await this.agents.addAgent(nameArg, args[2]?.toLowerCase())
+        if (typeof added === 'string') return this.toast('error', added)
+        return this.activate(agentTabId(added.name))
+      }
+      case 'add': {
+        const [id = '', ...command] = splitArgs(after)
+        if (id === '' || command.length === 0) return this.toast('error', 'Usage: /agent add <id> <command> [args…]  (a custom agent that speaks ACP over stdio)')
+        const problem = await this.agents.addCustom(id.toLowerCase(), command)
+        return this.toast(problem === undefined ? 'success' : 'error', problem ?? `${id} is ready: /agent new ${id.toLowerCase()}`)
+      }
+      case 'remove':
+        if (!this.agents.removeAgent(nameArg)) return this.toast('error', `No agent "${nameArg}"`)
+        if (parseAgentTab(this.activeId) === nameArg) this.activate(ROOM_ID)
+        return this.toast('info', `${nameArg} left the team`)
+      case 'setup':
+        this.emit('overlay', 'agents')
+        return
       case 'cli': {
-        const [name = '', ...argv] = splitArgs(rest.slice(sub.length))
+        const [name = '', ...argv] = splitArgs(after)
         const agent = name.toLowerCase()
-        if (!isAgentName(agent) || argv.length === 0) {
-          return this.toast('error', 'Usage: /agent cli <omp|claude|opencode|hermes> <cli arguments>')
-        }
-        this.activate(ROOM_ID)
+        if (!names.includes(agent) || argv.length === 0) return this.toast('error', `Usage: /agent cli <${names.join('|')}> <cli arguments>`)
+        this.activate(agentTabId(agent))
         void this.agents.cli(agent, argv)
         return
       }
       case 'chain': {
-        const body = rest.slice(sub.length).trim()
-        const spec = body.split(/\s/, 1)[0] ?? ''
-        const task = body.slice(spec.length).trim()
-        const steps = parseChain(spec)
-        if (steps === undefined || task === '') {
-          return this.toast('error', 'Usage: /agent chain <a>><b>[><c>] <task>  (agents: omp, claude, opencode, hermes)')
-        }
+        const spec = after.split(/\s/, 1)[0] ?? ''
+        const task = after.slice(spec.length).trim()
+        const steps = parseChain(spec, names)
+        if (steps === undefined || task === '') return this.toast('error', `Usage: /agent chain <a>><b>[><c>] <task>  (agents: ${names.join(', ')})`)
         this.activate(ROOM_ID)
         void this.agents.chain(steps, task)
         return
       }
-      case 'commands': {
-        const name = (args[1] ?? '').toLowerCase()
-        if (!isAgentName(name)) return this.toast('error', 'Usage: /agent commands <omp|claude|opencode|hermes>')
-        this.activate(ROOM_ID)
-        void this.agents.commands(name)
+      case 'commands':
+        if (!needName('commands')) return
+        this.activate(agentTabId(nameArg))
+        void this.agents.commands(nameArg)
         return
+      case 'model':
+      case 'effort': {
+        if (!needName(sub)) return
+        const value = after.slice((target ?? '').length).trim()
+        this.activate(agentTabId(nameArg))
+        if (value === '') return void this.emit('overlay', 'model', nameArg)
+        return this.setAgentSetting(nameArg, sub, value)
       }
-      case 'memory': {
-        const action = (args[1] ?? 'show').toLowerCase()
-        if (action !== 'show' && action !== 'add' && action !== 'clear') {
-          return this.toast('error', 'Usage: /agent memory [add <text>|clear]')
-        }
+      case 'color': {
+        if (!needName('color')) return
+        const wanted = after.slice((target ?? '').length).trim().toLowerCase()
+        if (wanted === '') return this.toast('info', `Usage: /agent color ${nameArg} <color|#hex|auto>. Colors: ${COLOR_WORDS.join(', ')}`)
+        const color = wanted === 'auto' ? undefined : parseColor(wanted)
+        if (wanted !== 'auto' && color === undefined) return this.toast('error', `"${wanted.slice(0, 20)}" is not a color. Use #rrggbb, auto or one of: ${COLOR_WORDS.join(', ')}`)
+        this.agents.setColor(nameArg, color)
+        return this.toast('success', color === undefined ? `${nameArg} color: auto` : `${nameArg} color: ${color}`)
+      }
+      case 'usage':
+        this.activate(target === undefined ? ROOM_ID : agentTabId(nameArg))
+        void this.agents.usage(target === undefined ? undefined : [nameArg])
+        return
+      case 'compact': {
+        if (!needName('compact')) return
+        const mode = (args[2] ?? 'compact').toLowerCase()
+        if (mode !== 'compact' && mode !== 'handoff' && mode !== 'shake') return this.toast('error', 'Usage: /agent compact <name> [handoff|shake]')
+        this.activate(agentTabId(nameArg))
+        return this.agents.compact(nameArg, mode)
+      }
+      case 'review': {
+        const on = (target ?? '').toLowerCase()
+        if (on !== 'on' && on !== 'off') return this.toast('info', `Peer review is ${this.agents.registry.review ? 'on' : 'off'}. /agent review on|off`)
+        this.agents.setReview(on === 'on')
+        return this.toast('success', `Peer review ${on}`)
+      }
+      case 'goal':
         this.activate(ROOM_ID)
-        void this.agents.memory(action, rest.slice(sub.length).trim().slice((args[1] ?? '').length).trim())
+        return this.agents.setGoal(after)
+      case 'memory': {
+        const action = (target ?? 'show').toLowerCase()
+        if (action !== 'show' && action !== 'add' && action !== 'clear') return this.toast('error', 'Usage: /agent memory [add <text>|clear]')
+        this.activate(ROOM_ID)
+        void this.agents.memory(action, after.slice((target ?? '').length).trim())
         return
       }
       case 'runs':
@@ -637,16 +812,60 @@ export class Engine extends EventEmitter {
       case 'stop':
         return this.agents.stop(target ?? 'all')
       case 'merge':
-        return target === undefined ? this.toast('error', 'Usage: /agent merge <run>') : this.agents.merge(target)
+        return target === undefined ? this.toast('error', 'Usage: /agent merge <name|run>') : this.agents.merge(target)
       case 'drop':
-        return target === undefined ? this.toast('error', 'Usage: /agent drop <run|all>') : this.agents.drop(target)
+        return target === undefined ? this.toast('error', 'Usage: /agent drop <run|all|name>') : this.agents.drop(target)
+      case 'reset':
+        if (!needName('reset')) return
+        return void this.agents.reset(nameArg)
       case 'check':
         this.activate(ROOM_ID)
-        void this.agents.check()
+        void this.agents.check(target === undefined ? undefined : [nameArg])
         return
       default:
-        return this.toast('error', `Usage: ${usage}`)
+        break
     }
+    if (names.includes(sub)) {
+      if (after === '') return this.toast('error', `Usage: /agent ${sub} <task>`)
+      this.activate(agentTabId(sub))
+      void this.agents.ask(sub, after)
+      return
+    }
+    this.toast('error', `Usage: ${usage}`)
+  }
+
+  /** The agent's model or thinking-level choices: what it advertised over ACP, else the catalog's list. Empty = free text. */
+  agentChoices(name: string, kind: 'model' | 'effort'): { value: string; name: string }[] {
+    const advertised = this.agents.agentOptions(name).find((o) => o.category === (kind === 'model' ? 'model' : 'thought_level'))
+    if (advertised !== undefined && advertised.options.length > 0) return advertised.options
+    const cli = this.agents.registry.instances().find((c) => c.name === name)?.cli
+    const preset = cli !== undefined && Object.hasOwn(PRESETS, cli) ? PRESETS[cli] : undefined
+    return kind === 'effort' ? (preset?.efforts ?? []).map((e) => ({ value: e, name: e })) : []
+  }
+
+  /** Whether pager can change this setting for the agent at all (an advertised option, or a CLI flag for one-shot runs). */
+  agentSettable(name: string, kind: 'model' | 'effort'): boolean {
+    const cli = this.agents.registry.instances().find((c) => c.name === name)?.cli
+    const preset = cli !== undefined && Object.hasOwn(PRESETS, cli) ? PRESETS[cli] : undefined
+    const flag = kind === 'model' ? preset?.modelFlag : preset?.effortFlag
+    return flag !== undefined || this.agents.agentOptions(name).some((o) => o.category === (kind === 'model' ? 'model' : 'thought_level'))
+  }
+
+  /** Sets one agent's model or effort (`default` clears it). It applies from the agent's next message. */
+  setAgentSetting(name: string, kind: 'model' | 'effort', raw: string): void {
+    if (!this.agentSettable(name, kind) && this.agents.agentOptions(name).length > 0) return this.toast('error', `${kind} is not settable for ${name}`)
+    const value = raw.trim()
+    const clear = value.toLowerCase() === 'default'
+    const choices = this.agentChoices(name, kind)
+    const hit = choices.find((c) => c.value.toLowerCase() === value.toLowerCase() || c.name.toLowerCase() === value.toLowerCase())
+    if (!clear && choices.length > 0 && hit === undefined) {
+      const shown = choices.slice(0, 12).map((c) => c.value).join(', ')
+      return this.toast('error', `Unknown ${kind} "${value.slice(0, 40)}". Choose: ${shown}${choices.length > 12 ? ', …' : ''}`)
+    }
+    const next = clear ? undefined : (hit?.value ?? value)
+    if (kind === 'model') this.agents.setModel(name, next)
+    else this.agents.setEffort(name, next)
+    this.toast('success', `${name} ${kind} → ${next ?? 'default'} (applies to its next message)`)
   }
 
   private setHome(lines: string[]): void {
@@ -685,6 +904,10 @@ export class Engine extends EventEmitter {
   private cmdTheme(name: string): void {
     const names = THEMES.map((t) => t.name).join(', ')
     if (name === '') {
+      this.emit('overlay', 'theme')
+      return
+    }
+    if (name.toLowerCase() === 'list') {
       this.toast('info', `Theme: ${this.prefs.theme}. Available: ${names}`)
       return
     }
@@ -695,6 +918,45 @@ export class Engine extends EventEmitter {
     }
     this.updateSettings({ theme: theme.name })
     this.toast('success', `Theme: ${theme.name}`)
+  }
+
+  private cmdAccent(raw: string): void {
+    const wanted = raw.trim().toLowerCase()
+    if (wanted === '') return this.toast('info', `Accent: ${this.prefs.accent === '' ? 'auto (the theme accent)' : this.prefs.accent}. /accent <color|#hex|auto>`)
+    if (wanted === 'auto') {
+      this.updateSettings({ accent: '' })
+      return this.toast('success', 'Accent: auto')
+    }
+    const color = parseColor(wanted)
+    if (color === undefined) return this.toast('error', `"${wanted.slice(0, 20)}" is not a color. Use #rrggbb, auto or one of: ${COLOR_WORDS.join(', ')}`)
+    this.updateSettings({ accent: color })
+    this.toast('success', `Accent: ${color}`)
+  }
+
+  private cmdBadge(raw: string): void {
+    const wanted = raw.trim()
+    if (wanted === '') return this.toast('info', `Badge: ${this.prefs.badge}. /badge <emoji|:shortcode:|none|auto>`)
+    const expanded = expandEmoji(wanted)
+    const unknownShortcode = /^:[a-z0-9_+-]{2,24}:$/.test(wanted) && expanded === wanted
+    const badge = unknownShortcode ? undefined : parseBadge(expanded)
+    if (badge === undefined) return this.toast('error', 'A badge is one emoji or symbol, :shortcode:, none or auto')
+    this.updateSettings({ badge })
+    this.toast('success', `Badge: ${badge}`)
+  }
+
+  private cmdSwitch(key: 'notify' | 'sound', raw: string, label: string): void {
+    const wanted = raw.trim().toLowerCase()
+    if (wanted !== 'on' && wanted !== 'off') return this.toast('info', `${label}: ${this.prefs[key] ? 'on' : 'off'}. /${key} on|off`)
+    this.updateSettings({ [key]: wanted === 'on' })
+    this.toast('success', `${label}: ${wanted}`)
+    if (wanted === 'on' && key === 'notify') this.alert('pager', 'Notifications are on')
+  }
+
+  private cmdDensity(raw: string): void {
+    const wanted = raw.trim().toLowerCase()
+    if (!isDensity(wanted)) return this.toast(wanted === '' ? 'info' : 'error', `Density: ${this.prefs.density}. Choose ${DENSITIES.join(', ')}`)
+    this.updateSettings({ density: wanted })
+    this.toast('success', `Density: ${wanted}`)
   }
 
   private cmdName(next: string): void {
@@ -785,6 +1047,7 @@ export class Engine extends EventEmitter {
   private cmdOpen(query: string): void {
     const target = query.trim().toLowerCase()
     if (target === 'agents') return this.activate(ROOM_ID)
+    if (this.agents.names().includes(target)) return this.activate(agentTabId(target))
     if (target === 'terminal') return this.activate(TERM_ID)
     if (target === 'docs') return this.activate(DOCS_ID)
     const res = this.resolve(this.convs(), query, (c) => c.title, (c) => c.peer)
@@ -897,7 +1160,8 @@ export class Engine extends EventEmitter {
 
   // ---------------------------------------------------------------- contacts
 
-  private acceptContact(pk: string): void {
+  /** `remote`: the other side acted (accepted my request), so say so loudly. */
+  private acceptContact(pk: string, remote = false): void {
     const link = this.net.link(pk)
     if (link) this.learnName(link)
     const now = Date.now()
@@ -909,7 +1173,8 @@ export class Engine extends EventEmitter {
     if (link?.send({ t: 'contact-accept' })) this.store.upsertPeer(pk, { acceptSent: true }, now)
     this.net.refresh()
     if (link) this.sendSync(link)
-    this.toast('success', `${this.nameOf(pk)} is now a contact`)
+    if (remote) this.announce('success', `${this.nameOf(pk)} accepted your contact request`, this.nameOf(pk))
+    else this.toast('success', `${this.nameOf(pk)} is now a contact`)
     this.emit('change')
   }
 
@@ -947,7 +1212,7 @@ export class Engine extends EventEmitter {
         if (link.send({ t: 'contact-accept' })) this.store.upsertPeer(pk, { acceptSent: true }, Date.now())
         return
       case 'outgoing':
-        this.acceptContact(pk)
+        this.acceptContact(pk, true)
         return
       case 'incoming':
       case 'blocked':
@@ -956,7 +1221,7 @@ export class Engine extends EventEmitter {
         if (this.store.listPeers().filter((p) => p.state === 'incoming').length >= MAX_INCOMING) return
         this.store.upsertPeer(pk, { state: 'incoming', name: link.hello.name, note }, Date.now())
         const n = this.pendingItems().find((i) => i.pk === pk)?.view.n ?? 1
-        this.toast('info', `${link.hello.name} wants to connect. /accept ${n}`)
+        this.announce('info', `${link.hello.name} wants to connect. /accept ${n}`, link.hello.name)
         this.emit('change')
       }
     }
@@ -979,7 +1244,7 @@ export class Engine extends EventEmitter {
       createdAt: now,
     })
     const n = this.pendingItems().find((i) => i.conv === frame.conv)?.view.n ?? 1
-    this.toast('info', `${this.nameOf(link.pk)} invited you to ${frame.title}. /accept ${n}`)
+    this.announce('info', `${this.nameOf(link.pk)} invited you to ${frame.title}. /accept ${n}`, this.nameOf(link.pk))
     this.emit('change')
   }
 
@@ -1054,6 +1319,11 @@ export class Engine extends EventEmitter {
     this.learnName(link)
     const peer = this.store.getPeer(pk)
     const now = Date.now()
+    if (!this.online.has(pk)) {
+      this.online.add(pk)
+      const groupmate = this.store.listConvs().some((c) => c.kind === 'group' && c.state === 'active' && this.store.members(c.id).current.has(pk))
+      if (peer?.state === 'accepted' || groupmate) this.announce('info', `${this.nameOf(pk)} is online`, this.nameOf(pk))
+    }
     if (peer?.state === 'outgoing' && !peer.requestSent) {
       if (link.send({ t: 'contact-request', note: peer.note })) this.store.upsertPeer(pk, { requestSent: true }, now)
     } else if (peer?.state === 'accepted' && !peer.acceptSent) {
@@ -1079,7 +1349,7 @@ export class Engine extends EventEmitter {
       case 'contact-request':
         return this.onContactRequest(link, frame.note)
       case 'contact-accept':
-        if (this.store.getPeer(link.pk)?.state === 'outgoing') this.acceptContact(link.pk)
+        if (this.store.getPeer(link.pk)?.state === 'outgoing') this.acceptContact(link.pk, true)
         return
       case 'group-invite':
         return this.onGroupInvite(link, frame)
@@ -1089,6 +1359,8 @@ export class Engine extends EventEmitter {
         return this.onEvents(link, frame.conv, frame.events)
       case 'ack':
         return this.onAck(link, frame)
+      case 'read':
+        return this.onRead(link, frame)
       default:
     }
   }
@@ -1141,7 +1413,11 @@ export class Engine extends EventEmitter {
       const conv = this.store.getConv(convId)
       if (!conv || conv.state === 'invited' || entry.left || !this.entitled(link.pk, conv)) continue
       if (conv.state === 'active') {
-        if (conv.kind === 'group' && conv.creator === this.me.pk) this.store.markJoined(convId, link.pk)
+        if (conv.kind === 'group' && conv.creator === this.me.pk) {
+          const was = this.store.isJoined(convId, link.pk)
+          this.store.markJoined(convId, link.pk)
+          if (!was) this.announce('success', `${this.nameOf(link.pk)} joined #${conv.title}`, `#${conv.title}`)
+        }
         const mine = entry.seqs[this.me.pk]
         if (mine !== undefined) this.store.setAck(convId, link.pk, this.me.pk, Math.min(mine, this.store.lastSeq(convId, this.me.pk)))
       }
@@ -1190,13 +1466,61 @@ export class Engine extends EventEmitter {
     if (!conv) return
     const who = this.nameOf(ev.author)
     const snippet = ev.body.slice(0, 60)
-    // Always announced, even in the open conversation: an unfocused terminal still needs to ring.
-    this.emit('notify', conv.kind === 'group' ? `#${conv.title}` : who, conv.kind === 'group' ? `${who}: ${snippet}` : snippet)
+    // Always a desktop alert with a chime, even in the open conversation: the user may be in another window.
+    this.alert(conv.kind === 'group' ? `#${conv.title}` : who, conv.kind === 'group' ? `${who}: ${snippet}` : snippet)
     if (this.activeId === conv.id) {
       this.store.markRead(conv.id, Date.now())
-      return
+      this.sendRead(conv.id)
+      // The popup is only redundant when the chat is open in a window you are looking at.
+      if (this.focused) return
     }
     this.toast('info', conv.kind === 'group' ? `#${conv.title} ${who}: ${snippet}` : `${who}: ${snippet}`)
+  }
+
+  /** Tells each peer (that speaks the 'read' frame) how far I have read their messages in `convId`. Waits until the window has focus. */
+  private sendRead(convId: string): void {
+    if (!this.focused) return
+    const conv = this.store.getConv(convId)
+    if (!conv || conv.state !== 'active') return
+    for (const pk of this.otherMembers(conv)) {
+      const seq = this.store.lastSeq(convId, pk)
+      const key = `${convId}:${pk}`
+      if (seq === 0 || (this.readSent.get(key) ?? 0) >= seq) continue
+      const link = this.net.link(pk)
+      if (link?.hello.caps.includes('read') !== true) continue
+      if (link.send({ t: 'read', conv: convId, author: pk, seq })) this.readSent.set(key, seq)
+    }
+  }
+
+  private onRead(link: PeerLink, frame: Extract<Frame, { t: 'read' }>): void {
+    if (frame.author !== this.me.pk) return
+    const conv = this.store.getConv(frame.conv)
+    if (!conv || !this.entitled(link.pk, conv) || frame.seq > this.store.lastSeq(frame.conv, this.me.pk)) return
+    const key = `${frame.conv}:${link.pk}`
+    if (frame.seq <= (this.readBy.get(key) ?? 0)) return
+    this.readBy.set(key, frame.seq)
+    const who = this.nameOf(link.pk)
+    this.announce('info', conv.kind === 'group' ? `${who} read your message in #${conv.title}` : `${who} read your message`, conv.kind === 'group' ? `#${conv.title}` : who)
+    this.emit('change')
+  }
+
+  /** The window gained or lost focus; regaining it marks the open chat as read for its senders. */
+  setFocused(focused: boolean): void {
+    if (this.focused === focused) return
+    this.focused = focused
+    if (focused && this.activeId !== null) this.sendRead(this.activeId)
+  }
+
+  /** A desktop notification (outside the terminal) with a chime; the settings turn either off. */
+  private alert(title: string, body: string): void {
+    this.emit('notify', title, body)
+    if (this.prefs.notify) desktopNotify({ title, body, sound: this.prefs.sound })
+  }
+
+  /** A popup in pager and a desktop alert with a chime. */
+  private announce(kind: ToastKind, text: string, title: string): void {
+    this.toast(kind, text)
+    this.alert(title, text)
   }
 
   private onAck(link: PeerLink, frame: Extract<Frame, { t: 'ack' }>): void {
@@ -1218,12 +1542,14 @@ export class Engine extends EventEmitter {
     return event
   }
 
-  private sendText(text: string): void {
+  /** Where chat, room and agent-tab text goes out: `:fire:` shortcodes become unicode here, so peers on any version see it. The terminal gets what was typed. */
+  private sendText(typed: string): void {
+    const text = this.activeId === TERM_ID ? typed : expandEmoji(typed)
     if (text.length > MAX_TEXT) {
       this.toast('error', `Message too long (max ${MAX_TEXT} characters)`)
       return
     }
-    if (this.activeId === ROOM_ID) return this.agents.say(text)
+    if (this.activeId === ROOM_ID || parseAgentTab(this.activeId) !== undefined) return this.agents.say(text, parseAgentTab(this.activeId))
     if (this.activeId === TERM_ID) return this.term.run(text)
     const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
     if (!conv) {
@@ -1236,6 +1562,7 @@ export class Engine extends EventEmitter {
     }
     const event = this.appendEvent(conv.id, 'text', text)
     this.store.markRead(conv.id, event.ts)
+    this.sendRead(conv.id)
     this.emit('change')
     for (const pk of this.otherMembers(conv)) this.sendEvents(this.net.link(pk), conv.id, [event])
   }

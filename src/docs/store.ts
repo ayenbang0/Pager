@@ -145,6 +145,11 @@ export class DocStore extends EventEmitter {
     return [...doc.editors].filter(([pk, ts]) => pk !== this.me && now - ts <= RECENT_MS).map(([pk]) => pk)
   }
 
+  /** Whether local edits are still waiting for the flush timer, i.e. not yet published to the other members. */
+  unsent(id: string): boolean {
+    return (this.docs.get(id)?.outbox.length ?? 0) > 0
+  }
+
   /** Every document with this name (case-insensitive, `.md` optional); names are only unique within one conversation. */
   matches(name: string, conv?: string): DocInfo[] {
     const want = docName(name).toLowerCase()

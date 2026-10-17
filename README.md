@@ -47,6 +47,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/terminal` | Open the built-in Terminal tab |
 | `/doc new <name> [in <chat>]` | Create a shared Markdown document; also `open`, `rename`, `rm`, `list`. Without `in <chat>` it is private |
 | `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `chain`, `memory`, `commands`, `runs`, `stop`, `merge`, `drop`, `check` |
+| `/agent setup` | See which agent CLIs are installed and ready, add a teammate (Enter) or register a custom ACP agent (`custom: <id> <command…>`) |
 | `/quit` | Exit |
 
 ## Keys
@@ -60,6 +61,8 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | Ctrl+G | Keyboard shortcut help (no printable key is a shortcut, so every character, `?` included, types normally) |
 | Alt+Up / Alt+Down | Previous / next conversation (home is first) |
 | Ctrl+O / Ctrl+N | Same, for terminals that do not send Alt+arrows (macOS Terminal.app by default) |
+| Alt+M | In an agent tab: pick that agent's model and effort (also the palette, `/agent model|effort <name>`, or a click on the chip in the tab header) |
+| Alt+Q | Jump to the agent that is asking you a question; the question appears in place of the prompt (Up/Down, Space, Enter, Tab, Esc) |
 | Ctrl+B | Toggle the sidebar (saved) |
 | Mouse wheel / trackpad scroll, PgUp / PgDn | Scroll messages (3 lines per wheel notch). With the wheel active, hold Shift (Option in iTerm2) to select text with the mouse |
 | Ctrl+T, click `▸ N more lines` | Fold / expand long messages (over 30 rows) |

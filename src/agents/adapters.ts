@@ -1,17 +1,28 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { stripVTControlCharacters } from 'node:util'
+import { PRESETS } from './catalog.js'
 
-export const AGENT_NAMES = ['omp', 'claude', 'opencode', 'hermes'] as const
-export type AgentName = (typeof AGENT_NAMES)[number]
+/** An agent's CLI id: a catalog preset, a custom entry in agents.json, or a test adapter. */
+export type AgentName = string
+
+export interface RunOptions {
+  model?: string
+  effort?: string
+  /** JSON for `--mcp-config` (the pager tool server); only claude's one-shot mode takes it. */
+  mcpConfig?: string
+}
 
 export interface AdapterSpec {
   /** Command name on PATH, or an absolute path. */
   bin: string
-  args(prompt: string, cwd: string): string[]
-  extract(stdout: string): string
-  /** Args after `bin` that start the agent's ACP server over stdio; absent = one-shot only. */
+  /** One-shot headless run; absent for agents that only speak ACP. */
+  args?(prompt: string, cwd: string, opts?: RunOptions): string[]
+  extract?(stdout: string): string
+  /** Args after `bin` (or `acpBin`) that start the agent's ACP server over stdio; absent = one-shot only. */
   acp?: string[]
+  /** Separate binary for the ACP server when it differs from `bin` (claude-agent-acp). */
+  acpBin?: string
   /** False keeps ACP streaming but drops native session resume (default true). */
   resume?: boolean
 }
@@ -29,39 +40,52 @@ function hermesExtract(s: string): string {
   return lines.join('\n').trim()
 }
 
-// One-shot runs are headless, auto-approving (runs only inside a throwaway worktree) and stateless.
+// One-shot runs are headless, auto-approving (runs only inside the agent's own worktree) and stateless.
 // `acp` adds the args that start the agent's Agent Client Protocol server: pager then streams its
-// replies live and keeps its native session between tasks (see acp.ts). claude has no ACP mode.
-export const ADAPTERS: Record<AgentName, AdapterSpec> = {
+// replies live and keeps its native session between tasks (see acp.ts). claude has ACP only through
+// the separate `claude-agent-acp` adapter, when that is installed.
+const flags = (cli: string, opts: RunOptions | undefined): string[] => {
+  const preset = PRESETS[cli]
+  return [
+    ...(opts?.model !== undefined && preset?.modelFlag !== undefined ? [...preset.modelFlag, opts.model] : []),
+    ...(opts?.effort !== undefined && preset?.effortFlag !== undefined ? [...preset.effortFlag, opts.effort] : []),
+  ]
+}
+
+export const ADAPTERS: Record<string, AdapterSpec> = {
   omp: {
     bin: 'omp',
-    args: (prompt, cwd) => ['-p', '--no-session', '--cwd', cwd, prompt],
+    args: (prompt, cwd, opts) => ['-p', '--no-session', '--cwd', cwd, ...flags('omp', opts), prompt],
     extract: cleanOutput,
     acp: ['acp'],
-    resume: false, // session/load fails when the cwd differs from the session's (each run has its own worktree)
   },
   claude: {
     bin: 'claude',
-    args: (prompt) => ['-p', '--permission-mode', 'bypassPermissions', '--no-session-persistence', prompt],
+    args: (prompt, _cwd, opts) => [
+      '-p',
+      '--permission-mode',
+      'bypassPermissions',
+      '--no-session-persistence',
+      ...flags('claude', opts),
+      ...(opts?.mcpConfig === undefined ? [] : ['--mcp-config', opts.mcpConfig]),
+      prompt,
+    ],
     extract: cleanOutput,
+    acpBin: 'claude-agent-acp',
+    acp: [],
   },
   opencode: {
     bin: 'opencode',
-    args: (prompt, cwd) => ['run', '--auto', '--dir', cwd, prompt],
+    args: (prompt, cwd, opts) => ['run', '--auto', '--dir', cwd, ...flags('opencode', opts), prompt],
     extract: cleanOutput,
     acp: ['acp'],
-    resume: false, // session/load succeeds but keeps working in the old worktree, ignoring the new cwd
   },
   hermes: {
     bin: 'hermes',
-    args: (prompt, cwd) => ['chat', '-Q', '--oneshot', '--yolo', '--in', cwd, '-q', prompt],
+    args: (prompt, cwd, opts) => ['chat', '-Q', '--oneshot', '--yolo', '--in', cwd, ...flags('hermes', opts), '-q', prompt],
     extract: hermesExtract,
     acp: ['acp'],
   },
-}
-
-export function isAgentName(s: string): s is AgentName {
-  return (AGENT_NAMES as readonly string[]).includes(s)
 }
 
 async function isFile(p: string): Promise<boolean> {

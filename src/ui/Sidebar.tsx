@@ -1,59 +1,47 @@
-import { Box, Text } from 'ink'
+import { Box } from 'ink'
 import type { ConvView, PendingView } from '../engine.js'
-import { ROOM_ID, type RoomView, type RunView } from '../agents/orchestrator.js'
+import { parseAgentTab } from '../agents/ids.js'
+import { ROOM_ID, type RoomView } from '../agents/orchestrator.js'
+import type { AgentView } from '../agents/types.js'
 import { TERM_ID } from '../terminal.js'
 import { DOCS_ID } from '../docs/store.js'
-import { Spinner } from './Spinner.js'
-import { useTheme } from './theme.js'
+import { SegLine } from './SegLine.js'
+import { useBlink } from './Spinner.js'
+import { SpinnerLine } from './SpinnerLine.js'
+import { agentTint } from './look.js'
+import { pillSeg } from './segs.js'
+import { agentRowSpec, buildRow, groupHeader, unreadBadge, type RowSpec } from './sidebarRows.js'
+import { tabGroups } from './tabs.js'
+import { useLook, useTheme } from './theme.js'
 
 export const SIDEBAR_WIDTH = 26
+/** Row width: the sidebar less its right border column. */
+const ROW_WIDTH = SIDEBAR_WIDTH - 1
 
-interface RowProps {
-  label: string
-  active: boolean
-  color?: string
-  dim?: boolean
-  badge?: number
-}
-
-function Row({ label, active, color, dim, badge }: RowProps) {
+function Header({ title }: { title: string }) {
   const theme = useTheme()
   return (
-    <Box justifyContent="space-between">
-      <Box flexShrink={1}>
-        <Text wrap="truncate-end" inverse={active} color={color} dimColor={dim}>
-          {label}
-        </Text>
-      </Box>
-      {badge ? <Text color={theme.badge}> {badge}</Text> : null}
+    <Box width={ROW_WIDTH} height={1}>
+      <SegLine segs={groupHeader(title, ROW_WIDTH, theme)} />
     </Box>
   )
 }
 
-/** One agent run: a spinner while active, a state glyph otherwise. */
-function RunRow({ run }: { run: RunView }) {
+function Row({ spec, active }: { spec: RowSpec; active: boolean }) {
   const theme = useTheme()
-  const mark =
-    run.state === 'running' ? (
-      <Spinner color={theme.badge} />
-    ) : run.state === 'queued' ? (
-      <Text dimColor>·</Text>
-    ) : run.state === 'done' ? (
-      <Text color={theme.success}>✓</Text>
-    ) : run.state === 'failed' ? (
-      <Text color={theme.error}>✗</Text>
-    ) : (
-      <Text dimColor>■</Text>
-    )
   return (
-    <Box>
-      {mark}
-      <Text> </Text>
-      <Text wrap="truncate-end" dimColor={run.state === 'cancelled'}>
-        {run.id}
-      </Text>
+    <Box width={ROW_WIDTH} height={1}>
+      <SpinnerLine segs={buildRow(spec, active, ROW_WIDTH, theme)} />
     </Box>
   )
+}
+
+function AgentRow({ agent, active }: { agent: AgentView; active: boolean }) {
+  const theme = useTheme()
+  const look = useLook()
+  const blink = useBlink()
+  const tint = agent.color ?? agentTint(theme, look, agent.name)
+  return <Row spec={agentRowSpec(agent, tint, theme, blink)} active={active} />
 }
 
 interface Props {
@@ -66,59 +54,65 @@ interface Props {
 
 export function Sidebar({ convs, pending, room, activeId, terminalRunning }: Props) {
   const theme = useTheme()
-  const dms = convs.filter((c) => c.kind === 'dm')
-  const groups = convs.filter((c) => c.kind === 'group')
+  const groups = tabGroups(
+    convs,
+    room.agents.map((a) => a.name),
+  )
+  const byId = new Map(convs.map((c) => [c.id, c]))
+  const byName = new Map(room.agents.map((a) => [a.name, a]))
+  const chatRow = (id: string) => {
+    const conv = byId.get(id)
+    const active = activeId === id
+    if (conv?.kind === 'dm') {
+      const online = conv.online === true
+      const spec: RowSpec = {
+        glyph: online ? '●' : '○',
+        glyphColor: online ? theme.online : theme.dim,
+        label: conv.title,
+        labelColor: online ? theme.text : theme.dim,
+        badge: unreadBadge(conv.unread, theme),
+      }
+      return <Row key={id} spec={spec} active={active} />
+    }
+    if (conv) return <Row key={id} spec={{ glyph: '#', glyphColor: theme.accent2, label: conv.title, badge: unreadBadge(conv.unread, theme) }} active={active} />
+    if (id === ROOM_ID) {
+      return <Row key={id} spec={{ glyph: '⌁', glyphColor: theme.accent2, label: 'agents', badge: unreadBadge(room.unread, theme) }} active={active} />
+    }
+    const agent = byName.get(parseAgentTab(id) ?? '')
+    return agent === undefined ? null : <AgentRow key={id} agent={agent} active={active} />
+  }
   return (
     <Box
       width={SIDEBAR_WIDTH}
       flexDirection="column"
-      paddingX={1}
-      borderStyle="single"
+      borderStyle="bold"
       borderColor={theme.border}
       borderTop={false}
       borderBottom={false}
       borderLeft={false}
     >
-      <Row label="⌂ home" active={activeId === null} />
-      {dms.length > 0 ? (
-        <>
-          <Text dimColor>DIRECT</Text>
-          {dms.map((c) => (
-            <Row
-              key={c.id}
-              label={`${c.online ? '●' : '○'} ${c.title}`}
-              active={activeId === c.id}
-              color={c.online ? theme.online : undefined}
-              dim={!c.online}
-              badge={c.unread}
-            />
-          ))}
-        </>
-      ) : null}
-      {groups.length > 0 ? (
-        <>
-          <Text dimColor>GROUPS</Text>
-          {groups.map((c) => (
-            <Row key={c.id} label={`# ${c.title}`} active={activeId === c.id} badge={c.unread} />
-          ))}
-        </>
-      ) : null}
-      <Text dimColor>TOOLS</Text>
-      <Row label="▸ terminal" active={activeId === TERM_ID} badge={terminalRunning ? 1 : 0} />
-      <Row label="▤ docs" active={activeId === DOCS_ID} />
-      <Text dimColor>AGENTS</Text>
-      <Row label="⌁ agents" active={activeId === ROOM_ID} badge={room.unread} />
-      {room.runs.slice(-5).map((r) => (
-        <RunRow key={r.id} run={r} />
+      <Header title="HOME" />
+      <Row spec={{ glyph: '⌂', glyphColor: theme.accent, label: 'home' }} active={activeId === null} />
+      <Header title="CHATS" />
+      {groups.chats.map(chatRow)}
+      {pending.map((p) => (
+        <Row
+          key={p.n}
+          spec={{ glyph: '◌', glyphColor: theme.badge, label: `${p.label} (${p.type})`, labelColor: theme.badge, badge: [pillSeg(`#${p.n}`, theme.pill.warning)] }}
+          active={false}
+        />
       ))}
-      {pending.length > 0 ? (
-        <>
-          <Text dimColor>PENDING</Text>
-          {pending.map((p) => (
-            <Row key={p.n} label={`${p.n} ${p.label} (${p.type})`} active={false} color={theme.badge} />
-          ))}
-        </>
-      ) : null}
+      <Header title="TOOLS" />
+      <Row
+        spec={{
+          glyph: '▸',
+          glyphColor: theme.accent,
+          label: 'terminal',
+          ...(terminalRunning ? { badge: [pillSeg('● run', theme.pill.success)] } : {}),
+        }}
+        active={activeId === TERM_ID}
+      />
+      <Row spec={{ glyph: '▤', glyphColor: theme.accent, label: 'docs' }} active={activeId === DOCS_ID} />
     </Box>
   )
 }
