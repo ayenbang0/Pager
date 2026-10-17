@@ -25,9 +25,11 @@ export interface Settings {
   notify: boolean
   /** `/sound`: the chime that goes with a notification. */
   sound: boolean
+  /** The last pager version the user saw a changelog for; empty means "show on next launch". */
+  lastSeenVersion: string
 }
 
-export const DEFAULT_SETTINGS: Settings = { theme: DEFAULT_THEME.name, sidebar: true, accent: '', badge: 'auto', density: 'cozy', notify: true, sound: true }
+export const DEFAULT_SETTINGS: Settings = { theme: DEFAULT_THEME.name, sidebar: true, accent: '', badge: 'auto', density: 'cozy', notify: true, sound: true, lastSeenVersion: '' }
 
 /** A badge is `auto`, `none`, or one symbol or emoji (one grapheme, not a letter or digit). Returns the stored form or undefined. */
 export function parseBadge(input: string): string | undefined {
@@ -56,6 +58,7 @@ export function loadSettings(dir: string): Settings {
     density: isDensity(parsed.density) ? parsed.density : DEFAULT_SETTINGS.density,
     notify: typeof parsed.notify === 'boolean' ? parsed.notify : DEFAULT_SETTINGS.notify,
     sound: typeof parsed.sound === 'boolean' ? parsed.sound : DEFAULT_SETTINGS.sound,
+    lastSeenVersion: typeof parsed.lastSeenVersion === 'string' ? parsed.lastSeenVersion : DEFAULT_SETTINGS.lastSeenVersion,
   }
 }
 

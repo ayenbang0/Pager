@@ -7,6 +7,11 @@ export function focusEvents(chunk: string): boolean[] {
   return [...chunk.matchAll(/\x1b\[([IO])/g)].map((m) => m[1] === 'I')
 }
 
+/** Terminals known to report focus (ESC [ I / ESC [ O) once asked: their "focused" can be trusted from the start. */
+export function focusReporting(env: NodeJS.ProcessEnv): boolean {
+  return env.WT_SESSION !== undefined || env.KITTY_WINDOW_ID !== undefined || ['iTerm.app', 'ghostty', 'WezTerm', 'vscode'].includes(env.TERM_PROGRAM ?? '')
+}
+
 const clean = (s: string): string => s.replace(/[\p{Cc};]/gu, ' ').slice(0, 120)
 
 /**

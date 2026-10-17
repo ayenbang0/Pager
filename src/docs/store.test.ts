@@ -144,3 +144,23 @@ test('every published body fits the wire limit even for escape-heavy pastes and 
   assert.equal(bob.text(doc.id), quoted)
   assert.equal(ann.text(doc.id), quoted)
 })
+
+test('an anchor on a line survives two collaborators editing above and below it in one delivery', () => {
+  const { ann, bob, deliver } = pair()
+  const doc = ann.create('grp:x', 'Plan')
+  assert.equal(typeof doc, 'object')
+  if (typeof doc === 'string') return
+  const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`)
+  ann.insert(doc.id, 0, lines.join('\n'))
+  ann.flush()
+  deliver()
+  const at = bob.text(doc.id).indexOf('line 30')
+  const anchor = bob.anchorAt(doc.id, at, false)
+  ann.insert(doc.id, ann.text(doc.id).indexOf('line 2'), 'top\n')
+  ann.flush()
+  ann.insert(doc.id, ann.text(doc.id).indexOf('line 38'), 'bottom\n')
+  ann.flush()
+  deliver()
+  assert.equal(bob.text(doc.id).slice(bob.positionOf(doc.id, anchor)).startsWith('line 30'), true)
+  assert.notEqual(bob.positionOf(doc.id, anchor), at)
+})

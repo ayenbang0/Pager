@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { randomBytes } from 'node:crypto'
 import { isRecord } from '../guards.js'
-import { TextCrdt, type Id, type Inverse, type InsertOp, type TextOp } from './crdt.js'
+import { TextCrdt, type Anchor, type Id, type Inverse, type InsertOp, type TextOp } from './crdt.js'
 
 /**
  * Document operations travel inside ordinary signed chat events of kind `text`, so peers on older versions keep
@@ -136,6 +136,16 @@ export class DocStore extends EventEmitter {
 
   text(id: string): string {
     return this.docs.get(id)?.crdt.text() ?? ''
+  }
+
+  /** An anchor for position `pos` of a document (see TextCrdt.anchorAt). */
+  anchorAt(id: string, pos: number, after: boolean): Anchor {
+    return this.docs.get(id)?.crdt.anchorAt(pos, after) ?? { id: null, after }
+  }
+
+  /** Where an anchor is now. */
+  positionOf(id: string, anchor: Anchor): number {
+    return this.docs.get(id)?.crdt.positionOf(anchor) ?? 0
   }
 
   /** Public keys of others who edited this document in the last 30 seconds. */

@@ -60,7 +60,16 @@ test('r rechecks the selected agent, but types when the custom row is focused', 
   assert.equal(typed.state.text, 'myr')
 })
 
-test('printable keys never act on an agent row other than r', () => {
+test('x and Delete remove from the selected agent, but x types when the custom row is focused', () => {
+  assert.deepEqual(setupKey(at(1), rows, { input: 'x' }).effect, { kind: 'remove', cli: 'gemini' })
+  assert.deepEqual(setupKey(at(0), rows, { input: '', delete: true }).effect, { kind: 'remove', cli: 'omp' })
+  assert.equal(setupKey(at(0), rows, { input: 'x', ctrl: true }).effect, undefined)
+  const typed = setupKey(at(rows.length, 'my'), rows, { input: 'x' })
+  assert.equal(typed.effect, undefined)
+  assert.equal(typed.state.text, 'myx')
+})
+
+test('printable keys never act on an agent row other than r and x', () => {
   assert.equal(setupKey(at(0), rows, { input: 'q' }).effect, undefined)
   assert.equal(setupKey(at(0), rows, { input: 'a' }).state.text, '')
 })

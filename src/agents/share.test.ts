@@ -193,3 +193,42 @@ test('a peer without the collab capability is never sent a collab frame, and fra
   share.close()
   await orch.close()
 })
+
+test('inviting an offline contact says so once, and a second invite while one is open changes the access', async () => {
+  const { host, guest } = await session()
+  await host.engine.submit('/agent invite bob')
+  await waitFor(() => guest.engine.pending().some((p) => p.type === 'session' && p.label.includes('(control)')), 20_000, 'control invite')
+  await host.engine.submit('/agent invite bob --view')
+  await waitFor(() => guest.engine.pending().some((p) => p.type === 'session' && p.label.includes('(view)')), 20_000, 'view invite')
+  assert.equal(host.engine.sessionGuests()[0]?.access, 'view')
+  await guest.engine.close()
+  await waitFor(() => host.engine.convs().every((c) => c.online === false), 20_000, 'host sees bob offline')
+  await host.engine.submit('/agent kick bob')
+  await host.engine.submit('/agent invite bob')
+  const text = host.toasts.at(-1)?.text ?? ''
+  assert.match(text, /is offline/)
+  assert.equal(text.split('bob').length - 1, 1, text)
+})
+
+test('a guest who just joined sees a welcome line before anything arrives', async () => {
+  const { host, guest, hostTab } = await session()
+  await host.engine.submit('/agent invite bob')
+  await waitFor(() => guest.engine.pending().some((p) => p.type === 'session'), 20_000, 'session invite')
+  await guest.engine.submit('/accept 1')
+  assert.match(guest.toasts.at(-1)?.text ?? '', /Joined .*agent session/)
+  const first = guest.engine.messages(hostTab, 100)[0]
+  assert.equal(first?.key, 'shared:welcome')
+  assert.match(first?.text ?? '', /Joined .* agent session/)
+})
+
+test('a host outside a git repository tells the guest why its request does nothing', async () => {
+  const host = await boot('alice', { workdir: tmpDir('pager-w-'), agentAdapters: adapters })
+  await host.engine.checkAgents()
+  const guest = await boot('bob')
+  await befriend(host, guest)
+  const hostTab = sharedTabId(host.engine.me.pk)
+  await join(host, guest)
+  await waitFor(() => host.toasts.some((t) => /not inside a git repository/.test(t.text)), 20_000, 'host warned')
+  await guest.engine.submit('@omp hi')
+  await waitFor(() => guest.engine.messages(hostTab, 100).some((m) => /git repository/.test(m.text)), 30_000, 'guest told why')
+})

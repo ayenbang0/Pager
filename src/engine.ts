@@ -8,6 +8,7 @@ import { AgentShare, type GuestView, type SharedRoom, type SharedView } from './
 import { Orchestrator, ROOM_ID, type AgentStats, type RoomView, type SetupRow } from './agents/orchestrator.js'
 import type { AnswerMap, QuestionView } from './agents/questions.js'
 import { COMMANDS, parseCommand } from './commands.js'
+import { formatChangelog, getChangesSince, isNewer as isNewerChangelog, latestVersion as latestChangelogVersion, loadChangelog } from './changelog.js'
 import { Terminal, TERM_ID, type TermEntry, type TermState } from './terminal.js'
 import { DocStore, DOCS_ID, DOC_PREFIX, type DocInfo } from './docs/store.js'
 import { ContactCodeError, decodeContactCode, encodeContactCode } from './contactCode.js'
@@ -26,7 +27,7 @@ import { findTheme, THEMES } from './themes.js'
 import { isNewer, latestVersion } from './update.js'
 import { VERSION } from './version.js'
 import { parseChain, splitArgs } from './agents/protocol.js'
-import { desktopNotify } from './desktop.js'
+import { closeDesktop, desktopNotify, warmDesktop } from './desktop.js'
 import type { Frame } from './wire.js'
 
 export type ToastKind = 'info' | 'success' | 'warn' | 'error'
@@ -77,7 +78,7 @@ export interface MessageView {
   text: string
   /** Render Markdown (agent replies only; peer text stays literal). */
   markdown?: boolean
-  status: 'pending' | 'delivered' | 'read' | null
+  status: 'pending' | 'sent' | 'delivered' | 'read' | null
 }
 export interface EngineOptions {
   dir: string
@@ -143,6 +144,10 @@ export class Engine extends EventEmitter {
   private prefs: Settings
   /** Whether the terminal window has focus (read receipts wait until you can actually see the chat). */
   private focused = true
+  /** Whether focus reports can be believed (a terminal that never reports would otherwise look focused forever and lose every alert). */
+  private focusTrusted = false
+  /** `conv:pk` to the highest of my message seqs written to that peer's open link (not necessarily acknowledged). */
+  private readonly sentTo = new Map<string, number>()
   /** Peers with an open link, to tell the first connection from a reconnect. */
   private readonly online = new Set<string>()
   /** `conv:pk` to the highest of my message seqs that peer has told me they read. */
@@ -194,6 +199,7 @@ export class Engine extends EventEmitter {
     this.net.on('close', (pk: string) => {
       this.share.onClose(pk)
       this.online.delete(pk)
+      for (const key of this.sentTo.keys()) if (key.endsWith(`:${pk}`)) this.sentTo.delete(key)
       this.emit('change')
     })
     this.agents = new Orchestrator({
@@ -234,6 +240,34 @@ export class Engine extends EventEmitter {
     this.term.on('finished', (e: TermEntry) => {
       if (Date.now() - e.ts >= LONG_COMMAND_MS) this.alert('terminal', `${e.command.slice(0, 60)} ${e.state === 'done' ? 'finished' : e.state}`)
     })
+    if (this.prefs.notify) warmDesktop()
+    this.showNewRelease()
+  }
+
+  private showNewRelease(): void {
+    if (!isNewerChangelog(VERSION, this.prefs.lastSeenVersion)) return
+    const sections = loadChangelog()
+    if (sections.length === 0) return
+    const recent = getChangesSince(sections, this.prefs.lastSeenVersion)
+    const lines = recent.length > 0 ? formatChangelog(recent, 72) : formatChangelog(sections, 72, 1)
+    this.homeLines = [`What's new in pager ${VERSION}`, '', ...lines]
+    this.markChangelogSeen()
+  }
+
+  markChangelogSeen(): void {
+    this.updateSettings({ lastSeenVersion: VERSION })
+  }
+
+  changelogText(version?: string): string[] {
+    const sections = loadChangelog()
+    if (sections.length === 0) return ['Changelog not available.']
+    const since = version ?? this.prefs.lastSeenVersion
+    const recent = getChangesSince(sections, since)
+    return recent.length > 0 ? formatChangelog(recent, 72) : formatChangelog(sections, 72, 1)
+  }
+
+  latestChangelogVersion(): string | null {
+    return latestChangelogVersion(loadChangelog())
   }
 
   // ---------------------------------------------------------------- queries
@@ -366,9 +400,10 @@ export class Engine extends EventEmitter {
       if (e.kind === 'member-leave') return { ...base, kind: 'system', text: `${authorName} left`, status: null }
       let status: MessageView['status'] = null
       if (mine) {
+        const sent = others.length > 0 && others.every((pk) => (this.sentTo.get(`${convId}:${pk}`) ?? 0) >= e.seq)
         const delivered = others.length > 0 && others.every((pk) => this.store.getAck(convId, pk, this.me.pk) >= e.seq)
         const read = delivered && others.every((pk) => (this.readBy.get(`${convId}:${pk}`) ?? 0) >= e.seq)
-        status = read ? 'read' : delivered ? 'delivered' : 'pending'
+        status = read ? 'read' : delivered ? 'delivered' : sent ? 'sent' : 'pending'
       }
       return { ...base, kind: 'text', text: e.body, status }
     })
@@ -699,6 +734,7 @@ export class Engine extends EventEmitter {
     this.term.close()
     this.docs.close()
     this.share.close()
+    closeDesktop()
     await this.agents.close()
     await this.net.stop()
     this.store.close()
@@ -747,6 +783,8 @@ export class Engine extends EventEmitter {
         return this.cmdSwitch('sound', rest, 'Notification sound')
       case 'update':
         return this.cmdUpdate()
+      case 'changelog':
+        return this.setHome(this.changelogText(rest.trim() || undefined))
       case 'agent':
         return this.cmdAgent(rest, args)
       case 'exit':
@@ -792,10 +830,20 @@ export class Engine extends EventEmitter {
         const problem = await this.agents.addCustom(id.toLowerCase(), command)
         return this.toast(problem === undefined ? 'success' : 'error', problem ?? `${id} is ready: /agent new ${id.toLowerCase()}`)
       }
-      case 'remove':
-        if (!this.agents.removeAgent(nameArg)) return this.toast('error', `No agent "${nameArg}"`)
-        if (parseAgentTab(this.activeId) === nameArg) this.activate(ROOM_ID)
-        return this.toast('info', `${nameArg} left the team`)
+      case 'remove': {
+        const team = this.agentTeam()
+        if (team.includes(nameArg)) {
+          const kept = (await this.agents.deleteAgent(nameArg)) === 'kept'
+          if (parseAgentTab(this.activeId) === nameArg) this.activate(ROOM_ID)
+          return this.toast('info', kept ? `${nameArg} left the team. Its workspace has unmerged work and was kept: /agent merge ${nameArg} or /agent drop ${nameArg}` : `${nameArg} was deleted`)
+        }
+        if (Object.hasOwn(this.agents.registry.custom(), nameArg)) {
+          const why = this.agents.registry.removeCustom(nameArg)
+          this.agents.emit('change')
+          return this.toast(why === null ? 'info' : 'error', why ?? `${nameArg} was removed`)
+        }
+        return this.toast('error', `Usage: /agent remove <${team.join('|') || 'name'}>`)
+      }
       case 'setup':
         this.emit('overlay', 'agents')
         return
@@ -909,8 +957,30 @@ export class Engine extends EventEmitter {
     if ('error' in res) return this.toast('error', res.error)
     const why = this.share.invite(res.item.pk, access)
     const who = res.item.name || pk8(res.item.pk)
-    if (why !== undefined) return this.toast('error', `${who}: ${why}`)
+    if (why !== undefined) return this.toast('error', why)
     this.toast('success', `Invited ${who} to your agent session (${access})`)
+    if (this.agents.names().length === 0) this.toast('warn', `No agent is ready yet (/agent setup): ${who} will see an empty room until one is`)
+    void this.agents.hasRepo().then((ok) => {
+      if (!ok) this.toast('warn', `pager is not inside a git repository, so your agents cannot run: ${who}'s requests will fail. Start pager inside one.`)
+    })
+  }
+
+  /** Names of every accepted contact (the invite completion lists them). */
+  contactNames(): string[] {
+    return this.store.listPeers().filter((p) => p.state === 'accepted').map((p) => p.name || pk8(p.pk))
+  }
+
+  /** Every teammate, ready or not (the palette's delete entries). */
+  agentTeam(): string[] {
+    return this.agents.registry.instances().map((c) => c.name)
+  }
+
+  /** The setup screen's `x`: removes the newest teammate that runs `cli`; with none, forgets the custom agent definition `cli`. */
+  async removeAgentOf(cli: string): Promise<void> {
+    const last = this.agents.registry.instances().filter((c) => c.cli === cli).at(-1)
+    if (last !== undefined) return this.runCommand(`/agent remove ${last.name}`)
+    if (Object.hasOwn(this.agents.registry.custom(), cli)) return this.runCommand(`/agent remove ${cli}`)
+    this.toast('info', `No ${cli} teammate to remove`)
   }
 
   private agentGuests(): void {
@@ -1054,7 +1124,10 @@ export class Engine extends EventEmitter {
     if (wanted !== 'on' && wanted !== 'off') return this.toast('info', `${label}: ${this.prefs[key] ? 'on' : 'off'}. /${key} on|off`)
     this.updateSettings({ [key]: wanted === 'on' })
     this.toast('success', `${label}: ${wanted}`)
-    if (wanted === 'on' && key === 'notify') this.alert('pager', 'Notifications are on')
+    if (wanted === 'on' && key === 'notify') {
+      warmDesktop()
+      this.alert('pager', 'Notifications are on', true)
+    }
   }
 
   private cmdDensity(raw: string): void {
@@ -1073,7 +1146,7 @@ export class Engine extends EventEmitter {
       lines.push(`  ${p.name || pk8(p.pk)}: ${p.state === 'outgoing' ? 'request pending, ' : ''}${state}`)
     }
     if (lines.length === 1) lines.push('  no contacts yet')
-    lines.push(`Listening: ${this.net.listening ? 'yes' : 'no'}`, `Log: ${this.netLog.file}`)
+    lines.push(`Network: ${this.net.stats() ?? 'not started'}`, `Listening: ${this.net.listening ? 'yes' : 'no'}`, `Log: ${this.netLog.file}`)
     this.setHome(lines)
   }
 
@@ -1162,8 +1235,9 @@ export class Engine extends EventEmitter {
     } else if (item.session) {
       if (!accept) return this.share.decline(item.session)
       const why = this.share.accept(item.session)
-      if (why !== undefined) this.toast('error', why)
-      else this.activate(sharedTabId(item.session))
+      if (why !== undefined) return this.toast('error', why)
+      this.activate(sharedTabId(item.session))
+      this.toast('success', `Joined ${this.share.sessions().find((s) => s.pk === item.session)?.name ?? 'the host'}'s agent session: ask with @agent <task>`)
     }
   }
 
@@ -1529,15 +1603,21 @@ export class Engine extends EventEmitter {
     if (!link) return
     let batch: WireEvent[] = []
     let bytes = 0
+    let mine = 0
     const flush = (): void => {
-      if (batch.length > 0) link.send({ t: 'events', conv: convId, events: batch })
+      if (batch.length > 0 && link.send({ t: 'events', conv: convId, events: batch }) && mine > 0) {
+        const key = `${convId}:${link.pk}`
+        this.sentTo.set(key, Math.max(this.sentTo.get(key) ?? 0, mine))
+      }
       batch = []
       bytes = 0
+      mine = 0
     }
     for (const { conv: _conv, ...wire } of events) {
       const size = Buffer.byteLength(JSON.stringify(wire))
       if (batch.length >= EVENTS_PER_FRAME || bytes + size > EVENTS_BYTES_PER_FRAME) flush()
       batch.push(wire)
+      if (wire.author === this.me.pk) mine = Math.max(mine, wire.seq)
       bytes += size
     }
     flush()
@@ -1601,7 +1681,7 @@ export class Engine extends EventEmitter {
     if (!conv) return
     const who = this.nameOf(ev.author)
     const snippet = ev.body.slice(0, 60)
-    // Always a desktop alert with a chime, even in the open conversation: the user may be in another window.
+    // The desktop alert is skipped while pager has focus (see alert()).
     this.alert(conv.kind === 'group' ? `#${conv.title}` : who, conv.kind === 'group' ? `${who}: ${snippet}` : snippet)
     if (this.activeId === conv.id) {
       this.store.markRead(conv.id, Date.now())
@@ -1634,22 +1714,22 @@ export class Engine extends EventEmitter {
     const key = `${frame.conv}:${link.pk}`
     if (frame.seq <= (this.readBy.get(key) ?? 0)) return
     this.readBy.set(key, frame.seq)
-    const who = this.nameOf(link.pk)
-    this.announce('info', conv.kind === 'group' ? `${who} read your message in #${conv.title}` : `${who} read your message`, conv.kind === 'group' ? `#${conv.title}` : who)
     this.emit('change')
   }
 
   /** The window gained or lost focus; regaining it marks the open chat as read for its senders. */
-  setFocused(focused: boolean): void {
-    if (this.focused === focused) return
+  setFocused(focused: boolean, trusted: boolean): void {
+    if (this.focused === focused && this.focusTrusted === trusted) return
     this.focused = focused
+    this.focusTrusted = trusted
     if (focused && this.activeId !== null) this.sendRead(this.activeId)
   }
 
-  /** A desktop notification (outside the terminal) with a chime; the settings turn either off. */
-  private alert(title: string, body: string): void {
+  /** A desktop notification (outside the terminal) with a chime; the settings turn either off, and it is skipped while pager has trusted focus unless forced. */
+  private alert(title: string, body: string, force = false): void {
     this.emit('notify', title, body)
-    if (this.prefs.notify) desktopNotify({ title, body, sound: this.prefs.sound })
+    if (!this.prefs.notify || (!force && this.focused && this.focusTrusted)) return
+    desktopNotify({ title, body, sound: this.prefs.sound })
   }
 
   /** A popup in pager and a desktop alert with a chime. */

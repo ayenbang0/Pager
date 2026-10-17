@@ -1091,6 +1091,10 @@ function parseCmd(p: string, visual: boolean): Parsed {
 
 function normalKey(w: Work, key: KeyInput): void {
   const visual = w.mode === 'visual' || w.mode === 'vline'
+  if (visual && (key.named === 'backspace' || key.named === 'delete')) {
+    w.pending = ''
+    return visualCommand(w, 'd', null)
+  }
   const printable = !key.named && !key.ctrl && key.input !== ''
   let token = ''
   if (key.named) token = Object.hasOwn(NAMED_TOKENS, key.named) ? (NAMED_TOKENS[key.named] ?? '') : ''
@@ -1371,6 +1375,15 @@ function cmdKey(w: Work, key: KeyInput): void {
 
 function step(w: Work, key: KeyInput): void {
   w.message = ''
+  if (key.ctrl === true && key.input === 'a' && w.mode !== 'command' && w.mode !== 'search') {
+    w.mode = 'visual'
+    w.anchor = 0
+    w.cursor = norm(w.text, w.text.length)
+    w.pending = ''
+    w.goal = -1
+    finalize(w)
+    return
+  }
   if (key.named === 'escape') {
     if (w.mode === 'insert') {
       if (w.cursor > lineStart(w.text, w.cursor)) w.cursor--

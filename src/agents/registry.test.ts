@@ -56,6 +56,19 @@ test('an unknown cli is refused until a custom agent defines it', () => {
   assert.deepEqual(reg.addInstance('nope'), { name: 'nope', cli: 'nope' })
 })
 
+test('removeCustom forgets a custom agent only once no teammate runs it, and survives a reload', () => {
+  const dir = tmp()
+  const reg = new Registry(dir)
+  assert.equal(reg.addCustom('mine', ['node', 'x.js']), null)
+  reg.addInstance('mine')
+  assert.match(String(reg.removeCustom('mine')), /teammates/)
+  assert.equal(reg.removeInstance('mine'), true)
+  assert.equal(reg.removeCustom('mine'), null)
+  assert.deepEqual(reg.custom(), {})
+  assert.deepEqual(new Registry(dir).custom(), {})
+  assert.match(String(reg.removeCustom('nope')), /no custom agent/)
+})
+
 test('addCustom rejects bad ids and empty commands and keeps nothing', () => {
   const reg = new Registry(tmp())
   assert.match(String(reg.addCustom('all', ['x'])), /reserved/)

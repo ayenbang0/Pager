@@ -60,10 +60,19 @@ test('date prefix only when the message is not from today', () => {
 })
 
 test('own message status markers sit at the end of the last line', () => {
-  const pending = buildLines([msg({ mine: true, status: 'pending' })], 40, T, NOW)
-  assert.equal(plain(pending.at(-1)!).endsWith(' …'), true)
-  const delivered = buildLines([msg({ mine: true, status: 'delivered' })], 40, T, NOW)
-  assert.equal(plain(delivered.at(-1)!).endsWith(' ✓'), true)
+  const tick = (status: 'pending' | 'sent' | 'delivered' | 'read'): string => plain(buildLines([msg({ mine: true, status })], 40, T, NOW).at(-1)!)
+  assert.equal(tick('pending').endsWith(' …'), true)
+  assert.equal(tick('sent').endsWith(' ✓'), true)
+  assert.equal(tick('sent').endsWith('✓✓'), false)
+  assert.equal(tick('delivered').endsWith(' ✓✓'), true)
+  assert.equal(tick('delivered').endsWith('✓✓✓'), false)
+  assert.equal(tick('read').endsWith(' ✓✓✓'), true)
+})
+
+test('the status never changes how a message wraps', () => {
+  const text = Array.from({ length: 70 }, (_, i) => `word${i}`).join(' ')
+  const counts = (['pending', 'sent', 'delivered', 'read'] as const).map((status) => buildLines([msg({ mine: true, status, text })], 40, T, NOW).length)
+  assert.deepEqual(new Set(counts).size, 1)
 })
 
 test('system messages are dim italic notes on the surface band, no author', () => {
@@ -85,7 +94,11 @@ test('author, gutter and status colors come from the theme', () => {
   const mine = buildLines([msg({ mine: true, status: 'delivered' })], 40, ocean, NOW)
   assert.equal(mine[0]?.segs.find((seg) => seg.text === 'bob')?.color, ocean.mine)
   assert.equal(mine[0]?.segs[0]?.color, ocean.userBubble)
-  assert.equal(mine.at(-1)?.segs.find((seg) => seg.text === ' ✓')?.color, ocean.success)
+  assert.equal(mine.at(-1)?.segs.find((seg) => seg.text === ' ✓✓')?.color, ocean.success)
+  const sent = buildLines([msg({ mine: true, status: 'sent' })], 40, ocean, NOW)
+  assert.equal(sent.at(-1)?.segs.find((seg) => seg.text === ' ✓')?.color, ocean.dim)
+  const read = buildLines([msg({ mine: true, status: 'read' })], 40, ocean, NOW)
+  assert.equal(read.at(-1)?.segs.find((seg) => seg.text === ' ✓✓✓')?.color, ocean.accent)
   const other = buildLines([msg({})], 40, ocean, NOW)
   assert.ok(ocean.authors.includes(other[0]?.segs.find((seg) => seg.text === 'bob')?.color ?? ''))
 })

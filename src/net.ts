@@ -23,6 +23,8 @@ export interface NetOptions {
   /** Peers we should stay connected to (hex); the self key is ignored. */
   wanted(): Iterable<string>
   backoff?: { baseMs: number; maxMs: number }
+  /** A link silent for this long is dropped (peers keep it alive every 5 s). Default PEER_TIMEOUT_MS. */
+  peerTimeoutMs?: number
   /** Link diagnostics (open, close, protocol errors); never throws. */
   log?: (event: string, pk: string, detail?: string) => void
 }
@@ -33,6 +35,11 @@ const HELLO_TIMEOUT_MS = 5000
 const CONNECT_TIMEOUT_MS = 60_000
 const LISTEN_RETRY_MS = 30_000
 const STOP_GRACE_MS = 3_000
+/** Peers send keepalives every 5 s: this much silence means the other side is gone without having closed. */
+export const PEER_TIMEOUT_MS = 20_000
+/** An empty DHT routing table is re-bootstrapped up to this many times, WARM_STEP_MS apart, before the first dial. */
+const WARM_TRIES = 15
+const WARM_STEP_MS = 1000
 
 interface Session {
   pk: string
@@ -54,6 +61,9 @@ export class Net extends EventEmitter {
   private readonly opts: NetOptions
   private readonly myPk: string
   private readonly backoff: { baseMs: number; maxMs: number }
+  private readonly peerTimeoutMs: number
+  /** The DHT has found nodes (or given up waiting): dialing before that only fails with PEER_NOT_FOUND. */
+  private warmed = false
   private dht?: DHT
   private server?: DHTServer
   private stopped = false
@@ -68,7 +78,8 @@ export class Net extends EventEmitter {
     super()
     this.opts = opts
     this.myPk = opts.keyPair.publicKey.toString('hex')
-    this.backoff = opts.backoff ?? { baseMs: 2000, maxMs: 300_000 }
+    this.backoff = opts.backoff ?? { baseMs: 2000, maxMs: 30_000 }
+    this.peerTimeoutMs = opts.peerTimeoutMs ?? PEER_TIMEOUT_MS
   }
 
   start(): void {
@@ -77,8 +88,12 @@ export class Net extends EventEmitter {
     // HyperDHT firewall semantics: returning true REJECTS the peer.
     this.server = dht.createServer({ firewall: (pk) => this.opts.isBlocked(pk.toString('hex')) })
     this.server.on('connection', (socket) => this.attach(socket, 'remote', socket.remotePublicKey.toString('hex')))
+    dht.on('network-change', () => {
+      this.opts.log?.('network-change', this.myPk)
+      this.redial()
+    })
     void this.listen()
-    this.refresh()
+    void this.warm()
   }
 
   link(pk: string): PeerLink | undefined {
@@ -91,7 +106,7 @@ export class Net extends EventEmitter {
 
   /** Call whenever wanted() may have changed. */
   refresh(): void {
-    if (this.stopped || !this.dht) return
+    if (this.stopped || !this.dht || !this.warmed) return
     const wanted = new Set(this.opts.wanted())
     wanted.delete(this.myPk)
     for (const [pk, timer] of this.timers) {
@@ -103,6 +118,36 @@ export class Net extends EventEmitter {
     for (const pk of wanted) {
       if (!this.links_.has(pk) && !this.inflight.has(pk) && !this.timers.has(pk)) this.dial(pk)
     }
+  }
+
+  /** Waits for the DHT to know some nodes, then dials every wanted peer. A cold table dials into nothing and doubles the backoff for nothing. */
+  private async warm(): Promise<void> {
+    const dht = this.dht
+    if (!dht) return
+    await dht.ready().catch(() => undefined)
+    for (let i = 0; i < WARM_TRIES && !this.stopped && dht.nodes.length === 0; i++) {
+      dht.refresh()
+      await sleep(WARM_STEP_MS, undefined, { ref: false })
+    }
+    if (this.stopped) return
+    if (dht.nodes.length === 0) this.opts.log?.('cold-dht', this.myPk, 'dialing anyway')
+    this.warmed = true
+    this.refresh()
+  }
+
+  /** The machine's network changed (new Wi-Fi, VPN, wake from sleep): forget the backoff and dial every wanted peer without a link now. */
+  private redial(): void {
+    for (const t of this.timers.values()) clearTimeout(t)
+    this.timers.clear()
+    this.attempts.clear()
+    this.refresh()
+  }
+
+  /** One line about this node's DHT view for /net and the log (undefined before start). */
+  stats(): string | undefined {
+    const d = this.dht
+    if (!d) return undefined
+    return `nodes=${d.nodes.length} online=${d.online} degraded=${d.degraded} nat=${d.firewalled ? 'firewalled' : 'open'}${d.randomized ? ',randomized' : ''} addr=${d.host ?? 'unknown'}:${d.port}`
   }
 
   async stop(): Promise<void> {
@@ -134,7 +179,7 @@ export class Net extends EventEmitter {
     }
     if (this.stopped) return
     this.listening = true
-    this.opts.log?.('listening', this.myPk)
+    this.opts.log?.('listening', this.myPk, this.stats())
     this.emit('listening')
   }
 
@@ -158,6 +203,7 @@ export class Net extends EventEmitter {
 
   private attach(socket: PeerSocket, initiator: 'local' | 'remote', pk: string): void {
     const session: Session = { pk, initiator, socket, suppressed: false }
+    socket.setTimeout(this.peerTimeoutMs)
     this.sessions.add(session)
     const decoder = new FrameDecoder()
     const sendFrame = (frame: Frame): boolean => {
@@ -236,7 +282,7 @@ export class Net extends EventEmitter {
       } else if (initiator === 'local' && !this.links_.has(pk)) {
         const n = this.attempts.get(pk) ?? 0
         this.attempts.set(pk, n + 1)
-        log('dial-closed', `attempt ${n + 1}`)
+        log('dial-closed', `attempt ${n + 1} ${this.stats() ?? ''}`.trim())
         const base = Math.min(this.backoff.maxMs, this.backoff.baseMs * 2 ** n)
         this.scheduleIfWanted(pk, base * (0.8 + 0.4 * Math.random()))
       }

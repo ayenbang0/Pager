@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { stripVTControlCharacters } from 'node:util'
 import type { MessageView, Toast, ToastKind } from '../engine.js'
 import { ADAPTERS, findBinary, type AdapterSpec } from './adapters.js'
@@ -409,11 +410,14 @@ export class Orchestrator extends EventEmitter {
   }
 
   private async deliver(name: string, msg: Inbox): Promise<void> {
-    const fail = (why: string): void => msg.done?.({ ...NO_OUTCOME, text: `(${why})` })
+    const fail = (why: string, say = true): void => {
+      if (say && msg.guest === true) this.post(why)
+      msg.done?.({ ...NO_OUTCOME, text: `(${why})` })
+    }
     const cfg = this.registry.ready().find((c) => c.name === name)
     if (cfg === undefined) return fail(`${name} is not available`)
-    const w = await this.workerFor(cfg)
-    if (w === undefined || this.closing) return fail('agent unavailable')
+    const w = await this.workerFor(cfg, msg.guest === true)
+    if (w === undefined || this.closing) return fail('agent unavailable', false)
     if (msg.kind === 'user') w.reviewRound = 0
     w.inbox.push(msg)
     this.emit('change')
@@ -426,10 +430,11 @@ export class Orchestrator extends EventEmitter {
     return p
   }
 
-  private async workerFor(cfg: AgentConfig): Promise<Worker | undefined> {
+  private async workerFor(cfg: AgentConfig, guest = false): Promise<Worker | undefined> {
     const root = await this.rootDir()
     if (root === undefined) {
       this.toast('error', 'Agents need a git repository. Start pager inside one.')
+      if (guest) this.post('The host started pager outside a git repository, so agents cannot run. Ask them to start it inside one.')
       return undefined
     }
     let w = this.workers.get(cfg.name)
@@ -492,13 +497,7 @@ export class Orchestrator extends EventEmitter {
     const w = this.workers.get(target)
     if (w !== undefined) {
       if (w.draining) return this.toast('error', 'Stop it first')
-      const root = await this.rootDir()
-      if (root !== undefined) {
-        await removeWorktree(root, w.dir, w.branch)
-        this.sessions.clear(root, w.name)
-      }
-      for (const [id, r] of this.runs) if (r.worker === w) this.runs.delete(id)
-      this.workers.delete(target)
+      await this.discardWorkspace(w)
       this.emit('change')
       return this.toast('info', `Removed ${target}'s workspace`)
     }
@@ -514,6 +513,17 @@ export class Orchestrator extends EventEmitter {
     for (const r of victims) this.runs.delete(r.id)
     this.emit('change')
     this.toast('info', `Dropped ${victims.length} run(s)`)
+  }
+
+  /** Removes a worker's worktree, branch, saved session and run records. */
+  private async discardWorkspace(w: Worker): Promise<void> {
+    const root = await this.rootDir()
+    if (root !== undefined) {
+      await removeWorktree(root, w.dir, w.branch)
+      this.sessions.clear(root, w.name)
+    }
+    for (const [id, r] of this.runs) if (r.worker === w) this.runs.delete(id)
+    this.workers.delete(w.name)
   }
 
   /** Forgets the agent's saved session and queued messages; its next turn starts fresh. */
@@ -683,13 +693,28 @@ export class Orchestrator extends EventEmitter {
     return state.state === 'ready' ? undefined : `${id} was saved but is not ready: ${state.state === 'missing' || state.state === 'failed' ? state.reason : state.state}`
   }
 
-  removeAgent(name: string): boolean {
-    const ok = this.registry.removeInstance(name)
-    if (!ok) return false
+  /**
+   * Deletes a teammate: stops its work, removes it from the team and discards its workspace, branch, saved session and run records.
+   * A workspace holding changes that were never merged is kept (merge or drop it later), and so is one whose turn would not stop within 5 s.
+   * Resolves 'deleted', 'kept', or undefined when there is no such teammate.
+   */
+  async deleteAgent(name: string): Promise<'deleted' | 'kept' | undefined> {
     const w = this.workers.get(name)
-    if (w !== undefined && w.draining) this.cancel(new Set([w]))
+    if (!this.registry.removeInstance(name)) return undefined
+    if (w === undefined) {
+      this.emit('change')
+      return 'deleted'
+    }
+    this.cancel(new Set([w]))
+    for (let i = 0; i < 100 && w.draining; i++) await sleep(50)
+    const unmerged = w.files.length > 0 && [...this.runs.values()].some((r) => r.worker === w && !r.merged)
+    if (w.draining || unmerged) {
+      this.emit('change')
+      return 'kept'
+    }
+    await this.discardWorkspace(w)
     this.emit('change')
-    return true
+    return 'deleted'
   }
 
   setModel(name: string, model: string | undefined): void {
@@ -831,6 +856,11 @@ export class Orchestrator extends EventEmitter {
   private async rootDir(): Promise<string | undefined> {
     this.root ??= await repoRoot(this.opts.workdir)
     return this.root
+  }
+
+  /** Whether pager runs inside a git repository (agents work in worktrees of it). */
+  async hasRepo(): Promise<boolean> {
+    return (await this.rootDir()) !== undefined
   }
 
   private find(target: string): Run | undefined {

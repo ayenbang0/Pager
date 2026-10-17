@@ -2,7 +2,7 @@ declare module 'hyperdht' {
   import type { Duplex } from 'node:stream'
   export interface KeyPair { publicKey: Buffer; secretKey: Buffer }
   export type BootstrapNode = string | { host: string; port: number }
-  export interface PeerSocket extends Duplex { readonly remotePublicKey: Buffer; readonly publicKey: Buffer }
+  export interface PeerSocket extends Duplex { readonly remotePublicKey: Buffer; readonly publicKey: Buffer; setTimeout(ms: number): void }
   export interface DHTServer {
     on(event: 'connection', cb: (socket: PeerSocket) => void): this
     on(event: 'listening' | 'close', cb: () => void): this
@@ -17,6 +17,17 @@ declare module 'hyperdht' {
     createServer(opts?: { firewall?: (remotePublicKey: Buffer, payload: unknown) => boolean }): DHTServer
     connect(remotePublicKey: Buffer | string, opts?: { keyPair?: KeyPair }): PeerSocket
     destroy(opts?: { force?: boolean }): Promise<void>
+    ready(): Promise<void>
+    refresh(): void
+    /** Routing table nodes. */
+    readonly nodes: { readonly length: number }
+    readonly online: boolean
+    readonly degraded: boolean
+    readonly firewalled: boolean
+    readonly randomized: boolean
+    readonly host: string | null
+    readonly port: number
+    on(event: 'network-change', cb: () => void): this
   }
 }
 declare module 'hyperdht/testnet.js' {

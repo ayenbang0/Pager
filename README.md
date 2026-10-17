@@ -56,6 +56,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/agent invite <contact> [--view]` | Let a contact into your agent room: they can message the agents and answer questions (`--view`: only watch). Also `guests`, `kick <contact\|all>`; a guest uses `/accept n` and `/agent leave` |
 | `/net` | Show which contacts are connected, their capabilities, and where `net.log` (link events and protocol errors) is |
 | `/agent setup` | See which agent CLIs are installed and ready, add a teammate (Enter) or register a custom ACP agent (`custom: <id> <command…>`) |
+| `/changelog [version]` | Show what changed in recent updates |
 | `/quit` | Exit |
 
 ## Keys
@@ -101,7 +102,7 @@ When pager is not focused (terminals that report focus: Windows Terminal, iTerm2
 
 ### Updating
 
-Once a day pager asks the npm registry for the latest `pager-cli` (one short request, failures are silent). If a newer release exists you get a toast and a `↑ x.y.z` badge in the status bar. `/update` checks on demand. Quit pager and run `pager update` to install it (`npm install -g pager-cli@latest`); it refuses while a pager is running in the same data directory, and on Windows it fails with a "file busy" message if another pager instance still holds the install open. Only releases that already contain this feature can announce updates.
+Once a day pager asks the npm registry for the latest `pager-cli` (one short request, failures are silent). If a newer release exists you get a toast and a `↑ x.y.z` badge in the status bar. `/update` checks on demand. Quit pager and run `pager update` to install it (`npm install -g pager-cli@latest`); it refuses while a pager is running in the same data directory, and on Windows it fails with a "file busy" message if another pager instance still holds the install open. Only releases that already contain this feature can announce updates. After updating, the home screen shows **What's new** on next launch; `/changelog [version]` shows it any time.
 
 ### Trying it on one machine
 

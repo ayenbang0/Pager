@@ -7,6 +7,12 @@
 /** Author ids are the first 12 hex chars of the public key; collisions among <= 16 members are negligible. */
 export type Id = readonly [author: string, clock: number]
 
+/** A position that follows its character: on the character `id` (null = the end of the text), or right after it (`after`; null = the start). */
+export interface Anchor {
+  id: Id | null
+  after: boolean
+}
+
 /** `s` is a run of characters with clocks c, c+1, ...; the event author supplies the author id. `p` is the id it was typed after. */
 export interface InsertOp {
   k: 'i'
@@ -175,6 +181,26 @@ export class TextCrdt {
       n++
     }
     return null
+  }
+
+  /** An anchor for visible position `pos` (clamped): after = true pins the character before it, so text typed there stays after your caret. */
+  anchorAt(pos: number, after: boolean): Anchor {
+    const p = Math.min(Math.max(pos, 0), this.length)
+    if (after) return { id: p === 0 ? null : this.idAt(p - 1), after: true }
+    return { id: p >= this.length ? null : this.idAt(p), after: false }
+  }
+
+  /** The visible position of an anchor. A deleted character resolves to where it was (the index of the next visible character). */
+  positionOf(a: Anchor): number {
+    if (a.id === null) return a.after ? 0 : this.length
+    const target = this.byId.get(key(a.id[0], a.id[1]))
+    if (!target) return a.after ? 0 : this.length
+    let n = 0
+    for (const e of this.els) {
+      if (e === target) return a.after && !e.del ? n + 1 : n
+      if (!e.del) n++
+    }
+    return this.length
   }
 
   private ready(op: TextOp): boolean {

@@ -123,6 +123,16 @@ export class Registry {
     return true
   }
 
+  /** Forgets a custom ACP agent made with /agent add. Refuses while teammates still run it. Null = done, else the reason. */
+  removeCustom(id: string): string | null {
+    if (!Object.hasOwn(this.customAgents, id)) return `no custom agent "${id}"`
+    if (this.list.some((c) => c.cli === id)) return `${id} still has teammates: remove them first`
+    delete this.customAgents[id]
+    this.states.delete(id)
+    this.save()
+    return null
+  }
+
   /** Defines (or replaces) a custom ACP agent. Returns null on success, else the reason. */
   addCustom(id: string, command: string[], env?: Record<string, string>): string | null {
     if (!isValidAgentId(id)) {

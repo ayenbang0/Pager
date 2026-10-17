@@ -23,6 +23,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'doc', usage: '/doc new <name> [in <chat>]', summary: 'Shared Markdown documents (Docs tab)' },
   { name: 'agent', usage: '/agent <name> <task>', summary: 'Run coding agents in isolated worktrees' },
   { name: 'update', usage: '/update', summary: 'Check for a newer pager version' },
+  { name: 'changelog', usage: '/changelog [version]', summary: 'Show what changed in recent updates' },
   { name: 'theme', usage: '/theme [name]', summary: 'Open the theme picker, or switch theme by name' },
   { name: 'accent', usage: '/accent <color|#hex|auto>', summary: 'Recolor the accent everywhere (auto resets it)' },
   { name: 'badge', usage: '/badge <emoji|none|auto>', summary: 'The glyph shown beside your name' },

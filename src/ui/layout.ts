@@ -178,7 +178,7 @@ export function buildLines(
     const gutter: Seg = { text: GUTTER, color: tint, chrome: true }
     // Stacked: the speaker gets a header row and the body sits under the gutter. Compact: `▍ 09:05 ● bob  body` on one row.
     const bodyCol = spacing.stacked ? 2 : 1 + 1 + stringWidth(prefix) + 1 + stringWidth(glyph) + 1 + stringWidth(author) + 2
-    const suffix = m.status === null ? 0 : 2
+    const suffix = m.status === null ? 0 : 4
     const columns = Math.max(MIN_BODY_COLUMNS, width - bodyCol - suffix)
     let rows: Seg[][] = m.markdown ? markdownRows(m.text, columns, theme) : wrap(m.text, columns).map((row) => [{ text: row }])
     let foldAt = -1
@@ -220,8 +220,9 @@ export function buildLines(
         ]
       } else lead = [gutter, { text: ' '.repeat(bodyCol - 1), chrome: true }]
       const segs: Seg[] = [...lead, ...row]
-      if (i === rows.length - 1 && m.status === 'delivered') segs.push({ text: ' ✓', color: theme.success })
-      if (i === rows.length - 1 && m.status === 'read') segs.push({ text: ' ✓✓', color: theme.accent, bold: true })
+      if (i === rows.length - 1 && m.status === 'sent') segs.push({ text: ' ✓', color: theme.dim })
+      if (i === rows.length - 1 && m.status === 'delivered') segs.push({ text: ' ✓✓', color: theme.success })
+      if (i === rows.length - 1 && m.status === 'read') segs.push({ text: ' ✓✓✓', color: theme.accent, bold: true })
       if (i === rows.length - 1 && m.status === 'pending') segs.push({ text: ' …', color: theme.warning })
       lines.push(i === foldAt ? { key: `${m.key}:${i}`, segs, fold: m.key } : { key: `${m.key}:${i}`, segs })
     })

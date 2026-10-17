@@ -556,7 +556,7 @@ test('review can be switched off, and a lone agent has no reviewer', () =>
     await settled(orch)
     assert.ok(!texts(orch).some((t) => t.includes('reviewed')))
     orch.setReview(true)
-    for (const n of ['claude', 'opencode', 'hermes']) orch.removeAgent(n)
+    for (const n of ['claude', 'opencode', 'hermes']) await orch.deleteAgent(n)
     await orch.ask('omp', 'WRITE b.txt=1')
     assert.ok(texts(orch, 'omp').includes('pager: no reviewer available'))
   }))
@@ -584,6 +584,44 @@ test('a finished turn, a failure and a review verdict each raise a popup and a d
     orch.setReview(true)
     await orch.ask('omp', 'WRITE a.txt=1')
     await waitFor(() => alerts.some((a) => /reviewed omp: approve/.test(a)), 20_000, 'review alert')
+  }))
+
+test('deleting an agent that never ran just removes it, and a second delete finds nothing', () =>
+  withOrch(async ({ orch }) => {
+    assert.equal(await orch.deleteAgent('hermes'), 'deleted')
+    assert.ok(!orch.room().agents.some((a) => a.name === 'hermes'))
+    assert.equal(await orch.deleteAgent('hermes'), undefined)
+  }))
+
+test('deleting an agent with unmerged work keeps its workspace until it is dropped', () =>
+  withOrch(async ({ orch, repo }) => {
+    await orch.ask('omp', 'WRITE a.txt=1')
+    await settled(orch)
+    assert.equal(await orch.deleteAgent('omp'), 'kept')
+    assert.ok(!orch.room().agents.some((a) => a.name === 'omp'))
+    assert.equal(git(repo, 'worktree', 'list').split('\n').length, 2)
+    assert.equal(git(repo, 'branch', '--list', 'pager/omp') === '', false)
+    await orch.drop('omp')
+    assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1)
+    assert.equal(git(repo, 'branch', '--list', 'pager/omp'), '')
+  }))
+
+test('deleting an agent whose work was merged removes its worktree and branch', () =>
+  withOrch(async ({ orch, repo }) => {
+    await orch.ask('omp', 'WRITE a.txt=1')
+    await orch.merge('omp')
+    assert.equal(await orch.deleteAgent('omp'), 'deleted')
+    assert.equal(git(repo, 'worktree', 'list').split('\n').length, 1)
+    assert.equal(git(repo, 'branch', '--list', 'pager/omp'), '')
+  }))
+
+test('deleting an agent in the middle of a turn stops it and the turn still resolves', () =>
+  withOrch(async ({ orch }) => {
+    const done = orch.ask('omp', 'SLEEP 60000')
+    await waitFor(() => orch.room().agents.find((a) => a.name === 'omp')?.state === 'working', 20_000, 'omp working')
+    assert.equal(await orch.deleteAgent('omp'), 'deleted')
+    await done
+    assert.ok(!orch.room().agents.some((a) => a.name === 'omp'))
   }))
 
 after(removeTmpDirs)
