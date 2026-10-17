@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { Terminal, type TermEntry } from './terminal.js'
+import { removeTmpDirs, tmpDir } from './testutil.js'
 
 const done = (t: Terminal): Promise<TermEntry> => {
   const { promise, resolve } = Promise.withResolvers<TermEntry>()
@@ -12,7 +13,7 @@ const done = (t: Terminal): Promise<TermEntry> => {
 }
 
 test('runs a command in the working directory and captures its output', async () => {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pager-term-')))
+  const dir = fs.realpathSync(tmpDir('pager-term-'))
   const t = new Terminal(dir)
   try {
     const finished = done(t)
@@ -29,7 +30,7 @@ test('runs a command in the working directory and captures its output', async ()
 })
 
 test('cd moves later commands, rejects missing directories and handles ~', async () => {
-  const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'pager-term-')))
+  const dir = fs.realpathSync(tmpDir('pager-term-'))
   fs.mkdirSync(path.join(dir, 'sub'))
   const t = new Terminal(dir)
   try {
@@ -80,3 +81,5 @@ test('typed lines reach a running command and stop() ends it', async () => {
     t.close()
   }
 })
+
+after(removeTmpDirs)

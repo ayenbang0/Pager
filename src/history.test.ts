@@ -2,11 +2,12 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
+import { removeTmpDirs, tmpDir } from './testutil.js'
 
 function withDir(fn: (dir: string) => void): void {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-history-'))
+  const dir = tmpDir('pager-history-')
   try {
     fn(dir)
   } finally {
@@ -36,3 +37,5 @@ test('non-string entries are dropped and only the newest HISTORY_MAX are kept', 
     assert.equal(back.at(-1), `m${HISTORY_MAX + 4}`)
     assert.equal(back[0], 'm5')
   }))
+
+after(removeTmpDirs)

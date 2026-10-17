@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { acquireLock, AlreadyRunningError } from './lock.js'
+import { removeTmpDirs, tmpDir } from './testutil.js'
 
-const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'pager-lock-'))
+const tmp = (): string => tmpDir('pager-lock-')
 
 test('second acquire on the same dir throws', () => {
   const dir = tmp()
@@ -37,3 +38,5 @@ test('a fresh empty lock file may be mid-creation by a live process', () => {
   fs.writeFileSync(path.join(dir, 'pager.lock'), '')
   assert.throws(() => acquireLock(dir), AlreadyRunningError)
 })
+
+after(removeTmpDirs)

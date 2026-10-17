@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { loadOrCreateIdentity, saveName } from './identity.js'
+import { removeTmpDirs, tmpDir } from './testutil.js'
 
-const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'pager-id-'))
+const tmp = (): string => tmpDir('pager-id-')
 
 test('identity is stable and saveName keeps the key', () => {
   const dir = tmp()
@@ -26,3 +27,5 @@ test('corrupt identity.json throws and is left untouched', () => {
   assert.throws(() => loadOrCreateIdentity(dir), /corrupt/)
   assert.equal(fs.readFileSync(file, 'utf8'), '{nope')
 })
+
+after(removeTmpDirs)

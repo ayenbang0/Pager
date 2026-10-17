@@ -16,7 +16,7 @@ import { dmConvId } from './events.js'
 import { resetDesktopState } from './desktop.js'
 import { DEFAULT_SETTINGS } from './settings.js'
 import { Net, type PeerLink } from './net.js'
-import { waitFor } from './testutil.js'
+import { removeTmpDirs, tmpDir, waitFor } from './testutil.js'
 
 let testnet: Testnet
 const engines: Engine[] = []
@@ -39,7 +39,7 @@ interface Peer {
 
 async function boot(
   name: string,
-  dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-e-')),
+  dir = tmpDir('pager-e-'),
   extra: Partial<EngineOptions> = {},
 ): Promise<Peer> {
   const engine = await Engine.open({
@@ -82,7 +82,7 @@ test('mutual contact, message, delivery receipt', async () => {
 })
 
 test('desktop alerts fire for an accepted request, a message and a read receipt', async () => {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pager-n-')), 'alerts.jsonl')
+  const file = path.join(tmpDir('pager-n-'), 'alerts.jsonl')
   process.env.PAGER_NOTIFY_FILE = file
   resetDesktopState()
   try {
@@ -107,7 +107,7 @@ test('desktop alerts fire for an accepted request, a message and a read receipt'
 })
 
 test('a contact who comes back online raises a desktop alert and a popup, once', async () => {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'pager-n-')), 'alerts.jsonl')
+  const file = path.join(tmpDir('pager-n-'), 'alerts.jsonl')
   const a = await boot('alice')
   const b = await boot('bob')
   await befriend(a, b)
@@ -304,7 +304,7 @@ test('/quit and /exit both ask the app to quit', async () => {
 })
 
 test('agent tabs: /agent and @name drive agents, plain text is refused in the hub, the hub is not a conversation', async () => {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-r-'))
+  const repo = tmpDir('pager-r-')
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })
   git('init', '-q', '-b', 'main')
   git('config', 'user.name', 'tester')
@@ -357,7 +357,7 @@ test('agent tabs: /agent and @name drive agents, plain text is refused in the hu
 })
 
 test("a command an agent advertises runs verbatim in that agent's tab; pager commands win; elsewhere it is unknown", async () => {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-r-'))
+  const repo = tmpDir('pager-r-')
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })
   git('init', '-q', '-b', 'main')
   git('config', 'user.name', 'tester')
@@ -371,7 +371,7 @@ test("a command an agent advertises runs verbatim in that agent's tab; pager com
     args: (p) => [fileURLToPath(new URL('./agents/testAgent.js', import.meta.url)), p],
     extract: (s) => s.trim(),
   }
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-e-'))
+  const dir = tmpDir('pager-e-')
   fs.writeFileSync(path.join(dir, 'agents-commands.json'), JSON.stringify({ omp: [{ name: 'usage', description: 'limits' }, { name: 'help', description: 'clash' }] }))
   const a = await boot('alice', dir, { workdir: repo, agentAdapters: { omp: fake, claude: fake, opencode: fake, hermes: fake } })
   await a.engine.checkAgents()
@@ -433,3 +433,5 @@ test('docs: a shared document syncs between peers and its operations never show 
   const again = await boot('bob', b.dir)
   assert.equal(again.engine.docs.text(id), a.engine.docs.text(id))
 })
+
+after(removeTmpDirs)

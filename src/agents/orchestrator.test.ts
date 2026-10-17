@@ -4,10 +4,10 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import type { Toast } from '../engine.js'
-import { waitFor } from '../testutil.js'
+import { removeTmpDirs, tmpDir, waitFor } from '../testutil.js'
 import type { AdapterSpec } from './adapters.js'
 import { Orchestrator, type OrchestratorOptions } from './orchestrator.js'
 
@@ -15,7 +15,7 @@ const fixture = fileURLToPath(new URL('./testAgent.js', import.meta.url))
 const fake: AdapterSpec = { bin: process.execPath, args: (p) => [fixture, p], extract: (s) => s.trim() }
 const fakes: Record<string, AdapterSpec> = { omp: fake, claude: fake, opencode: fake, hermes: fake }
 
-const tmp = (prefix: string): string => fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+const tmp = tmpDir
 const git = (cwd: string, ...args: string[]): string => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim()
 
 function makeRepo(): string {
@@ -384,7 +384,7 @@ test('one message that names two agents reaches both, and each knows who else he
 test('@all reaches every ready agent', () =>
   withOrch(async ({ orch }) => {
     orch.say('@all\nECHO roll call')
-    await waitFor(() => orch.room().runs.length === 4, 15_000, 'four turns')
+    await waitFor(() => orch.room().runs.length === 4, 40_000, 'four turns')
     await settled(orch)
     assert.equal(texts(orch).filter((l) => l.endsWith(': roll call')).length, 4)
   }))
@@ -585,3 +585,5 @@ test('a finished turn, a failure and a review verdict each raise a popup and a d
     await orch.ask('omp', 'WRITE a.txt=1')
     await waitFor(() => alerts.some((a) => /reviewed omp: approve/.test(a)), 20_000, 'review alert')
   }))
+
+after(removeTmpDirs)

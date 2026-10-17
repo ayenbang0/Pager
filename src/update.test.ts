@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { CACHE_TTL_MS, isNewer, latestVersion } from './update.js'
+import { removeTmpDirs, tmpDir } from './testutil.js'
 
-const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'pager-u-'))
+const tmp = (): string => tmpDir('pager-u-')
 
 test('isNewer compares numerically, not lexically, and ignores pre-release suffixes on the current version', () => {
   assert.ok(isNewer('0.10.0', '0.9.9'))
@@ -42,3 +43,5 @@ test('a corrupt cache file is ignored', async () => {
   fs.writeFileSync(path.join(dir, 'update.json'), '{nope')
   assert.equal(await latestVersion(dir, { fetchLatest: async () => '0.4.0' }), '0.4.0')
 })
+
+after(removeTmpDirs)

@@ -3,17 +3,18 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import type { AdapterSpec } from './adapters.js'
 import { Orchestrator } from './orchestrator.js'
+import { removeTmpDirs, tmpDir } from '../testutil.js'
 
 const fixture = fileURLToPath(new URL('./testAgent.js', import.meta.url))
 const fake: AdapterSpec = { bin: process.execPath, args: (p) => [fixture, p], extract: (s) => s.trim() }
 const fakes: Record<string, AdapterSpec> = { omp: fake, claude: fake, opencode: fake, hermes: fake }
 
 function setup(): { orch: Orchestrator; cleanup: () => void } {
-  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-pt-'))
+  const repo = tmpDir('pager-pt-')
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })
   git('init', '-q', '-b', 'main')
   git('config', 'user.name', 't')
@@ -22,7 +23,7 @@ function setup(): { orch: Orchestrator; cleanup: () => void } {
   fs.writeFileSync(path.join(repo, 'base.txt'), 'base')
   git('add', '-A')
   git('commit', '-q', '-m', 'base')
-  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-ptd-'))
+  const dataDir = tmpDir('pager-ptd-')
   const orch = new Orchestrator({ dataDir, workdir: repo, adapters: fakes })
   return {
     orch,
@@ -82,3 +83,5 @@ test('@name !args in the room runs the agent CLI instead of starting a task', as
     cleanup()
   }
 })
+
+after(removeTmpDirs)

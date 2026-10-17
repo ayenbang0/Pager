@@ -2,10 +2,11 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { DEFAULT_SETTINGS, loadSettings, parseBadge, saveSettings, type Settings } from './settings.js'
+import { removeTmpDirs, tmpDir } from './testutil.js'
 
-const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'pager-s-'))
+const tmp = (): string => tmpDir('pager-s-')
 
 test('missing file yields defaults', () => {
   assert.deepEqual(loadSettings(tmp()), DEFAULT_SETTINGS)
@@ -46,3 +47,5 @@ test('parseBadge accepts one symbol or emoji, auto and none; nothing else', () =
   assert.equal(parseBadge(' ⚡ '), '⚡')
   for (const bad of ['', 'ab', 'a', '7', '🚀🚀', ' ', '\n']) assert.equal(parseBadge(bad), undefined, JSON.stringify(bad))
 })
+
+after(removeTmpDirs)

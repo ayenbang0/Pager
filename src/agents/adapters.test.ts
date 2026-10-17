@@ -2,8 +2,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { test } from 'node:test'
+import { after, test } from 'node:test'
 import { ADAPTERS, findBinary } from './adapters.js'
+import { removeTmpDirs, tmpDir } from '../testutil.js'
 
 const extract = (cli: string, out: string): string => (ADAPTERS[cli]?.extract ?? ((s: string) => s))(out)
 
@@ -26,7 +27,7 @@ test('model and effort become each CLI\'s own flags, ahead of the prompt', () =>
 })
 
 test('findBinary searches the given PATH', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-bin-'))
+  const dir = tmpDir('pager-bin-')
   const file = path.join(dir, process.platform === 'win32' ? 'tool.exe' : 'tool')
   fs.writeFileSync(file, '', { mode: 0o755 })
   const env = { PATH: dir, PATHEXT: '.EXE' }
@@ -34,3 +35,5 @@ test('findBinary searches the given PATH', async () => {
   assert.equal(await findBinary('missing-tool', env), undefined)
   fs.rmSync(dir, { recursive: true, force: true })
 })
+
+after(removeTmpDirs)
