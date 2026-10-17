@@ -172,7 +172,14 @@ export function App({ engine, onExit }: Props) {
     },
   })
   const onSwitch = (dir: 1 | -1): void => {
-    const ids = [null, ...convs.map((c) => c.id), ROOM_ID, TERM_ID, DOCS_ID]
+    const ids = [
+      null,
+      ...convs.filter((c) => c.kind === 'dm').map((c) => c.id),
+      ...convs.filter((c) => c.kind === 'group').map((c) => c.id),
+      TERM_ID,
+      DOCS_ID,
+      ROOM_ID,
+    ]
     const at = Math.max(0, ids.indexOf(activeId))
     engine.activate(ids[(at + dir + ids.length) % ids.length] ?? null)
   }
