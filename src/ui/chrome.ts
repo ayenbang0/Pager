@@ -93,7 +93,7 @@ export function promptBorders(width: number, chip: PromptChip, hint: string, act
 
 /** Where the user is, as far as the chrome cares. */
 export interface Place {
-  kind: 'home' | 'dm' | 'group' | 'hub' | 'agent' | 'terminal' | 'docs'
+  kind: 'home' | 'dm' | 'group' | 'hub' | 'shared' | 'agent' | 'terminal' | 'docs'
   /** Conversation, agent or document name; '' where there is none. */
   title: string
 }
@@ -109,6 +109,8 @@ export function crumbsFor(place: Place): string[] {
       return ['CHATS', `# ${place.title}`]
     case 'hub':
       return ['CHATS', '⌁ agents']
+    case 'shared':
+      return ['CHATS', `◈ ${place.title}`]
     case 'agent':
       return ['CHATS', `◆ ${place.title}`]
     case 'terminal':
@@ -130,6 +132,8 @@ export function chipFor(place: Place, command: boolean, tint?: string): PromptCh
       return { text: `→ #${place.title}` }
     case 'hub':
       return { text: '→ @agents' }
+    case 'shared':
+      return { text: `→ @agents · ${place.title}` }
     case 'agent':
       return tint === undefined ? { text: `→ ${place.title}` } : { text: `→ ${place.title}`, color: tint }
     case 'terminal':

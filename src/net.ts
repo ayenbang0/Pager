@@ -23,11 +23,14 @@ export interface NetOptions {
   /** Peers we should stay connected to (hex); the self key is ignored. */
   wanted(): Iterable<string>
   backoff?: { baseMs: number; maxMs: number }
+  /** Link diagnostics (open, close, protocol errors); never throws. */
+  log?: (event: string, pk: string, detail?: string) => void
 }
 
 /** Optional protocol features this build speaks; peers that do not list one never receive its frames. */
-export const LOCAL_CAPS = ['read'] as const
-const HELLO_TIMEOUT_MS = 10_000
+export const LOCAL_CAPS = ['read', 'collab'] as const
+const HELLO_TIMEOUT_MS = 5000
+const CONNECT_TIMEOUT_MS = 60_000
 const LISTEN_RETRY_MS = 30_000
 const STOP_GRACE_MS = 3_000
 
@@ -123,6 +126,7 @@ export class Net extends EventEmitter {
       await this.server?.listen(this.opts.keyPair)
     } catch (err) {
       if (this.stopped) return
+      this.opts.log?.('listen-error', this.myPk, err instanceof Error ? err.message : String(err))
       this.emit('listen-error', err instanceof Error ? err : new Error(String(err)))
       this.listenTimer = setTimeout(() => void this.listen(), LISTEN_RETRY_MS)
       this.listenTimer.unref()
@@ -130,6 +134,7 @@ export class Net extends EventEmitter {
     }
     if (this.stopped) return
     this.listening = true
+    this.opts.log?.('listening', this.myPk)
     this.emit('listening')
   }
 
@@ -161,30 +166,52 @@ export class Net extends EventEmitter {
       return true
     }
     const sendHello = (): void => void sendFrame({ t: 'hello', v: 1, name: this.opts.getName(), caps: [...LOCAL_CAPS] })
-    const helloTimer = setTimeout(() => socket.destroy(), HELLO_TIMEOUT_MS)
-    helloTimer.unref()
+    const log = (event: string, detail?: string): void => this.opts.log?.(event, pk, detail)
+    // A dial may spend a while hole-punching before the socket opens; the hello clock only starts once it has.
+    const arm = (ms: number): NodeJS.Timeout => {
+      const t = setTimeout(() => {
+        log('hello-timeout', initiator)
+        socket.destroy()
+      }, ms)
+      t.unref()
+      return t
+    }
+    let helloTimer = arm(initiator === 'local' ? CONNECT_TIMEOUT_MS : HELLO_TIMEOUT_MS)
 
-    socket.on('error', () => {})
-    if (initiator === 'remote') sendHello()
-    else socket.on('open', sendHello)
+    socket.on('error', (err: Error) => log('socket-error', err.message))
+    if (initiator === 'remote') {
+      log('incoming', '')
+      sendHello()
+    } else {
+      socket.on('open', () => {
+        sendHello()
+        clearTimeout(helloTimer)
+        helloTimer = arm(HELLO_TIMEOUT_MS)
+        log('socket-open', '')
+      })
+    }
 
     socket.on('data', (chunk: Buffer) => {
       let frames: Frame[]
       try {
         frames = decoder.push(chunk)
       } catch (err) {
-        if (err instanceof ProtocolError) socket.destroy()
-        else throw err
+        if (err instanceof ProtocolError) {
+          log('protocol-error', err.message)
+          socket.destroy()
+        } else throw err
         return
       }
       for (const frame of frames) {
         if (socket.destroyed) return
         if (!session.link) {
           if (frame.t !== 'hello') {
+            log('non-hello-first', frame.t)
             socket.destroy()
             return
           }
           clearTimeout(helloTimer)
+          log('link-open', `${initiator} ${frame.name} caps=${(frame.caps ?? []).join(',')}`)
           this.promote(session, frame.name, frame.caps ?? [], sendFrame)
         } else if (frame.t === 'hello') {
           session.link.hello = { name: frame.name, caps: frame.caps ?? [] }
@@ -202,12 +229,14 @@ export class Net extends EventEmitter {
       if (initiator === 'local') this.inflight.delete(pk)
       if (session.link) {
         if (this.links_.get(pk) !== session) return
+        log('link-close', initiator)
         this.links_.delete(pk)
         this.emit('close', pk)
         this.scheduleIfWanted(pk, this.backoff.baseMs)
       } else if (initiator === 'local' && !this.links_.has(pk)) {
         const n = this.attempts.get(pk) ?? 0
         this.attempts.set(pk, n + 1)
+        log('dial-closed', `attempt ${n + 1}`)
         const base = Math.min(this.backoff.maxMs, this.backoff.baseMs * 2 ** n)
         this.scheduleIfWanted(pk, base * (0.8 + 0.4 * Math.random()))
       }

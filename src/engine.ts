@@ -3,7 +3,8 @@ import path from 'node:path'
 import type { BootstrapNode } from 'hyperdht'
 import type { AdapterSpec } from './agents/adapters.js'
 import { PRESETS } from './agents/catalog.js'
-import { agentTabId, parseAgentTab } from './agents/ids.js'
+import { agentTabId, parseAgentTab, parseSharedTab, sharedTabId } from './agents/ids.js'
+import { AgentShare, type GuestView, type SharedRoom, type SharedView } from './agents/share.js'
 import { Orchestrator, ROOM_ID, type AgentStats, type RoomView, type SetupRow } from './agents/orchestrator.js'
 import type { AnswerMap, QuestionView } from './agents/questions.js'
 import { COMMANDS, parseCommand } from './commands.js'
@@ -16,7 +17,8 @@ import { expandEmoji } from './emoji.js'
 import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from './events.js'
 import { loadOrCreateIdentity, saveName } from './identity.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from './ingest.js'
-import { Net, type PeerLink } from './net.js'
+import { LOCAL_CAPS, Net, type PeerLink } from './net.js'
+import { NetLog } from './netlog.js'
 import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
 import { Suggester } from './suggest.js'
 import { DENSITIES, isDensity, loadSettings, parseBadge, saveSettings, type Settings } from './settings.js'
@@ -59,7 +61,7 @@ export interface HomeStats {
 }
 export interface PendingView {
   n: number
-  type: 'contact' | 'group'
+  type: 'contact' | 'group' | 'session'
   label: string
   note: string
 }
@@ -93,6 +95,7 @@ export interface EngineOptions {
 interface PendingItem {
   view: PendingView
   pk?: string
+  session?: string
   conv?: string
 }
 
@@ -124,7 +127,9 @@ export class Engine extends EventEmitter {
   private readonly secretKey: Buffer
   private readonly store: Store
   private readonly net: Net
+  private readonly netLog: NetLog
   private readonly agents: Orchestrator
+  private readonly share: AgentShare
   private readonly term: Terminal
   readonly docs: DocStore
   private openDocId: string | null = null
@@ -168,6 +173,7 @@ export class Engine extends EventEmitter {
     this.docs.on('change', () => this.emit('change'))
     for (const sent of this.store.sentTexts(this.me.pk, SUGGEST_CORPUS)) this.suggester.learn(sent)
     for (const h of this.input) if (h.startsWith('/')) this.suggester.learn(h)
+    this.netLog = new NetLog(path.join(opts.dir, 'net.log'))
     this.net = new Net({
       keyPair: identity.keyPair,
       bootstrap: opts.bootstrap,
@@ -176,6 +182,7 @@ export class Engine extends EventEmitter {
       getName: () => this.me.name,
       isBlocked: (pk) => this.store.getPeer(pk)?.state === 'blocked',
       wanted: () => this.wantedSet(),
+      log: this.netLog.line,
     })
     this.net.on('listening', () => this.emit('change'))
     this.net.on('open', (link: PeerLink) => this.onOpen(link))
@@ -185,6 +192,7 @@ export class Engine extends EventEmitter {
     })
     this.net.on('frame', (link: PeerLink, frame: Frame) => this.onFrame(link, frame))
     this.net.on('close', (pk: string) => {
+      this.share.onClose(pk)
       this.online.delete(pk)
       this.emit('change')
     })
@@ -201,6 +209,23 @@ export class Engine extends EventEmitter {
       const scope = parseAgentTab(this.activeId) ?? (this.activeId === ROOM_ID ? ROOM_ID : undefined)
       if (scope !== undefined) this.agents.markRead(scope)
       this.emit('change')
+    })
+    this.share = new AgentShare({
+      me: this.me,
+      dir: opts.dir,
+      link: (pk) => this.net.link(pk),
+      isContact: (pk) => this.store.getPeer(pk)?.state === 'accepted',
+      nameOf: (pk) => this.nameOf(pk),
+      orch: this.agents,
+      isActive: (pk) => this.activeId === sharedTabId(pk),
+      acceptNumber: (pk) => this.pendingItems().find((i) => i.session === pk)?.view.n ?? 1,
+      announce: (kind, text, title) => this.announce(kind, text, title),
+      toast: (kind, text) => this.toast(kind, text),
+      changed: () => {
+        const open = parseSharedTab(this.activeId)
+        if (open !== undefined && this.share.room(open) === undefined) this.activeId = ROOM_ID
+        this.emit('change')
+      },
     })
     this.agents.on('notify', (title: string, body: string) => this.alert(title, body))
     this.agents.on('toast', (t: Toast) => this.emit('toast', t))
@@ -326,6 +351,8 @@ export class Engine extends EventEmitter {
     if (convId === ROOM_ID) return this.agents.messages(limit)
     const agent = parseAgentTab(convId)
     if (agent !== undefined) return this.agents.messages(limit, agent)
+    const shared = parseSharedTab(convId)
+    if (shared !== undefined) return this.share.messages(shared, limit)
     const conv = this.store.getConv(convId)
     if (!conv) return []
     const others = this.otherMembers(conv)
@@ -401,7 +428,28 @@ export class Engine extends EventEmitter {
   }
 
   answerQuestion(id: string, answers: AnswerMap | null): void {
-    this.agents.questions.answer(id, answers)
+    const shared = parseSharedTab(this.activeId)
+    if (shared === undefined) {
+      this.agents.questions.answer(id, answers)
+      return
+    }
+    const why = this.share.answer(shared, id, answers)
+    if (why !== undefined) this.toast('warn', why)
+  }
+
+  /** Agent sessions other people invited me to (joined), for the sidebar. */
+  sharedSessions(): SharedView[] {
+    return this.share.sessions()
+  }
+
+  /** The room behind one shared-session tab: agents, open questions, participants. */
+  sharedRoom(hostPk: string): SharedRoom | undefined {
+    return this.share.room(hostPk)
+  }
+
+  /** Who is in my own shared agent session. */
+  sessionGuests(): GuestView[] {
+    return this.share.guests()
   }
 
   /** Adds a teammate from the setup screen; returns the failure reason, if any. */
@@ -588,6 +636,14 @@ export class Engine extends EventEmitter {
   }
 
   activate(convId: string | null): void {
+    const shared = parseSharedTab(convId)
+    if (shared !== undefined) {
+      if (this.share.room(shared) === undefined) return
+      this.share.markRead(shared)
+      this.activeId = convId
+      this.emit('change')
+      return
+    }
     const agent = parseAgentTab(convId)
     if (convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID || agent !== undefined) {
       if (convId === ROOM_ID) this.agents.markRead()
@@ -642,6 +698,7 @@ export class Engine extends EventEmitter {
     this.unknownTimers.clear()
     this.term.close()
     this.docs.close()
+    this.share.close()
     await this.agents.close()
     await this.net.stop()
     this.store.close()
@@ -658,6 +715,8 @@ export class Engine extends EventEmitter {
         return this.activate(TERM_ID)
       case 'doc':
         return this.cmdDoc(args)
+      case 'net':
+        return this.cmdNet()
       case 'code':
         return this.setHome([`Your name: ${this.me.name}`, `Your contact code: ${this.me.code}`, 'Share it so others can /add you.'])
       case 'name':
@@ -708,7 +767,7 @@ export class Engine extends EventEmitter {
 
   private async cmdAgent(rest: string, args: string[]): Promise<void> {
     const usage =
-      '/agent <name> <task> | new <cli> [name] | add <id> <command…> | remove <name> | setup | chain a>b <task> | model|effort <name> [value] | usage [name] | compact <name> | review on|off | goal <text> | memory [add <text>|clear] | commands <name> | cli <name> <args> | runs | stop [name|run] | merge <name|run> | drop <run|all|name> | reset <name> | check [name]'
+      '/agent <name> <task> | new <cli> [name] | add <id> <command…> | remove <name> | setup | chain a>b <task> | model|effort <name> [value] | usage [name] | compact <name> | review on|off | goal <text> | memory [add <text>|clear] | commands <name> | cli <name> <args> | runs | stop [name|run] | merge <name|run> | drop <run|all|name> | reset <name> | check [name] | invite <contact> [--view] | guests | kick <contact|all> | leave [host]'
     const sub = (args[0] ?? '').toLowerCase()
     if (sub === '') return this.toast('info', usage)
     const names = this.agents.names()
@@ -822,6 +881,14 @@ export class Engine extends EventEmitter {
         this.activate(ROOM_ID)
         void this.agents.check(target === undefined ? undefined : [nameArg])
         return
+      case 'invite':
+        return this.agentInvite(args.slice(1))
+      case 'guests':
+        return this.agentGuests()
+      case 'kick':
+        return this.agentKick(after)
+      case 'leave':
+        return this.agentLeave(after)
       default:
         break
     }
@@ -832,6 +899,44 @@ export class Engine extends EventEmitter {
       return
     }
     this.toast('error', `Usage: ${usage}`)
+  }
+
+  private agentInvite(args: string[]): void {
+    const access = args.includes('--view') ? 'view' : 'control'
+    const query = args.filter((a) => a !== '--view' && a !== '--control').join(' ')
+    const peers = this.store.listPeers().filter((p) => p.state === 'accepted')
+    const res = this.resolve(peers, query, (p) => p.name || pk8(p.pk), (p) => p.pk)
+    if ('error' in res) return this.toast('error', res.error)
+    const why = this.share.invite(res.item.pk, access)
+    const who = res.item.name || pk8(res.item.pk)
+    if (why !== undefined) return this.toast('error', `${who}: ${why}`)
+    this.toast('success', `Invited ${who} to your agent session (${access})`)
+  }
+
+  private agentGuests(): void {
+    const guests = this.share.guests()
+    this.setHome(['Your agent session:', ...(guests.length === 0 ? ['  nobody invited: /agent invite <contact> [--view]'] : guests.map((g) => `  ${g.name}  ${g.access}  ${g.state === 'invited' ? 'invited' : g.online ? 'online' : 'offline'}`))])
+  }
+
+  private agentKick(query: string): void {
+    if (query.trim().toLowerCase() === 'all') return this.reportKick(this.share.kick('all'), 'everyone')
+    const res = this.resolve(this.share.guests(), query, (g) => g.name, (g) => g.pk)
+    if ('error' in res) return this.toast('error', res.error)
+    this.reportKick(this.share.kick(res.item.pk), res.item.name)
+  }
+
+  private reportKick(why: string | undefined, who: string): void {
+    this.toast(why === undefined ? 'info' : 'error', why ?? `Removed ${who} from your agent session`)
+  }
+
+  private agentLeave(query: string): void {
+    const sessions = this.share.sessions()
+    const open = parseSharedTab(this.activeId)
+    const res = query === '' && open !== undefined ? { item: sessions.find((s) => s.pk === open) } : this.resolve(sessions, query, (s) => s.name, (s) => s.pk)
+    if ('error' in res) return this.toast('error', res.error)
+    if (res.item === undefined) return this.toast('error', 'Usage: /agent leave <host>')
+    this.share.decline(res.item.pk)
+    this.toast('info', `Left ${res.item.name}'s agent session`)
   }
 
   /** The agent's model or thinking-level choices: what it advertised over ACP, else the catalog's list. Empty = free text. */
@@ -959,6 +1064,19 @@ export class Engine extends EventEmitter {
     this.toast('success', `Density: ${wanted}`)
   }
 
+  private cmdNet(): void {
+    const lines = ['Links:']
+    for (const p of this.store.listPeers()) {
+      if (p.state !== 'accepted' && p.state !== 'outgoing') continue
+      const link = this.net.link(p.pk)
+      const state = link ? `online (caps ${link.hello.caps.join(',') || 'none'})` : 'offline'
+      lines.push(`  ${p.name || pk8(p.pk)}: ${p.state === 'outgoing' ? 'request pending, ' : ''}${state}`)
+    }
+    if (lines.length === 1) lines.push('  no contacts yet')
+    lines.push(`Listening: ${this.net.listening ? 'yes' : 'no'}`, `Log: ${this.netLog.file}`)
+    this.setHome(lines)
+  }
+
   private cmdName(next: string): void {
     if (next === '' || next.length > MAX_NAME || hasControl(next)) {
       this.toast('error', `Name must be 1-${MAX_NAME} characters`)
@@ -966,7 +1084,7 @@ export class Engine extends EventEmitter {
     }
     saveName(this.dir, next)
     this.me.name = next
-    for (const link of this.net.links()) link.send({ t: 'hello', v: 1, name: next })
+    for (const link of this.net.links()) link.send({ t: 'hello', v: 1, name: next, caps: [...LOCAL_CAPS] })
     this.toast('success', `Name set to ${next}`)
     this.emit('change')
   }
@@ -1041,6 +1159,11 @@ export class Engine extends EventEmitter {
     } else if (item.conv) {
       if (accept) this.acceptInvite(item.conv)
       else this.leaveGroup(item.conv)
+    } else if (item.session) {
+      if (!accept) return this.share.decline(item.session)
+      const why = this.share.accept(item.session)
+      if (why !== undefined) this.toast('error', why)
+      else this.activate(sharedTabId(item.session))
     }
   }
 
@@ -1201,6 +1324,9 @@ export class Engine extends EventEmitter {
     for (const c of invites) {
       items.push({ conv: c.id, view: { n: items.length + 1, type: 'group', label: c.title, note: '' } })
     }
+    for (const s of this.share.invites()) {
+      items.push({ session: s.pk, view: { n: items.length + 1, type: 'session', label: `${s.name}'s agents (${s.access})`, note: '' } })
+    }
     return items
   }
 
@@ -1335,6 +1461,7 @@ export class Engine extends EventEmitter {
         link.send({ t: 'group-invite', conv: conv.id, title: conv.title, creator: this.me.pk })
       }
     }
+    this.share.onOpen(link)
     this.sendSync(link)
     this.emit('change')
   }
@@ -1361,6 +1488,14 @@ export class Engine extends EventEmitter {
         return this.onAck(link, frame)
       case 'read':
         return this.onRead(link, frame)
+      case 'collab-invite':
+      case 'collab-join':
+      case 'collab-leave':
+      case 'collab-end':
+      case 'collab-say':
+      case 'collab-answer':
+      case 'collab-sync':
+        return this.share.onFrame(link, frame)
       default:
     }
   }
@@ -1547,6 +1682,12 @@ export class Engine extends EventEmitter {
     const text = this.activeId === TERM_ID ? typed : expandEmoji(typed)
     if (text.length > MAX_TEXT) {
       this.toast('error', `Message too long (max ${MAX_TEXT} characters)`)
+      return
+    }
+    const shared = parseSharedTab(this.activeId)
+    if (shared !== undefined) {
+      const why = this.share.say(shared, text)
+      if (why !== undefined) this.toast('warn', why)
       return
     }
     if (this.activeId === ROOM_ID || parseAgentTab(this.activeId) !== undefined) return this.agents.say(text, parseAgentTab(this.activeId))

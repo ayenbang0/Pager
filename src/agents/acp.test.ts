@@ -229,7 +229,7 @@ test('a setting equal to the current value is not sent', () =>
   withOrch(async ({ orch }) => {
     orch.setModel('omp', 'fast-1')
     await orch.ask('omp', 'CFG')
-    assert.ok(messages(orch).some((m) => m.text === 'cfg:{}'))
+    await waitFor(() => messages(orch).some((m) => m.text === 'cfg:{}'), 15_000, 'cfg reply')
   }))
 
 test('usage updates feed the context share, and a nearly full context compacts automatically', () =>

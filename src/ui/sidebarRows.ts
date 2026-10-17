@@ -1,3 +1,4 @@
+import type { SharedView } from '../agents/share.js'
 import type { AgentView } from '../agents/types.js'
 import type { Theme } from '../themes.js'
 import { bandLabel, fitSegs, gradientRule, pillSeg, segsWidth, selectedBar, type Seg } from './segs.js'
@@ -47,6 +48,12 @@ export function agentRowSpec(agent: AgentView, tint: string, theme: Theme, blink
     case 'idle':
       return { glyph: '●', glyphColor: tint, label: agent.name, labelColor: tint, badge }
   }
+}
+
+/** A shared agent session someone invited me to: `◈` lit while the host is connected, a `? ask` pill when an agent waits on an answer. */
+export function sharedRowSpec(s: SharedView, theme: Theme): RowSpec {
+  const badge = s.asking ? [pillSeg('? ask', theme.pill.warning)] : unreadBadge(s.unread, theme)
+  return { glyph: '◈', glyphColor: s.connected ? theme.accent : theme.dim, label: s.name, labelColor: s.connected ? theme.text : theme.dim, badge }
 }
 
 /** One row of exactly `width` columns. The active row is an inverse accent bar; its pills keep their own colors at the right end. */

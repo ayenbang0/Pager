@@ -2,7 +2,7 @@ import type { Theme } from '../themes.js'
 import { fitSegs, pillSeg, segsWidth, spread, type Seg } from './segs.js'
 import { spinnerCell } from './spinnerCells.js'
 
-export type StatusMode = 'home' | 'chat' | 'group' | 'hub' | 'agent' | 'terminal' | 'docs'
+export type StatusMode = 'home' | 'chat' | 'group' | 'hub' | 'shared' | 'agent' | 'terminal' | 'docs'
 
 export interface StatusInput {
   columns: number
@@ -35,6 +35,7 @@ const MODE_PILLS: Record<StatusMode, string> = {
   group: '# GROUP',
   home: '⌂ HOME',
   hub: '⌁ HUB',
+  shared: '◈ SHARED',
   terminal: '▸ TERM',
   docs: '▤ DOCS',
 }

@@ -7,6 +7,12 @@ A simpler way to chat. A full-screen TUI: add people with a shareable contact co
 Requires **Node 24+** and npm.
 
 ```sh
+npm install -g pager-cli   # then run: pager
+```
+
+Or from source:
+
+```sh
 git clone https://github.com/ayenbang0/Pager.git
 cd Pager
 npm install
@@ -47,6 +53,8 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/terminal` | Open the built-in Terminal tab |
 | `/doc new <name> [in <chat>]` | Create a shared Markdown document; also `open`, `rename`, `rm`, `list`. Without `in <chat>` it is private |
 | `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `chain`, `memory`, `commands`, `runs`, `stop`, `merge`, `drop`, `check` |
+| `/agent invite <contact> [--view]` | Let a contact into your agent room: they can message the agents and answer questions (`--view`: only watch). Also `guests`, `kick <contact\|all>`; a guest uses `/accept n` and `/agent leave` |
+| `/net` | Show which contacts are connected, their capabilities, and where `net.log` (link events and protocol errors) is |
 | `/agent setup` | See which agent CLIs are installed and ready, add a teammate (Enter) or register a custom ACP agent (`custom: <id> <command…>`) |
 | `/quit` | Exit |
 
@@ -138,7 +146,7 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 
 ## Coding agents
 
-`/agent` runs the coding agents installed on your machine (`omp`, `claude`, `opencode`, `hermes`) and lets them hand work to each other. It works only inside a git repository with at least one commit, and only on what you type locally: nothing from a peer or a chat can ever start or steer an agent.
+`/agent` runs the coding agents installed on your machine (`omp`, `claude`, `opencode`, `hermes`) and lets them hand work to each other. It works only inside a git repository with at least one commit, and only on what you type locally or what a contact you explicitly invited types (see Shared agent sessions): nothing else from a peer or a chat can ever start or steer an agent.
 
 ```
 /agent claude fix the flaky retry test     # starts a run; replies appear in the ⌁ agents room
@@ -155,6 +163,14 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Persistence.** The room transcript is saved to `<data dir>/agents-room.jsonl` (last 500 messages) and survives restarts. Runs themselves live in memory only: after a restart, leftover worktrees stay in `<data dir>/worktrees/`; remove one with `git worktree remove --force <dir>` and `git branch -D pager/<id>` (`/agent drop` only knows runs from the current session).
 - **Memory.** Three layers. The room transcript (the last 40 messages, up to 60k characters, including what other agents said and which files they changed) goes into every prompt. A repository-scoped notes file (`<data dir>/memory/<repo>.md`, passed as a `--- MEMORY ---` section, newest 8k characters) carries durable facts across restarts: agents add one with an `@@remember` … `@@end` block (up to 5 per reply), you manage it with `/agent memory [add <text>|clear]`. And `hermes` keeps its own ACP session between tasks (`omp` and `opencode` cannot resume a session across worktrees, so they rely on the first two layers).
 - **Agent commands.** `/agent cli <name> <args>` (or `@name !<args>` in the room) runs the agent's own CLI, for example `/agent cli claude mcp list` or `/agent cli opencode models`, and posts the output. It is non-interactive, so commands that open a TUI or ask questions time out. A task that starts with `/` (for example `/agent claude /review`) is sent to the agent verbatim so its own slash command runs; such a run does not get the pager preamble, so it cannot delegate. `/agent commands <name>` lists the slash commands an ACP agent advertises.
+
+## Shared agent sessions
+
+`/agent invite <contact> [--view]` lets one contact into your Agents room, like omp's `/collab`. The guest gets `/accept n`; the session then appears in their sidebar as `◈ <your name>` (separate from their own agents). The agents always run on **your** machine in your repository.
+
+- **Control** (default): the guest can message the agents (`@omp …`, `@all`, chains) and answer their questions; their messages show under their own name and run immediately. **A control guest has the same power over your worktree as you do through the agents** (shell, file edits, auto-approved tools), so invite only people you trust. **View** (`--view`): the guest only watches.
+- **Host only:** every `/agent` command, `/…` slash commands and `@agent !…` passthrough typed by a guest are refused, and a guest's `#document` names never pull your documents into a prompt. Remove someone with `/agent kick <name|all>`; at most 8 guests.
+- Needs both sides on a version that lists the `collab` capability (`/net` shows it); the guest list persists in `<data dir>/agent-guests.json` (host) and `agent-shared.json` (guest). The guest sees the last 100 room messages on joining, live updates after, and nothing while offline.
 
 ## Limitations
 

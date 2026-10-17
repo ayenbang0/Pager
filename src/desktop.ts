@@ -1,6 +1,7 @@
 // Notifications that show outside the terminal, with a chime, whether or not pager is the active window.
 import { spawn } from 'node:child_process'
 import fs from 'node:fs'
+import { chimePath } from './chime.js'
 
 /** Two alerts closer than this share one chime, so a burst of messages is one sound, not a machine gun. */
 export const CHIME_GAP_MS = 1500
@@ -28,7 +29,8 @@ $xml.LoadXml("<toast><visual><binding template='ToastGeneric'><text>$t</text><te
 $id = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\WindowsPowerShell\\v1.0\\powershell.exe'
 [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show([Windows.UI.Notifications.ToastNotification]::new($xml))
 if ($env:PAGER_N_SOUND -eq '1') {
-  $wav = Join-Path $env:WINDIR 'Media\\Windows Notify Messaging.wav'
+  $wav = $env:PAGER_N_WAV
+  if (-not $wav -or -not (Test-Path $wav)) { $wav = Join-Path $env:WINDIR 'Media\\Windows Notify Messaging.wav' }
   if (Test-Path $wav) { (New-Object Media.SoundPlayer $wav).PlaySync() } else { [System.Media.SystemSounds]::Asterisk.Play(); Start-Sleep -Milliseconds 900 }
 } else { Start-Sleep -Milliseconds 400 }
 `
@@ -52,17 +54,22 @@ function run(command: string, args: string[], env: NodeJS.ProcessEnv): void {
 }
 
 function spawnDesktop(a: DesktopAlert, env: NodeJS.ProcessEnv): void {
-  const e = { ...env, PAGER_N_TITLE: a.title, PAGER_N_BODY: a.body, PAGER_N_SOUND: a.sound ? '1' : '0' }
+  const e = { ...env, PAGER_N_TITLE: a.title, PAGER_N_BODY: a.body, PAGER_N_SOUND: a.sound ? '1' : '0', PAGER_N_WAV: a.sound ? (chimePath() ?? '') : '' }
   if (process.platform === 'win32') {
     run('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-WindowStyle', 'Hidden', '-Command', WINDOWS_SCRIPT], e)
   } else if (process.platform === 'darwin') {
     run('osascript', ['-e', MAC_SCRIPT], e)
-    if (a.sound) run('afplay', ['/System/Library/Sounds/Glass.aiff'], e)
+    if (a.sound) run('afplay', [e.PAGER_N_WAV || '/System/Library/Sounds/Glass.aiff'], e)
   } else {
     run('notify-send', ['--app-name=pager', '--', a.title, a.body], e)
     if (a.sound) {
-      run('canberra-gtk-play', ['-i', 'message-new-instant'], e)
-      run('paplay', ['/usr/share/sounds/freedesktop/stereo/message.oga'], e)
+      const wav = e.PAGER_N_WAV
+      if (wav) {
+        run('paplay', [wav], e)
+      } else {
+        run('canberra-gtk-play', ['-i', 'message-new-instant'], e)
+        run('paplay', ['/usr/share/sounds/freedesktop/stereo/message.oga'], e)
+      }
     }
   }
 }

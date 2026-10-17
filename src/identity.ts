@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import crypto from 'hypercore-crypto'
 import DHT, { type KeyPair } from 'hyperdht'
+import { validName } from './wire.js'
 
 export interface Identity {
   keyPair: KeyPair
@@ -48,7 +49,8 @@ function readIdentityFile(file: string): IdentityFile {
   if (o.version !== 1 || typeof o.seed !== 'string' || !SEED_RE.test(o.seed) || typeof o.name !== 'string') {
     throw corrupt(file)
   }
-  return { version: 1, seed: o.seed, name: o.name }
+  // A stored name every peer's hello check would reject would silence this client entirely.
+  return { version: 1, seed: o.seed, name: validName(o.name) ? o.name : defaultName() }
 }
 
 function writeIdentityFile(file: string, data: IdentityFile): void {

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { HomeStats } from '../engine.js'
 import { DEFAULT_THEME as theme, THEMES } from '../themes.js'
-import { LOGO, REVEAL_FRAMES } from './banner.js'
+import { LOGO, REVEAL_FRAMES, tagline } from './banner.js'
 import type { HomeAgentRow, HomeAgents } from './homeAgents.js'
 import {
   agentColumns,
@@ -23,6 +23,7 @@ import {
   parseInfo,
   renderCard,
   stackedOrder,
+  visualFrame,
   wrapText,
   type HomeInput,
 } from './homeRows.js'
@@ -307,4 +308,13 @@ test('a tall pane puts the content a little below the top; a short one starts at
   const short = homeRows(input({ width: 70, height: BANNER_ROWS }))
   assert.ok(short.length <= BANNER_ROWS)
   assert.match(text(short[0] ?? []), /P A G E R/)
+})
+
+test('visualFrame draws exactly what the frame it replaces draws, so idle ticks need no re-render', () => {
+  for (let f = 0; f < 800; f++) {
+    const v = visualFrame(f)
+    assert.deepEqual(logoRows(v, theme, true), logoRows(f, theme, true), `logo at ${f}`)
+    assert.equal(tagline(v, true), tagline(f, true), `tagline at ${f}`)
+  }
+  assert.ok(new Set(Array.from({ length: 800 }, (_, f) => visualFrame(f))).size < 120, 'the calm frames collapse onto a few')
 })

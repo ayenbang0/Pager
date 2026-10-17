@@ -28,4 +28,16 @@ test('corrupt identity.json throws and is left untouched', () => {
   assert.equal(fs.readFileSync(file, 'utf8'), '{nope')
 })
 
+test('a stored name that no hello frame would accept falls back to the default', () => {
+  for (const bad of ['', 'x'.repeat(80), 'bell\x07']) {
+    const dir = tmp()
+    const file = path.join(dir, 'identity.json')
+    loadOrCreateIdentity(dir)
+    const data = JSON.parse(fs.readFileSync(file, 'utf8'))
+    fs.writeFileSync(file, JSON.stringify({ ...data, name: bad }))
+    const name = loadOrCreateIdentity(dir).name
+    assert.ok(name.length > 0 && name.length <= 64 && !/\p{Cc}/u.test(name), JSON.stringify(bad))
+  }
+})
+
 after(removeTmpDirs)

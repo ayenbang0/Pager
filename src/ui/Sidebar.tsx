@@ -1,6 +1,7 @@
 import { Box } from 'ink'
 import type { ConvView, PendingView } from '../engine.js'
-import { parseAgentTab } from '../agents/ids.js'
+import { parseAgentTab, parseSharedTab } from '../agents/ids.js'
+import type { SharedView } from '../agents/share.js'
 import { ROOM_ID, type RoomView } from '../agents/orchestrator.js'
 import type { AgentView } from '../agents/types.js'
 import { TERM_ID } from '../terminal.js'
@@ -10,7 +11,7 @@ import { useBlink } from './Spinner.js'
 import { SpinnerLine } from './SpinnerLine.js'
 import { agentTint } from './look.js'
 import { pillSeg } from './segs.js'
-import { agentRowSpec, buildRow, groupHeader, unreadBadge, type RowSpec } from './sidebarRows.js'
+import { agentRowSpec, sharedRowSpec, buildRow, groupHeader, unreadBadge, type RowSpec } from './sidebarRows.js'
 import { tabGroups } from './tabs.js'
 import { useLook, useTheme } from './theme.js'
 
@@ -48,15 +49,17 @@ interface Props {
   convs: ConvView[]
   pending: PendingView[]
   room: RoomView
+  shared: SharedView[]
   activeId: string | null
   terminalRunning: boolean
 }
 
-export function Sidebar({ convs, pending, room, activeId, terminalRunning }: Props) {
+export function Sidebar({ convs, pending, room, shared, activeId, terminalRunning }: Props) {
   const theme = useTheme()
   const groups = tabGroups(
     convs,
     room.agents.map((a) => a.name),
+    shared.map((s) => s.pk),
   )
   const byId = new Map(convs.map((c) => [c.id, c]))
   const byName = new Map(room.agents.map((a) => [a.name, a]))
@@ -78,6 +81,8 @@ export function Sidebar({ convs, pending, room, activeId, terminalRunning }: Pro
     if (id === ROOM_ID) {
       return <Row key={id} spec={{ glyph: '⌁', glyphColor: theme.accent2, label: 'agents', badge: unreadBadge(room.unread, theme) }} active={active} />
     }
+    const session = shared.find((s) => s.pk === parseSharedTab(id))
+    if (session !== undefined) return <Row key={id} spec={sharedRowSpec(session, theme)} active={active} />
     const agent = byName.get(parseAgentTab(id) ?? '')
     return agent === undefined ? null : <AgentRow key={id} agent={agent} active={active} />
   }

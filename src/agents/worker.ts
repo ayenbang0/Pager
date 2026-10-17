@@ -20,6 +20,8 @@ export interface Inbox {
   also?: string[]
   /** Agents that delegated down to this message, for cycle and depth checks. */
   chain: string[]
+  /** Written by a guest of a shared session: never verbatim, never a source of #document references. */
+  guest?: true
   /** A branch to merge into the agent's worktree before it starts (a chain step continues from the previous agent's work). */
   mergeBranch?: string
   /** Called once when the turn that handled this message ends (also on failure and when it was dropped). */

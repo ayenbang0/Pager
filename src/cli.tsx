@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import './env.js'
 import type { Engine } from './engine.js'
 import { acquireLock, AlreadyRunningError } from './lock.js'
 import { dataDir } from './paths.js'
@@ -85,14 +86,16 @@ async function shutdown(code: number, error?: unknown): Promise<void> {
 
 // Dynamic: static imports would load hyperdht's native addons even for `pager update`, and Windows
 // cannot replace .node files this process has loaded.
+const { createElement } = await import('react') // not JSX: its static runtime import would load React before env.ts sets NODE_ENV
 const { render } = await import('ink')
 const { App } = await import('./ui/App.js')
 
 // interactive: stdin/stdout are already verified TTYs, so a stray CI variable must not blank the UI.
-const app = render(<App engine={engine} onExit={() => void shutdown(0)} />, {
+const app = render(createElement(App, { engine, onExit: () => void shutdown(0) }), {
   alternateScreen: true,
   exitOnCtrlC: false,
   interactive: true,
+  incrementalRendering: true,
 })
 
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void shutdown(0))

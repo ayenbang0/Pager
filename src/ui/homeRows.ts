@@ -163,6 +163,18 @@ export function glitchAt(frame: number): { burst: number; step: number } | undef
   return { burst: Math.floor(since / GLITCH_EVERY), step: since % GLITCH_EVERY }
 }
 
+/** Frames after which the tagline is fully typed. */
+const TYPED_FRAMES = REVEAL_FRAMES + 14
+
+/**
+ * The frame number that draws exactly what `frame` draws. Once the logo is revealed and the tagline typed, only the cursor's blink
+ * phase and a glitch burst change the picture, so every other frame maps onto one of two calm ones and the banner need not re-render.
+ */
+export function visualFrame(frame: number): number {
+  if (frame < TYPED_FRAMES || glitchAt(frame) !== undefined) return frame
+  return Math.floor(frame / 6) % 2 === 0 ? TYPED_FRAMES + 10 : TYPED_FRAMES + 4
+}
+
 /**
  * The block logo in the theme gradient, revealed left to right. Afterwards it sits still except for a rare, brief glitch: one thin strip
  * slides a column sideways and a few cells flicker to pixel glyphs in the second brand color. `animate: false` is the calm final frame.

@@ -12,6 +12,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'help', usage: '/help', summary: 'List commands' },
   { name: 'code', usage: '/code', summary: 'Show your contact code' },
   { name: 'name', usage: '/name <new name>', summary: 'Change your display name' },
+  { name: 'net', usage: '/net', summary: 'Show link state per contact and the net.log path' },
   { name: 'add', usage: '/add <code> [note]', summary: 'Send a contact request' },
   { name: 'accept', usage: '/accept [n]', summary: 'Accept a pending request or invite' },
   { name: 'decline', usage: '/decline [n]', summary: 'Decline a pending request or invite' },
@@ -95,6 +96,10 @@ const AGENT_SUBCOMMANDS: readonly CommandSpec[] = [
   { name: 'commands', usage: '/agent commands <name>', summary: "List an agent's slash commands" },
   { name: 'memory', usage: '/agent memory [add <text>|clear]', summary: "Show or edit this repository's shared agent notes" },
   { name: 'check', usage: '/agent check [name]', summary: 'Test that each agent CLI responds' },
+  { name: 'invite', usage: '/agent invite <contact> [--view]', summary: 'Let a contact into your agent room (they can control it, or only watch with --view)' },
+  { name: 'guests', usage: '/agent guests', summary: 'List who is in your shared agent session' },
+  { name: 'kick', usage: '/agent kick <contact|all>', summary: 'Remove a guest from your shared agent session' },
+  { name: 'leave', usage: '/agent leave [host]', summary: "Leave someone else's shared agent session" },
 ]
 
 /** The `/agent` argument menu: the ready agents first, then the fixed subcommands. */

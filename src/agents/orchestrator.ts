@@ -24,7 +24,7 @@ import {
   splitArgs,
   type PromptMessage,
 } from './protocol.js'
-import { Registry, type AgentConfig, type Readiness } from './registry.js'
+import { Registry, RESERVED_NAMES, type AgentConfig, type Readiness } from './registry.js'
 import { askUserResult, contentFromAnswers, fieldsFromAskUser, fieldsFromElicitation, Questions, type QuestionView } from './questions.js'
 import { feedbackText, pickReviewer, reviewRequest, REVIEW_MAX_ROUNDS, type Verdict } from './review.js'
 import { FORWARD_THRESHOLD, parseMentions, relevance } from './router.js'
@@ -34,6 +34,12 @@ import { shimSpec, ToolServer, type AskQuestion, type ToolHost, type TurnToken }
 import { probeAcp, runOneShot, runViaAcp, type Reply } from './turn.js'
 import type { AgentView } from './types.js'
 import { Worker, type Inbox, type Outcome, type TurnCtx } from './worker.js'
+
+/** A guest of a shared session speaking through the host's room. `label` is unique among the room's names; `pk` is their public key. */
+export interface Actor {
+  label: string
+  pk: string
+}
 
 export { repoKey, ROOM_ID }
 export const MAX_CONCURRENT = 3
@@ -206,10 +212,10 @@ export class Orchestrator extends EventEmitter {
         authorKey: e.authorKey,
         mine: e.author === 'you',
         kind: e.kind,
-        agent: e.author !== 'you' && e.author !== 'pager',
+        agent: e.pk === undefined && e.author !== 'you' && e.author !== 'pager',
         text: e.text,
         status: null,
-        markdown: e.kind === 'text' && e.author !== 'you',
+        markdown: e.kind === 'text' && e.pk === undefined && e.author !== 'you',
       }))
   }
 
@@ -287,26 +293,54 @@ export class Orchestrator extends EventEmitter {
 
   // ---- talking to agents ----
 
-  /** The user typed `text` in the hub or in an agent's tab (`tab`). Mentions pick who hears it. */
-  say(text: string, tab?: string): void {
-    if (this.checkingNow) void this.checking.then(() => this.sayNow(text, tab))
-    else this.sayNow(text, tab)
+  /** The room's entries, oldest first (read-only; for sharing the room with guests). */
+  entries(): readonly RoomEntry[] {
+    return this.log.all()
   }
 
-  private sayNow(text: string, tab: string | undefined): void {
+  /** The label a guest speaks under: their name, tidied, and never one that an agent or pager itself uses. */
+  guestLabel(name: string, pk: string): string {
+    const tidy = name.replace(/[[\]\p{Cc}]/gu, '').trim().slice(0, 24) || pk.slice(0, 8)
+    const taken = [...this.names(), ...RESERVED_NAMES].some((n) => n.toLowerCase() === tidy.toLowerCase())
+    return taken ? `${tidy}~${pk.slice(0, 4)}` : tidy
+  }
+
+  /** A guest's message. Returns why it was refused, or undefined when it reached the room. Commands stay with the host. */
+  sayAsGuest(text: string, tab: string | undefined, actor: Actor): string | undefined {
+    const body = text.trim()
+    const refuse = (why: string): string => {
+      this.post(`${actor.label}: ${why}`)
+      return why
+    }
+    if (body === '') return 'empty message'
+    if (body.startsWith('/')) return refuse('commands are host-only')
+    if (/^@[a-z][a-z0-9_-]+\s+!/i.test(body)) return refuse('! passthrough is host-only')
+    this.say(text, tab, actor)
+    return undefined
+  }
+
+  /** The user typed `text` in the hub or in an agent's tab (`tab`). Mentions pick who hears it. `actor` is a shared-session guest. */
+  say(text: string, tab?: string, actor?: Actor): void {
+    if (this.checkingNow) void this.checking.then(() => this.sayNow(text, tab, actor))
+    else this.sayNow(text, tab, actor)
+  }
+
+  private sayNow(text: string, tab: string | undefined, actor: Actor | undefined): void {
+    const who = actor?.label ?? 'you'
+    const guest = actor === undefined ? {} : ({ guest: true } as const)
     const names = this.names()
     const own = tab !== undefined && tab !== ROOM_ID && names.includes(tab) ? tab : undefined
     const body = text.trim()
     const chainMatch = /^@(\w[\w-]*(?:>\w[\w-]*)+)\s+([\s\S]+)$/.exec(body)
     const chain = chainMatch?.[1] === undefined ? undefined : chainSpec(chainMatch[1], names)
     if (chain !== undefined && chainMatch?.[2] !== undefined) {
-      void this.chain(chain, chainMatch[2].trim(), true)
+      void this.chain(chain, chainMatch[2].trim(), true, actor)
       return
     }
     const passthrough = /^@([a-z][a-z0-9_-]+)\s+!([\s\S]*)$/i.exec(body)
     const target = passthrough?.[1]?.toLowerCase()
     if (target !== undefined && names.includes(target)) {
-      this.append('you', 'text', text, [target])
+      this.append(who, 'text', text, [target], actor?.pk)
       const argv = splitArgs(passthrough?.[2] ?? '')
       if (argv.length === 0) this.toast('error', `Usage: @${target} !<cli arguments>`)
       else void this.cli(target, argv)
@@ -314,25 +348,26 @@ export class Orchestrator extends EventEmitter {
     }
     const { targets } = parseMentions(body, names)
     const to = targets.length > 0 ? targets : own === undefined ? [] : [own]
-    this.append('you', 'text', text, to.length > 0 ? to : undefined)
+    this.append(who, 'text', text, to.length > 0 ? to : undefined, actor?.pk)
     if (to.length === 0) {
       const hint = names.length === 0 ? 'No agents are ready: /agent setup' : `Name an agent: ${names.map((n) => `@${n}`).join(', ')} or @all`
-      this.toast('warn', hint)
+      if (actor === undefined) this.toast('warn', hint)
+      else this.post(hint)
       return
     }
     for (const name of to) {
-      void this.send(name, { from: 'you', kind: 'user', text: body, also: to.filter((t) => t !== name), chain: [] })
+      void this.send(name, { from: who, kind: 'user', text: body, also: to.filter((t) => t !== name), chain: [], ...guest })
     }
-    this.forward(body, to)
+    this.forward(body, to, who)
   }
 
   /** Hands a message to every other agent that has a live task it touches. */
-  private forward(text: string, already: string[]): void {
+  private forward(text: string, already: string[], from = 'you'): void {
     for (const w of this.workers.values()) {
       if (already.includes(w.name) || (w.state === 'idle' && w.task === '') || !this.names().includes(w.name)) continue
       const { score, reason } = relevance(text, { task: w.task, files: w.files })
       if (score < FORWARD_THRESHOLD) continue
-      void this.send(w.name, { from: 'you', kind: 'forward', text: `pager forwarded this because it touches your task (${reason}):\n${text}`, chain: [] })
+      void this.send(w.name, { from, kind: 'forward', text: `pager forwarded this because it touches your task (${reason}):\n${text}`, chain: [] })
     }
   }
 
@@ -343,18 +378,18 @@ export class Orchestrator extends EventEmitter {
   }
 
   /** Runs the agents in turn; each continues from the previous one's branch and reviews its work. */
-  chain(agents: string[], task: string, log = true): Promise<void> {
-    if (log) this.append('you', 'text', `@${agents.join('>')} ${task}`, agents)
-    return this.track(this.runChain(agents, task))
+  chain(agents: string[], task: string, log = true, actor?: Actor): Promise<void> {
+    if (log) this.append(actor?.label ?? 'you', 'text', `@${agents.join('>')} ${task}`, agents, actor?.pk)
+    return this.track(this.runChain(agents, task, actor?.label ?? 'you', actor !== undefined))
   }
 
-  private async runChain(agents: string[], task: string): Promise<void> {
+  private async runChain(agents: string[], task: string, from: string, guest: boolean): Promise<void> {
     let prev: Outcome | undefined
     let prevBranch: string | undefined
     for (const name of agents) {
       if (prev !== undefined && !prev.ok) return this.post('chain stopped: the previous step failed', agents)
       const text = prev === undefined ? task : chainTask(task, { run: prev.runId, text: prev.text })
-      prev = await this.send(name, { from: 'you', kind: 'user', text, chain: [], ...(prevBranch === undefined ? {} : { mergeBranch: prevBranch }) })
+      prev = await this.send(name, { from, kind: 'user', text, chain: [], ...(guest ? { guest: true as const } : {}), ...(prevBranch === undefined ? {} : { mergeBranch: prevBranch }) })
       prevBranch = `pager/${name}`
     }
   }
@@ -777,8 +812,8 @@ export class Orchestrator extends EventEmitter {
     this.emit('toast', t)
   }
 
-  private append(author: string, kind: 'text' | 'system', text: string, to?: string[]): RoomEntry {
-    const entry = this.log.add(author, kind, text, to, true)
+  private append(author: string, kind: 'text' | 'system', text: string, to?: string[], pk?: string): RoomEntry {
+    const entry = this.log.add(author, kind, text, to, true, pk)
     this.emit('change')
     return entry
   }
@@ -1005,8 +1040,9 @@ export class Orchestrator extends EventEmitter {
     if (w.stopped) throw new CancelledError()
     const startSha = await currentSha(w.dir)
     const kind = batch.some((m) => m.kind === 'review') ? 'review' : 'normal'
-    const verbatim = batch.length === 1 && batch[0]?.text.startsWith('/') === true && batch[0]?.kind === 'user'
-    const userText = batch.filter((m) => m.kind === 'user').map((m) => m.text).join('\n')
+    const verbatim = batch.length === 1 && batch[0]?.text.startsWith('/') === true && batch[0]?.kind === 'user' && batch[0]?.guest !== true
+    // Documents are named only by the host: a guest's #name never pulls one into a prompt.
+    const userText = batch.filter((m) => m.kind === 'user' && m.guest !== true).map((m) => m.text).join('\n')
     const ctx: TurnCtx = { runId: run.id, kind, shownDocs: verbatim ? [] : (this.opts.docs?.list(userText) ?? []), docEdits: 0, notes: 0, touched: [], refused: [] }
     w.turn = ctx
     w.turnKind = kind

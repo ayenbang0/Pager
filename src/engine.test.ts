@@ -237,6 +237,10 @@ test('name change propagates to contacts', async () => {
   await befriend(a, b)
   await a.engine.submit('/name alicia')
   await waitFor(() => b.engine.convs().some((v) => v.title === 'alicia'), 15_000, 'new name')
+  // The re-sent hello must keep advertising capabilities, or read receipts silently stop until reconnect.
+  await b.engine.submit('/net')
+  const line = b.engine.home().find((l) => l.includes('alicia'))
+  assert.match(line ?? '', /online \(caps read\b/)
 })
 
 test('/theme switches, persists across restarts, and rejects unknown names', async () => {

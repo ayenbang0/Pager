@@ -18,6 +18,8 @@ export interface RoomEntry {
   text: string
   /** Agents this entry is addressed to or about; it shows in their tabs. Absent on entries written by older versions (hub only). */
   to?: string[]
+  /** Who wrote it when it is a guest of a shared session (their public key); absent for the host, pager and agents. */
+  pk?: string
 }
 
 function isRoomEntry(x: unknown): x is RoomEntry {
@@ -29,7 +31,8 @@ function isRoomEntry(x: unknown): x is RoomEntry {
     typeof x.authorKey === 'string' &&
     (x.kind === 'text' || x.kind === 'system') &&
     typeof x.text === 'string' &&
-    (x.to === undefined || (Array.isArray(x.to) && x.to.every((t) => typeof t === 'string')))
+    (x.to === undefined || (Array.isArray(x.to) && x.to.every((t) => typeof t === 'string'))) &&
+    (x.pk === undefined || typeof x.pk === 'string')
   )
 }
 
@@ -61,8 +64,17 @@ export class RoomLog {
   }
 
   /** Adds an entry and returns it. `persist: false` is for a streaming entry, written once when it settles. */
-  add(author: string, kind: 'text' | 'system', text: string, to: string[] | undefined, persist: boolean): RoomEntry {
-    const entry: RoomEntry = { n: ++this.counter, ts: Date.now(), author, authorKey: authorKeyOf(author), kind, text, ...(to === undefined ? {} : { to }) }
+  add(author: string, kind: 'text' | 'system', text: string, to: string[] | undefined, persist: boolean, pk?: string): RoomEntry {
+    const entry: RoomEntry = {
+      n: ++this.counter,
+      ts: Date.now(),
+      author,
+      authorKey: pk ?? authorKeyOf(author),
+      kind,
+      text,
+      ...(to === undefined ? {} : { to }),
+      ...(pk === undefined ? {} : { pk }),
+    }
     this.entries.push(entry)
     if (this.entries.length > ROOM_MAX_MESSAGES) this.entries.shift()
     if (persist) this.persist(entry)

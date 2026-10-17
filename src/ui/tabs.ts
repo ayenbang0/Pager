@@ -1,5 +1,5 @@
 import type { ConvView } from '../engine.js'
-import { agentTabId } from '../agents/ids.js'
+import { agentTabId, sharedTabId } from '../agents/ids.js'
 import { ROOM_ID } from '../agents/orchestrator.js'
 import { TERM_ID } from '../terminal.js'
 import { DOCS_ID } from '../docs/store.js'
@@ -11,8 +11,8 @@ export interface TabGroups {
   tools: string[]
 }
 
-/** People, groups, the all-agents hub and one tab per ready agent; terminal and docs under tools. */
-export function tabGroups(convs: readonly ConvView[], agents: readonly string[]): TabGroups {
+/** People, groups, the all-agents hub, one tab per ready agent and one per shared agent session (by host key); terminal and docs under tools. */
+export function tabGroups(convs: readonly ConvView[], agents: readonly string[], shared: readonly string[] = []): TabGroups {
   return {
     home: null,
     chats: [
@@ -20,6 +20,7 @@ export function tabGroups(convs: readonly ConvView[], agents: readonly string[])
       ...convs.filter((c) => c.kind === 'group').map((c) => c.id),
       ROOM_ID,
       ...agents.map(agentTabId),
+      ...shared.map(sharedTabId),
     ],
     tools: [TERM_ID, DOCS_ID],
   }

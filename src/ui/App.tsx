@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Box, Text, useInput, useWindowSize } from 'ink'
-import { agentTabId, parseAgentTab } from '../agents/ids.js'
+import { agentTabId, parseAgentTab, parseSharedTab } from '../agents/ids.js'
 import { ROOM_ID } from '../agents/orchestrator.js'
 import type { AgentView } from '../agents/types.js'
 import { TERM_ID } from '../terminal.js'
@@ -39,6 +39,7 @@ import { selectedText, withSelection, type Cell, type Sel } from './selection.js
 import { Sidebar, SIDEBAR_WIDTH } from './Sidebar.js'
 import { tabGroups, tabOrder } from './tabs.js'
 import { StatusBar } from './StatusBar.js'
+import { frameRows } from './frame.js'
 import { LookContext, ThemeContext } from './theme.js'
 import { Toasts, TOAST_LIFETIME_MS, type ToastItem } from './Toasts.js'
 import { useEngine } from './useEngine.js'
@@ -89,6 +90,7 @@ interface Props {
 export function App({ engine, onExit }: Props) {
   useEngine(engine)
   const { columns, rows } = useWindowSize()
+  const frame = frameRows(rows)
   const [input, setInput] = useState<InputBuffer>(emptyInput)
   const [offset, setOffset] = useState(0)
   const [toasts, setToasts] = useState<ToastItem[]>([])
@@ -154,11 +156,14 @@ export function App({ engine, onExit }: Props) {
   const agentsActive = room.runs.filter((r) => r.state === 'running' || r.state === 'queued').length
   const agentTab = parseAgentTab(activeId)
   const agentView = room.agents.find((a) => a.name === agentTab)
+  const shared = engine.sharedSessions()
+  const sharedPk = parseSharedTab(activeId)
+  const sharedRoom = sharedPk === undefined ? undefined : engine.sharedRoom(sharedPk)
   const review = engine.agentReview()
   const inTermTab = activeId === TERM_ID
   // Short panes fall back to compact rows, and the terminal tab is always compact: its rows are commands and output, not speakers.
   const look: Look = {
-    density: inTermTab ? 'compact' : effectiveDensity(settings.density, rows),
+    density: inTermTab ? 'compact' : effectiveDensity(settings.density, frame),
     badge: badgeGlyph(settings.badge, engine.me.name),
     agentColors: Object.fromEntries(room.agents.flatMap((a) => (a.color === undefined ? [] : [[a.name, a.color] as const]))),
     me: engine.me.name,
@@ -193,12 +198,13 @@ export function App({ engine, onExit }: Props) {
   const agentMenu: AgentMenu | undefined = agentView === undefined ? undefined : { agent: agentView.name, commands: engine.agentCommands(agentView.name) }
   // An agent's question takes the prompt's place in its own tab and in the hub; in any other tab a banner points to it.
   const questions = engine.questions()
-  const shownQuestion = questionFor(questions, agentTab, activeId === ROOM_ID)
-  const questionLine = questionBanner(questions, shownQuestion)
-  const pickerH = shownQuestion === undefined ? 0 : pickerHeight(shownQuestion, Math.max(8, Math.floor(rows / 2)))
+  // In a shared session the host's agents ask; only a guest with control answers.
+  const shownQuestion = sharedRoom === undefined ? questionFor(questions, agentTab, activeId === ROOM_ID) : sharedRoom.access === 'control' ? sharedRoom.questions[0] : undefined
+  const questionLine = questionBanner(questions, sharedRoom === undefined ? shownQuestion : undefined)
+  const pickerH = shownQuestion === undefined ? 0 : pickerHeight(shownQuestion, Math.max(8, Math.floor(frame / 2)))
   const menu = overlay === null && !inEditor && shownQuestion === undefined ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu) : []
   const bannerRow = !inEditor && questionLine !== undefined ? 1 : 0
-  const paneRows = Math.max(MIN_PANE_ROWS, rows - (FIXED_ROWS - PROMPT_ROWS) - (shownQuestion === undefined || inEditor ? PROMPT_ROWS : pickerH) - bannerRow - menu.length)
+  const paneRows = Math.max(MIN_PANE_ROWS, frame - (FIXED_ROWS - PROMPT_ROWS) - (shownQuestion === undefined || inEditor ? PROMPT_ROWS : pickerH) - bannerRow - menu.length)
   const mainWidth = columns - (sidebarShown ? SIDEBAR_WIDTH : 0)
   const activeConv = convs.find((c) => c.id === activeId)
 
@@ -312,6 +318,7 @@ export function App({ engine, onExit }: Props) {
       tabGroups(
         convs,
         room.agents.map((a) => a.name),
+        shared.map((s) => s.pk),
       ),
     )
     const at = Math.max(0, ids.indexOf(activeId))
@@ -355,7 +362,9 @@ export function App({ engine, onExit }: Props) {
       ? { kind: 'terminal', title: '' }
       : inRoom
         ? { kind: 'hub', title: '' }
-        : agentView !== undefined
+        : sharedRoom !== undefined
+          ? { kind: 'shared', title: sharedRoom.host }
+          : agentView !== undefined
           ? { kind: 'agent', title: agentView.name }
           : activeConv?.kind === 'group'
             ? { kind: 'group', title: activeConv.title }
@@ -364,13 +373,20 @@ export function App({ engine, onExit }: Props) {
               : { kind: 'home', title: '' }
   const tint = agentView === undefined ? undefined : (agentView.color ?? agentTint(theme, look, agentView.name))
   // The title row under the header: what this tab is, plus the one fact worth a glance (presence, scroll state). The terminal has its own header.
-  const tabTitle = inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
-  const tabNote = offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : undefined
+  const sharedHere = sharedRoom?.guests.filter((g) => g.online).map((g) => g.name) ?? []
+  const sharedNote =
+    sharedRoom === undefined ? undefined : [sharedRoom.access, sharedRoom.connected ? undefined : 'host offline', sharedHere.length === 0 ? undefined : `with ${sharedHere.join(', ')}`].filter(Boolean).join(' · ')
+  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
+  const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : undefined
   const placeholder = inTerm
     ? term.running
       ? 'Type to send input to the running command · Ctrl+C stops it'
       : 'Run a command (cd works) · // for a leading slash · Ctrl+C stops'
-    : inRoom
+    : sharedRoom !== undefined
+      ? sharedRoom.access === 'view'
+        ? 'View only: the host invited you to watch'
+        : `Ask ${sharedRoom.agents.slice(0, 3).map((a) => `@${a.name}`).join(', ') || '@agent'} or @all in ${sharedRoom.host}'s session`
+      : inRoom
       ? room.agents.length === 0
         ? 'No agents are ready: /agent setup'
         : `Ask ${room.agents.slice(0, 3).map((a) => `@${a.name}`).join(', ')} or @all (@a>b chains)`
@@ -499,7 +515,7 @@ export function App({ engine, onExit }: Props) {
   return (
     <ThemeContext.Provider value={theme}>
       <LookContext.Provider value={look}>
-      <Box width={columns} height={rows} flexDirection="column">
+      <Box width={columns} height={frame} flexDirection="column">
         <Header
           width={columns}
           crumbs={crumbsFor(place)}
@@ -510,7 +526,7 @@ export function App({ engine, onExit }: Props) {
           badge={look.badge}
         />
         <Box flexGrow={1}>
-          {sidebarShown ? <Sidebar convs={convs} pending={pending} room={room} activeId={activeId} terminalRunning={term.running} /> : null}
+          {sidebarShown ? <Sidebar convs={convs} pending={pending} room={room} shared={shared} activeId={activeId} terminalRunning={term.running} /> : null}
           <Box flexDirection="column" flexGrow={1}>
             {overlay === 'palette' ? (
               <CommandPalette items={paletteItems} height={paneRows + 1} onClose={closeOverlay} />

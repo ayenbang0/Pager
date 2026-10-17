@@ -115,3 +115,20 @@ test('a first frame other than hello gets the socket closed', async () => {
     await dht.destroy({ force: true })
   }
 })
+
+test('protocol violations are reported to the log callback, not swallowed', async () => {
+  const lines: string[] = []
+  const a = make(DHT.keyPair(), { log: (event, _pk, detail) => lines.push(`${event} ${detail ?? ''}`) })
+  a.net.start()
+  await waitFor(() => a.net.listening, 10_000, 'listening')
+  const dht = new DHT({ bootstrap: testnet.bootstrap, host: '127.0.0.1' })
+  try {
+    const socket = dht.connect(a.kp.publicKey)
+    socket.on('error', () => {})
+    socket.on('open', () => socket.write('{"t":"hello","v":1,"name":""}\n'))
+    await waitFor(() => lines.some((l) => l.startsWith('protocol-error')), 10_000, 'protocol-error line')
+    assert.match(lines.find((l) => l.startsWith('protocol-error')) ?? '', /invalid frame hello name/)
+  } finally {
+    await dht.destroy({ force: true })
+  }
+})
