@@ -387,7 +387,7 @@ test('@all reaches every ready agent', () =>
     await waitFor(() => orch.room().runs.length === 4, 40_000, 'four turns')
     await settled(orch)
     assert.equal(texts(orch).filter((l) => l.endsWith(': roll call')).length, 4)
-  }))
+  }, { limits: { maxConcurrent: 4 } }))
 
 test('text typed in an agent tab goes to that agent only', () =>
   withOrch(async ({ orch }) => {
