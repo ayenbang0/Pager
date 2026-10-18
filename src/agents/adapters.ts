@@ -67,7 +67,9 @@ export const ADAPTERS: Record<string, AdapterSpec> = {
       'bypassPermissions',
       '--no-session-persistence',
       ...flags('claude', opts),
-      ...(opts?.mcpConfig === undefined ? [] : ['--mcp-config', opts.mcpConfig]),
+      // `--mcp-config` is variadic: the `=` form takes exactly one value, and `--` keeps a prompt that starts with dashes (the board header does) from being read as an option.
+      ...(opts?.mcpConfig === undefined ? [] : [`--mcp-config=${opts.mcpConfig}`]),
+      '--',
       prompt,
     ],
     extract: cleanOutput,

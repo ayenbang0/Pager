@@ -22,7 +22,7 @@ test('model and effort become each CLI\'s own flags, ahead of the prompt', () =>
   assert.deepEqual(ADAPTERS.omp?.args?.('hi', '/w', { model: 'm1', effort: 'high' }), ['-p', '--no-session', '--cwd', '/w', '--model', 'm1', '--thinking', 'high', 'hi'])
   assert.deepEqual(ADAPTERS.opencode?.args?.('hi', '/w', { model: 'p/m' }), ['run', '--auto', '--dir', '/w', '-m', 'p/m', 'hi'])
   assert.deepEqual(ADAPTERS.hermes?.args?.('hi', '/w', { effort: 'low' }), ['chat', '-Q', '--oneshot', '--yolo', '--in', '/w', '--reasoning', 'low', '-q', 'hi'])
-  assert.ok(ADAPTERS.claude?.args?.('hi', '/w', { effort: 'high', mcpConfig: '{}' })?.join(' ').endsWith('--effort high --mcp-config {} hi'))
+  assert.ok(ADAPTERS.claude?.args?.('--- hi', '/w', { effort: 'high', mcpConfig: '{}' })?.join(' ').endsWith('--effort high --mcp-config={} -- --- hi'))
   assert.deepEqual(ADAPTERS.omp?.args?.('hi', '/w'), ['-p', '--no-session', '--cwd', '/w', 'hi'])
 })
 
