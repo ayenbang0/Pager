@@ -172,13 +172,15 @@ export class AgentShare {
   }
 
   invite(pk: string, access: ShareAccess): string | undefined {
-    if (!this.p.isContact(pk)) return 'not a contact'
-    if (this.guestList.has(pk)) return 'already in the session'
-    if (this.guestList.size >= MAX_GUESTS) return `at most ${MAX_GUESTS} guests`
+    const name = this.p.nameOf(pk)
+    if (!this.p.isContact(pk)) return `${name} is not a contact`
+    const existing = this.guestList.get(pk)
+    if (existing?.state === 'joined') return `${name} is already in your agent session`
+    if (existing === undefined && this.guestList.size >= MAX_GUESTS) return `Your agent session holds at most ${MAX_GUESTS} guests`
     const link = this.p.link(pk)
-    if (link === undefined) return `${this.p.nameOf(pk)} is offline`
-    if (!link.hello.caps.includes(CAP)) return `${this.p.nameOf(pk)} runs a pager without shared sessions: ask them to update`
-    this.guestList.set(pk, { name: this.p.nameOf(pk), access, state: 'invited' })
+    if (link === undefined) return `${name} is offline: invites go out while you are both online`
+    if (!link.hello.caps.includes(CAP)) return `${name} runs a pager without shared sessions: ask them to update`
+    this.guestList.set(pk, { name, access, state: 'invited' })
     this.saveGuests()
     this.sendInvite(link, access)
     this.p.changed()
@@ -344,7 +346,7 @@ export class AgentShare {
     const m = this.hostList.get(hostPk)
     if (m?.state !== 'invited') return 'no such invite'
     const link = this.p.link(hostPk)
-    if (link?.hello.caps.includes(CAP) !== true) return `${m.name} is offline`
+    if (link?.hello.caps.includes(CAP) !== true) return `${m.name} is offline: you can join while you are both online`
     m.state = 'joined'
     this.saveHosts()
     link.send({ t: 'collab-join' })
@@ -395,7 +397,19 @@ export class AgentShare {
   }
 
   messages(hostPk: string, limit: number): MessageView[] {
-    return (this.mirrors.get(hostPk)?.entries ?? []).slice(-limit).map((e) => ({
+    const mirror = this.mirrors.get(hostPk)
+    const joined = this.hostList.get(hostPk)
+    if (joined?.state === 'joined' && (mirror?.entries.length ?? 0) === 0) {
+      const host = mirror?.host ?? joined.name
+      const text =
+        this.p.link(hostPk) === undefined
+          ? `${host} is offline: the session continues when they are back.`
+          : joined.access === 'view'
+            ? `Joined ${host}'s agent session. You are watching: replies appear here.`
+            : `Joined ${host}'s agent session. Ask with @name <task>: the replies appear here.`
+      return [{ key: 'shared:welcome', ts: Date.now(), authorName: 'pager', authorKey: hostPk, mine: false, kind: 'system', text, status: null }]
+    }
+    return (mirror?.entries ?? []).slice(-limit).map((e) => ({
       key: `shared:${e.n}`,
       ts: e.ts,
       authorName: e.author,

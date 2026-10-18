@@ -12,8 +12,16 @@ const ARGUMENTS: Record<string, readonly CommandSpec[]> = {
 }
 const ARGUMENT_RE = /^\/(\S+) (\S*)$/
 
-/** Slash-command suggestions for the current prompt text. `agents` are the ready agents' names. */
-export function matchCommands(text: string, agents: readonly string[] = []): CommandSpec[] {
+/** Slash-command suggestions for the current prompt text. `agents` are the ready agents' names, `contacts` the accepted contacts' names. */
+export function matchCommands(text: string, agents: readonly string[] = [], contacts: readonly string[] = []): CommandSpec[] {
+  const invite = /^\/agent invite (\S*)$/i.exec(text)
+  if (invite) {
+    const typed = (invite[1] ?? '').toLowerCase()
+    return contacts
+      .filter((name) => name.toLowerCase().startsWith(typed))
+      .slice(0, MAX_ROWS)
+      .map((name) => ({ name, usage: `/agent invite ${name}`, summary: 'Invite them to your agents (add --view to let them only watch)' }))
+  }
   const arg = ARGUMENT_RE.exec(text)
   if (arg) {
     const command = (arg[1] ?? '').toLowerCase()
@@ -26,9 +34,9 @@ export function matchCommands(text: string, agents: readonly string[] = []): Com
   return COMMANDS.filter((c) => c.name.startsWith(typed)).slice(0, MAX_ROWS)
 }
 
-/** Text the prompt becomes when `spec` is chosen from the palette. */
+/** Text the prompt becomes when `spec` is chosen from the palette: its name replaces the last word. */
 export function completion(text: string, spec: CommandSpec): string {
-  const space = text.indexOf(' ')
+  const space = text.lastIndexOf(' ')
   return space === -1 ? `/${spec.name} ` : `${text.slice(0, space)} ${spec.name} `
 }
 
@@ -93,8 +101,8 @@ function agentMatches(text: string, menu: AgentMenu): MenuItem[] {
  * The menu for the prompt: pager command completions while a `/` menu is open, then the active agent's own commands,
  * else emoji for a `:name` before the cursor when `emoji` is allowed.
  */
-export function menuItems(text: string, cursor: number, emoji: boolean, agents: readonly string[] = [], agentMenu?: AgentMenu): MenuItem[] {
-  const commands: MenuItem[] = matchCommands(text, agents).map((spec) => ({ label: spec.usage, summary: spec.summary, insert: completion(text, spec), from: 0, to: text.length }))
+export function menuItems(text: string, cursor: number, emoji: boolean, agents: readonly string[] = [], agentMenu?: AgentMenu, contacts: readonly string[] = []): MenuItem[] {
+  const commands: MenuItem[] = matchCommands(text, agents, contacts).map((spec) => ({ label: spec.usage, summary: spec.summary, insert: completion(text, spec), from: 0, to: text.length }))
   const own = agentMenu === undefined ? [] : agentMatches(text, agentMenu)
   if (commands.length > 0 || own.length > 0) return [...commands, ...own]
   return emoji ? matchEmoji(text.slice(0, cursor), text.slice(cursor)) : []

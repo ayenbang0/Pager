@@ -59,7 +59,7 @@ function hintFor(i: HomeAgentsInput, rows: readonly HomeAgentRow[]): string {
   if (i.reviewsPending > 0) return `${i.reviewsPending} review${i.reviewsPending === 1 ? '' : 's'} running`
   if (rows.every((r) => r.turns === 0)) return `try @${rows[0]?.name ?? 'omp'} <task> in any chat`
   if (i.unadded > 0) return `${i.unadded} more installed — /agent setup`
-  return '/agent usage · /agent review on|off · Alt+M model'
+  return 'Alt+I invite a contact · /agent usage · Alt+M model'
 }
 
 /** Everything the Home AGENTS card shows, from live state and the recorded stats. */

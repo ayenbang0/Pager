@@ -132,3 +132,34 @@ test('protocol violations are reported to the log callback, not swallowed', asyn
     await dht.destroy({ force: true })
   }
 })
+
+test('a link whose peer goes silent is dropped, while a peer that keeps it alive is not', async () => {
+  const kpA = DHT.keyPair()
+  const kpB = DHT.keyPair()
+  const kpC = DHT.keyPair()
+  const pkA = kpA.publicKey.toString('hex')
+  const pkB = kpB.publicKey.toString('hex')
+  const pkC = kpC.publicKey.toString('hex')
+  const quiet = make(kpA, { wanted: () => [pkB], dhtOptions: { host: '127.0.0.1', connectionKeepAlive: false } })
+  const lively = make(kpC, { wanted: () => [pkB], dhtOptions: { host: '127.0.0.1', connectionKeepAlive: 100 } })
+  const b = make(kpB, { peerTimeoutMs: 1000 })
+  const closed: string[] = []
+  b.net.on('close', (pk: string) => closed.push(pk))
+  b.net.start()
+  quiet.net.start()
+  lively.net.start()
+  await waitFor(() => b.opened.some((l) => l.pk === pkA) && b.opened.some((l) => l.pk === pkC), 20_000, 'both link to b')
+  await waitFor(() => closed.includes(pkA), 8000, 'the silent peer is dropped')
+  // Real time on purpose: negative assertion (the lively peer is never dropped) has no event to await.
+  await sleep(2500)
+  assert.equal(closed.includes(pkC), false)
+  assert.ok(b.net.link(pkC))
+})
+
+test('stats describe the DHT view once started', async () => {
+  const n = make(DHT.keyPair())
+  assert.equal(n.net.stats(), undefined)
+  n.net.start()
+  await waitFor(() => n.net.listening, 10_000, 'listening')
+  assert.match(n.net.stats() ?? '', /^nodes=\d+ online=true degraded=\w+ nat=\w+ addr=\S+:\d+$/)
+})

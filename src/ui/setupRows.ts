@@ -69,11 +69,12 @@ export type SetupEffect =
   | { kind: 'add'; cli: string }
   | { kind: 'install'; text: string }
   | { kind: 'recheck'; cli: string }
+  | { kind: 'remove'; cli: string }
   /** The `custom:` line was submitted: the `/agent add` command to run, or the usage problem. */
   | { kind: 'custom'; command: string }
   | { kind: 'usage' }
 
-/** Rule: printable keys act only when no text field is focused. On the `custom:` row every printable key types, `r` included. */
+/** Rule: printable keys act only when no text field is focused. On the `custom:` row every printable key types, `r` and `x` included. `r` rechecks, `x` (or Delete) removes. */
 export function setupKey(state: SetupState, rows: readonly SetupRow[], p: Press): { state: SetupState; effect?: SetupEffect } {
   const count = rows.length + 1
   const row = Math.min(state.row, count - 1)
@@ -100,6 +101,10 @@ export function setupKey(state: SetupState, rows: readonly SetupRow[], p: Press)
   if (p.input === 'r' && p.ctrl !== true && p.meta !== true) {
     const target = rows[row]
     return target === undefined ? { state } : { state, effect: { kind: 'recheck', cli: target.id } }
+  }
+  if ((p.input === 'x' || p.delete === true) && p.ctrl !== true && p.meta !== true) {
+    const target = rows[row]
+    return target === undefined ? { state } : { state, effect: { kind: 'remove', cli: target.id } }
   }
   return { state }
 }

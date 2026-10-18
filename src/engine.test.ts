@@ -81,7 +81,17 @@ test('mutual contact, message, delivery receipt', async () => {
   await waitFor(() => ['delivered', 'read'].includes(a.engine.messages(conv, 10).at(-1)?.status ?? ''), 15_000, 'delivered')
 })
 
-test('desktop alerts fire for an accepted request, a message and a read receipt', async () => {
+test('contactNames lists accepted contacts only', async () => {
+  const a = await boot('alice')
+  const b = await boot('bob')
+  await a.engine.submit(`/add ${b.engine.me.code}`)
+  await waitFor(() => b.engine.pending().length > 0, 20_000, 'bob pending')
+  assert.deepEqual(a.engine.contactNames(), [])
+  await b.engine.submit('/accept 1')
+  await waitFor(() => a.engine.contactNames().includes('bob'), 20_000, 'alice lists bob')
+})
+
+test('desktop alerts fire for an accepted request and a message; a read receipt is a tick, not an alert', async () => {
   const file = path.join(tmpDir('pager-n-'), 'alerts.jsonl')
   process.env.PAGER_NOTIFY_FILE = file
   resetDesktopState()
@@ -95,12 +105,65 @@ test('desktop alerts fire for an accepted request, a message and a read receipt'
     await a.engine.submit('ping from alice')
     const alerts = (): string[] => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => { const x = JSON.parse(l) as { title: string; body: string }; return `${x.title}: ${x.body}` }) : [])
     await waitFor(() => alerts().includes('alice: ping from alice'), 15_000, 'message alert on bob')
-    await waitFor(() => alerts().includes('bob: bob read your message'), 15_000, 'read receipt alert on alice')
+    await waitFor(() => a.engine.messages(conv, 10).at(-1)?.status === 'read', 15_000, 'read tick on alice')
     const all = alerts()
     assert.ok(all.some((l) => l.startsWith('alice: alice wants to connect')), 'request alert')
     assert.ok(all.includes('bob: bob accepted your contact request'), 'accept alert')
-    assert.ok(a.toasts.some((t) => t.text === 'bob read your message'), 'and a popup in pager')
+    assert.ok(!all.some((l) => l.includes('read your message')), 'no alert for a read receipt')
+    assert.ok(!a.toasts.some((t) => t.text.includes('read your message')), 'no popup for a read receipt')
     assert.equal(a.engine.messages(conv, 10).at(-1)?.status, 'read')
+  } finally {
+    delete process.env.PAGER_NOTIFY_FILE
+  }
+})
+
+test('own message ticks only climb: pending while offline, then sent, delivered, read', async () => {
+  const a = await boot('alice')
+  const b = await boot('bob')
+  await befriend(a, b)
+  const conv = dmConvId(a.engine.me.pk, b.engine.me.pk)
+  await b.engine.close()
+  await waitFor(() => a.engine.convs().every((c) => c.online === false), 15_000, 'a sees b offline')
+  a.engine.activate(conv)
+  await a.engine.submit('later')
+  assert.equal(a.engine.messages(conv, 10).at(-1)?.status, 'pending')
+  const b2 = await boot('bob', b.dir)
+  b2.engine.activate(conv)
+  const seen: string[] = []
+  await waitFor(
+    () => {
+      const status = a.engine.messages(conv, 10).at(-1)?.status ?? ''
+      if (seen.at(-1) !== status) seen.push(status)
+      return status === 'read'
+    },
+    20_000,
+    'read tick',
+  )
+  const order = ['pending', 'sent', 'delivered', 'read']
+  assert.deepEqual(seen, order.filter((s) => seen.includes(s)), `statuses ${seen.join(',')}`)
+})
+
+test('desktop alerts are skipped only while pager has trusted focus', async () => {
+  const file = path.join(tmpDir('pager-n-'), 'alerts.jsonl')
+  process.env.PAGER_NOTIFY_FILE = file
+  resetDesktopState()
+  try {
+    const a = await boot('alice')
+    const b = await boot('bob')
+    await befriend(a, b)
+    const conv = dmConvId(a.engine.me.pk, b.engine.me.pk)
+    a.engine.activate(conv)
+    const bodies = (): string[] => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => { const x = JSON.parse(l) as { body: string }; return x.body }) : [])
+    b.engine.setFocused(true, true)
+    await a.engine.submit('quiet')
+    await waitFor(() => texts(b, conv).includes('quiet'), 15_000, 'b gets quiet')
+    assert.ok(!bodies().includes('quiet'), 'no alert while focused')
+    b.engine.setFocused(false, true)
+    await a.engine.submit('loud')
+    await waitFor(() => bodies().includes('loud'), 15_000, 'alert while away')
+    b.engine.setFocused(true, false)
+    await a.engine.submit('again')
+    await waitFor(() => bodies().includes('again'), 15_000, 'alert when focus is not trustworthy')
   } finally {
     delete process.env.PAGER_NOTIFY_FILE
   }
@@ -241,6 +304,7 @@ test('name change propagates to contacts', async () => {
   await b.engine.submit('/net')
   const line = b.engine.home().find((l) => l.includes('alicia'))
   assert.match(line ?? '', /online \(caps read\b/)
+  assert.match(b.engine.home().find((l) => l.startsWith('Network:')) ?? '', /^Network: nodes=\d+ online=true/)
 })
 
 test('/theme switches, persists across restarts, and rejects unknown names', async () => {
@@ -255,6 +319,27 @@ test('/theme switches, persists across restarts, and rejects unknown names', asy
   await a.engine.close()
   const again = await boot('alice', a.dir)
   assert.deepEqual(again.engine.settings(), { ...DEFAULT_SETTINGS, theme: 'mono', sidebar: false })
+})
+
+test('/search needs text; a restart recaps what the agents did while closed and /search finds agent room text', async () => {
+  const a = await boot('alice')
+  await a.engine.submit('/search')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  await a.engine.submit('/search anything')
+  assert.deepEqual(a.engine.home(), ['No matches for "anything"'])
+  assert.equal(fs.existsSync(path.join(a.dir, 'last-seen.json')), true)
+  await a.engine.close()
+  const quiet = await boot('alice', a.dir)
+  assert.ok(!quiet.engine.home().some((l) => l.startsWith('Since you left')), 'nothing happened, nothing shown')
+  await quiet.engine.close()
+  fs.writeFileSync(path.join(a.dir, 'last-seen.json'), JSON.stringify({ at: Date.now() - 3 * 3_600_000 }))
+  const entry = { n: 1, ts: Date.now() - 1000, author: 'omp', authorKey: '0'.repeat(64), kind: 'text', text: 'Found the Needle in src/a.ts' }
+  fs.appendFileSync(path.join(a.dir, 'agents-room.jsonl'), `${JSON.stringify(entry)}\n`)
+  const b = await boot('alice', a.dir)
+  assert.ok(b.engine.home().includes('Since you left (3h ago): agents: 1 turn'))
+  await b.engine.submit('/search needle')
+  assert.match(b.engine.home().at(-1) ?? '', /^\[agents\] omp, \d\d:\d\d: Found the Needle in src\/a\.ts$/)
+  await b.engine.close()
 })
 
 test('/theme with no argument opens the picker; /theme list names the themes', async () => {
@@ -358,6 +443,32 @@ test('agent tabs: /agent and @name drive agents, plain text is refused in the hu
   await a.engine.submit('/agent color omp auto')
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, undefined)
   fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5 })
+})
+
+test('/agent remove deletes a teammate, and names the choices when the name is wrong', async () => {
+  const repo = tmpDir('pager-r-')
+  const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })
+  git('init', '-q', '-b', 'main')
+  git('config', 'user.name', 'tester')
+  git('config', 'user.email', 't@example.invalid')
+  git('config', 'commit.gpgsign', 'false')
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'base')
+  git('add', '-A')
+  git('commit', '-q', '-m', 'base')
+  const fake: AdapterSpec = {
+    bin: process.execPath,
+    args: (p) => [fileURLToPath(new URL('./agents/testAgent.js', import.meta.url)), p],
+    extract: (s) => s.trim(),
+  }
+  const a = await boot('alice', undefined, { workdir: repo, agentAdapters: { omp: fake, claude: fake, opencode: fake, hermes: fake } })
+  await a.engine.checkAgents()
+  await a.engine.submit('/agent remove nobody')
+  assert.match(a.toasts.at(-1)?.text ?? '', /^Usage: \/agent remove </)
+  await a.engine.submit('/agent new omp ui')
+  assert.ok(a.engine.agentTeam().includes('ui'))
+  await a.engine.submit('/agent remove ui')
+  assert.equal(a.toasts.at(-1)?.text, 'ui was deleted')
+  assert.ok(!a.engine.agentTeam().includes('ui'))
 })
 
 test("a command an agent advertises runs verbatim in that agent's tab; pager commands win; elsewhere it is unknown", async () => {

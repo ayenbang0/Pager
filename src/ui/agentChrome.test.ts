@@ -4,7 +4,7 @@ import type { RunView } from '../agents/orchestrator.js'
 import type { QuestionView } from '../agents/questions.js'
 import type { AgentView } from '../agents/types.js'
 import { DEFAULT_THEME } from '../themes.js'
-import { agentChip, agentHeaderLeft, chipPillKind, chipSegs, chipWidth, ctxTone, filesChanged, hubHeaderSegs, questionBanner, questionFor, questionTarget, whoDoesWhat } from './agentChrome.js'
+import { agentChip, agentHeaderLeft, chipPillKind, chipSegs, chipWidth, ctxTone, filesChanged, hubHeaderSegs, inviteChipSegs, inviteChipWidth, questionBanner, questionFor, questionTarget, whoDoesWhat } from './agentChrome.js'
 import { segsWidth } from './segs.js'
 
 const agent = (over: Partial<AgentView> = {}): AgentView => ({ name: 'omp', cli: 'omp', state: 'idle', task: '', unread: 0, ...over })
@@ -126,4 +126,11 @@ test('Alt+Q goes to the oldest question that is not on screen, else the oldest',
   assert.equal(questionTarget(views, undefined)?.id, 'q1')
   assert.equal(questionTarget([views[0]!], views[0])?.id, 'q1')
   assert.equal(questionTarget([], undefined), undefined)
+})
+
+test('the invite chip width matches what is drawn, with and without guests', () => {
+  for (const guests of [0, 1, 2]) {
+    assert.equal(inviteChipWidth(guests), segsWidth(inviteChipSegs(guests, DEFAULT_THEME)), `${guests} guests`)
+  }
+  assert.match(inviteChipSegs(2, DEFAULT_THEME).map((s) => s.text).join(''), /2 guests .*Alt\+I/)
 })

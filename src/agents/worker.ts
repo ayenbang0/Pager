@@ -68,6 +68,8 @@ export class Worker {
   holdsSlot = false
   /** Last review round this agent's chain is in (reset by a user message). */
   reviewRound = 0
+  /** Set by `/agent undo`: tells the agent, in its next prompt, that its saved session remembers a turn that was undone. */
+  undoNote: string | undefined
 
   constructor(
     readonly name: string,

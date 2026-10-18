@@ -233,6 +233,22 @@ export class Store {
     return this.db.prepare('SELECT * FROM events WHERE body LIKE ? ORDER BY ts, author, seq').all(DOC_LIKE).map(toEvent)
   }
 
+  /** The newest `limit` text messages (documents excluded) across all conversations, newest first; the search scan window. */
+  recentTexts(limit: number): { conv: string; author: string; ts: number; body: string }[] {
+    const rows = this.db
+      .prepare("SELECT conv, author, ts, body FROM events WHERE kind = 'text' AND body NOT LIKE ? ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
+      .all(DOC_LIKE, limit)
+    return rows.map((r) => ({ conv: r.conv as string, author: r.author as string, ts: r.ts as number, body: r.body as string }))
+  }
+
+  /** Per conversation, how many text messages from others arrived after `since` (receive time; documents excluded). */
+  textCountsSince(me: string, since: number): Map<string, number> {
+    const rows = this.db
+      .prepare("SELECT conv, COUNT(*) AS n FROM events WHERE kind = 'text' AND author <> ? AND recv_at > ? AND body NOT LIKE ? GROUP BY conv")
+      .all(me, since, DOC_LIKE)
+    return new Map(rows.map((r) => [r.conv as string, r.n as number]))
+  }
+
   /** Text events from others received after the conv's read_at. */
   unreadCount(conv: string, me: string): number {
     const r = this.db

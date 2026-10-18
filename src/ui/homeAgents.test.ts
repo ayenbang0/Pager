@@ -49,6 +49,7 @@ test('the hint follows what needs attention: questions, then reviews, then a fir
   assert.equal(homeAgents(input({ stats: stats({ perAgent: {} }) })).hint, 'try @omp <task> in any chat')
   assert.equal(homeAgents(input({ unadded: 1 })).hint, '1 more installed — /agent setup')
   assert.match(homeAgents(input()).hint, /Alt\+M/)
+  assert.match(homeAgents(input()).hint, /Alt\+I invite a contact/)
 })
 
 test('usage shows the first non-empty line of the newest fresh text, with its age; stale or empty text is hidden', () => {

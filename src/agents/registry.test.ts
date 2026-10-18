@@ -56,6 +56,19 @@ test('an unknown cli is refused until a custom agent defines it', () => {
   assert.deepEqual(reg.addInstance('nope'), { name: 'nope', cli: 'nope' })
 })
 
+test('removeCustom forgets a custom agent only once no teammate runs it, and survives a reload', () => {
+  const dir = tmp()
+  const reg = new Registry(dir)
+  assert.equal(reg.addCustom('mine', ['node', 'x.js']), null)
+  reg.addInstance('mine')
+  assert.match(String(reg.removeCustom('mine')), /teammates/)
+  assert.equal(reg.removeInstance('mine'), true)
+  assert.equal(reg.removeCustom('mine'), null)
+  assert.deepEqual(reg.custom(), {})
+  assert.deepEqual(new Registry(dir).custom(), {})
+  assert.match(String(reg.removeCustom('nope')), /no custom agent/)
+})
+
 test('addCustom rejects bad ids and empty commands and keeps nothing', () => {
   const reg = new Registry(tmp())
   assert.match(String(reg.addCustom('all', ['x'])), /reserved/)
@@ -116,6 +129,7 @@ test('state persists across a second Registry and leaves no temp file', () => {
   first.setEffort('omp', 'high')
   first.setReview(false)
   first.setAutoCompact(false)
+  first.setRiskApproval(false)
   assert.equal(first.saveError, undefined)
   const second = new Registry(dir)
   assert.deepEqual(second.instances(), [
@@ -125,6 +139,7 @@ test('state persists across a second Registry and leaves no temp file', () => {
   assert.deepEqual(second.custom(), { mine: { command: 'bin', args: ['--acp'], env: { A: 'B' } } })
   assert.equal(second.review, false)
   assert.equal(second.autoCompact, false)
+  assert.equal(second.riskApproval, false)
   assert.deepEqual(fs.readdirSync(dir), ['agents.json'])
   second.setModel('omp', undefined)
   second.setEffort('omp', undefined)
@@ -136,6 +151,7 @@ test('defaults: review and auto-compact on, nothing configured, readiness is not
   const reg = new Registry(dir)
   assert.equal(reg.review, true)
   assert.equal(reg.autoCompact, true)
+  assert.equal(reg.riskApproval, true)
   assert.equal(reg.hasInstances(), false)
   assert.equal(fs.existsSync(path.join(dir, 'agents.json')), false)
   reg.addInstance('omp')

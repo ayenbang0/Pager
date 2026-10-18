@@ -1,7 +1,7 @@
 import { Box, Text, useWindowSize } from 'ink'
 import type { AgentView } from '../agents/types.js'
 import type { Pill } from '../themes.js'
-import { agentChip, agentHeaderLeft, chipSegs, hubHeaderSegs } from './agentChrome.js'
+import { agentChip, agentHeaderLeft, chipSegs, hubHeaderSegs, inviteChipSegs } from './agentChrome.js'
 import { agentTint } from './look.js'
 import type { Seg } from './segs.js'
 import { Spinner, useBlink } from './Spinner.js'
@@ -65,17 +65,29 @@ export function AgentHeader({ view, files, review }: AgentProps) {
 interface HubProps {
   agents: readonly AgentView[]
   goal: string
+  /** Guests who have joined your agent session. */
+  guests: number
 }
 
-/** Title row of the all-agents hub, a band: `⌁ AGENTS` pill, the shared goal as a pill, then who is working on what. */
-export function HubHeader({ agents, goal }: HubProps) {
+/**
+ * Title row of the all-agents hub, a band: `⌁ AGENTS` pill, the shared goal as a pill, then who is working on what; the invite chip
+ * sits at the right end (exactly `inviteChipWidth(guests)` columns plus one of margin, which is what a click is tested against).
+ */
+export function HubHeader({ agents, goal, guests }: HubProps) {
   const theme = useTheme()
   const { columns } = useWindowSize()
   return (
-    <Box height={1} backgroundColor={theme.surface} overflow="hidden">
-      <Text wrap="truncate-end">
-        <Runs segs={hubHeaderSegs(agents, goal, Math.floor(columns / 2), theme)} />
-      </Text>
+    <Box height={1} backgroundColor={theme.surface}>
+      <Box flexGrow={1} flexShrink={1} overflow="hidden">
+        <Text wrap="truncate-end">
+          <Runs segs={hubHeaderSegs(agents, goal, Math.floor(columns / 2), theme)} />
+        </Text>
+      </Box>
+      <Box flexShrink={0} paddingRight={1}>
+        <Text>
+          <Runs segs={inviteChipSegs(guests, theme)} />
+        </Text>
+      </Box>
     </Box>
   )
 }

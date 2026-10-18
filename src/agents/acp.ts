@@ -56,6 +56,8 @@ export interface AcpHandlers {
   onConfig(options: AcpConfigOption[]): void
   /** The agent asks the user a question (ACP `elicitation/create`). Resolve with the form content, or undefined when the user cancelled. */
   onElicit(params: Record<string, unknown>): Promise<Record<string, unknown> | undefined>
+  /** The agent asks to run a tool (ACP `session/request_permission`, `params.toolCall` describes it). Resolve true to allow, false to reject. Without this handler every request is allowed. */
+  onPermission(params: Record<string, unknown>): Promise<boolean>
 }
 
 type Json = Record<string, unknown>
@@ -163,7 +165,7 @@ export class AcpConnection {
     } else entry.resolve(isRecord(msg.result) ? msg.result : {})
   }
 
-  /** Pager runs agents in their own worktree and always had auto-approval, so permission asks are granted; questions go to the user. */
+  /** Pager runs agents in their own worktree and always had auto-approval, so permission asks are granted unless `onPermission` says no; questions go to the user. */
   private onRequest(id: number | string, method: string, params: Json): void {
     if (method === 'elicitation/create' && this.handlers.onElicit !== undefined) {
       void this.handlers
@@ -177,9 +179,16 @@ export class AcpConnection {
       return
     }
     const options = Array.isArray(params.options) ? params.options.filter(isRecord) : []
-    const pick = options.find((o) => o.kind === 'allow_once') ?? options.find((o) => o.kind === 'allow_always')
-    const outcome = pick !== undefined && typeof pick.optionId === 'string' ? { outcome: 'selected', optionId: pick.optionId } : { outcome: 'cancelled' }
-    this.send({ jsonrpc: '2.0', id, result: { outcome } })
+    const respond = (allow: boolean): void => {
+      const kinds = allow ? ['allow_once', 'allow_always'] : ['reject_once', 'reject_always']
+      const pick = kinds.map((kind) => options.find((o) => o.kind === kind)).find((o) => o !== undefined)
+      const outcome = pick !== undefined && typeof pick.optionId === 'string' ? { outcome: 'selected', optionId: pick.optionId } : { outcome: 'cancelled' }
+      this.send({ jsonrpc: '2.0', id, result: { outcome } })
+    }
+    if (this.handlers.onPermission === undefined) return respond(true)
+    void this.handlers
+      .onPermission(params)
+      .then(respond, () => respond(false))
   }
 
   private onNotification(method: string, params: Json): void {

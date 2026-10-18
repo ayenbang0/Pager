@@ -163,3 +163,19 @@ export function hubHeaderSegs(agents: readonly AgentView[], goal: string, maxGoa
   segs.push({ text: ` ${whoDoesWhat(agents)}`, color: theme.dim })
   return segs
 }
+
+/** The invite button at the right end of the hub title row. */
+export const INVITE_MARK = '+ invite · Alt+I'
+
+/** The hub's invite chip: `+ invite · Alt+I`, preceded by how many guests are in your session once there are any. */
+export function inviteChipSegs(guests: number, theme: Theme): Seg[] {
+  const invite = pillSeg(INVITE_MARK, theme.pill.accent2)
+  if (guests === 0) return [invite]
+  return [pillSeg(`◈ ${guests} guest${guests === 1 ? '' : 's'}`, theme.pill.muted), { text: ' ' }, invite]
+}
+
+/** Display width of `inviteChipSegs` (each pill padded by a space each side, one space between), for hit-testing a click on it. */
+export function inviteChipWidth(guests: number): number {
+  const guestPill = guests === 0 ? 0 : stringWidth(`◈ ${guests} guest${guests === 1 ? '' : 's'}`) + 3
+  return guestPill + stringWidth(INVITE_MARK) + 2
+}

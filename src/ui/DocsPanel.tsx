@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type RefObject } from 'react'
 import { Box, useInput, usePaste } from 'ink'
 import { copyText, readClipboard } from '../clipboard.js'
+import type { Anchor } from '../docs/crdt.js'
 import { clampCursor, handleKey, initialVim, selection, type Edit, type KeyInput, type VimState } from '../docs/vim.js'
-import { diffText, indexAtRow, lineKinds, rowOf, shiftIndex, wrapRows } from '../docs/view.js'
+import { diffText, indexAtRow, lineKinds, rowOf, wrapRows } from '../docs/view.js'
 import type { Engine } from '../engine.js'
 import type { Theme } from '../themes.js'
 import { commandRow, docRowSegs, editorRowSegs, emptyListRows, frameBottom, frameTop, listFooter, listSummary, modePill, statusRow, syncPill, type DocRowInput, type Peer } from './docsChrome.js'
@@ -97,10 +98,29 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
   const docs = engine.docs
   const info = docs.info(docId)
   const text = docs.text(docId)
-  const [vim, setVimState] = useState<VimState>(() => initialVim())
-  const vimRef = useRef(vim)
-  const [scroll, setScroll] = useState(0)
+  const vimRef = useRef<VimState>(initialVim())
+  const [, setVimState] = useState<VimState>(vimRef.current)
+  /** The cursor, the visual anchor and the first visible row follow their characters through other people's edits. */
+  const pins = useRef({ cursor: docs.anchorAt(docId, 0, true), anchor: docs.anchorAt(docId, 0, true) })
+  const topRef = useRef(docs.anchorAt(docId, 0, true))
+  const [, setTop] = useState(topRef.current)
+  const scrollRef = useRef(0)
   const lastText = useRef(text)
+  /** An anchor for `pos` in `t`; in an empty text it pins the start, so text that arrives later does not drag it to the end. */
+  const anchor = (pos: number, after: boolean, t: string): Anchor => docs.anchorAt(docId, pos, after || t.length === 0)
+  const scrollTo = (a: Anchor): void => {
+    topRef.current = a
+    setTop(a)
+  }
+  /** The vim state, with the cursor and anchor moved onto wherever their characters are now (collaborators and agents edit the text). */
+  const current = (): VimState => {
+    const t = docs.text(docId)
+    if (t === lastText.current) return vimRef.current
+    lastText.current = t
+    vimRef.current = clampCursor({ ...vimRef.current, cursor: docs.positionOf(docId, pins.current.cursor), anchor: docs.positionOf(docId, pins.current.anchor) }, t)
+    return vimRef.current
+  }
+  const vim = current()
   const unsent = docs.unsent(docId)
   // Publishing happens on a timer inside the store, so nothing re-renders when it finishes: look again shortly.
   const [, setPolled] = useState(unsent)
@@ -117,26 +137,21 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
   const textWidth = Math.max(8, width - 2 - gutter)
   const rows = useMemo(() => wrapRows(text, textWidth), [text, textWidth])
   const kinds = useMemo(() => lineKinds(text), [text])
+  const scroll = rowOf(rows, docs.positionOf(docId, topRef.current))
+  scrollRef.current = scroll
 
   const commit = (next: VimState, nextText: string, reveal: boolean): void => {
     vimRef.current = next
     setVimState(next)
     lastText.current = nextText
+    pins.current = { cursor: anchor(next.cursor, next.mode === 'insert', nextText), anchor: anchor(next.anchor, false, nextText) }
     if (!reveal) return
-    const r = rowOf(wrapRows(nextText, textWidth), next.cursor)
-    setScroll((s) => (r < s ? r : r >= s + body ? r - body + 1 : s))
+    const rowsNext = wrapRows(nextText, textWidth)
+    const top = rowOf(rowsNext, docs.positionOf(docId, topRef.current))
+    const r = rowOf(rowsNext, next.cursor)
+    const row = r < top ? r : r >= top + body ? r - body + 1 : top
+    scrollTo(anchor(rowsNext[row]?.start ?? 0, false, nextText))
   }
-
-  // Edits by collaborators (or agents) shift the cursor so it keeps its character.
-  useEffect(() => {
-    if (lastText.current === text) return
-    const change = diffText(lastText.current, text)
-    lastText.current = text
-    const v = vimRef.current
-    const next = clampCursor({ ...v, cursor: shiftIndex(v.cursor, change), anchor: shiftIndex(v.anchor, change) }, text)
-    vimRef.current = next
-    setVimState(next)
-  }, [text])
 
   const applyEdits = (edits: readonly Edit[]): void => {
     for (const e of edits) {
@@ -145,21 +160,22 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
     }
   }
 
-  const note = (message: string): void => commit({ ...vimRef.current, message }, docs.text(docId), false)
+  const note = (message: string): void => commit({ ...current(), message }, docs.text(docId), false)
 
   const history = (dir: 'undo' | 'redo'): void => {
+    const v = current()
     const before = docs.text(docId)
     const worked = dir === 'undo' ? docs.undo(docId) : docs.redo(docId)
     const after = docs.text(docId)
-    const v = vimRef.current
     const cursor = worked ? diffText(before, after).pos : v.cursor
     const next = clampCursor({ ...v, mode: v.mode === 'insert' ? 'insert' : 'normal', cursor, message: worked ? '' : `nothing to ${dir}` }, after)
     commit(next, after, true)
   }
 
   const feed = (key: KeyInput): void => {
+    const v = current()
     const before = docs.text(docId)
-    const result = handleKey(vimRef.current, key, { text: before, height: body })
+    const result = handleKey(v, key, { text: before, height: body })
     applyEdits(result.edits)
     if (result.state.mode !== 'insert') docs.endGroup(docId)
     for (const effect of result.effects) {
@@ -179,7 +195,7 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
   }
 
   const copy = (): void => {
-    const v = vimRef.current
+    const v = current()
     const t = docs.text(docId)
     const s = selection(v, t)
     if (s) copyText(t.slice(s.start, s.end))
@@ -192,7 +208,7 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
   }
 
   const paste = (pasted: string): void => {
-    const v = vimRef.current
+    const v = current()
     if (pasted === '' || v.mode === 'command' || v.mode === 'search') return
     if (v.mode === 'insert') {
       applyEdits([{ pos: v.cursor, del: 0, ins: pasted }])
@@ -209,15 +225,20 @@ function DocEditor({ engine, docId, width, height, left, top, active, ctl, onPal
 
   ctl.current = {
     click: (x, y) => {
-      const v = vimRef.current
+      const v = current()
       if (v.mode === 'command' || v.mode === 'search') return
       const at = y - top - 1
       const row = scroll + at
       if (at < 0 || at >= body || row >= rows.length) return
       const index = indexAtRow(rows, row, x - (left + 1 + gutter))
-      commit(clampCursor({ ...v, cursor: index, goal: -1, pending: '', message: '' }, text), text, false)
+      const t = docs.text(docId)
+      commit(clampCursor({ ...v, cursor: index, goal: -1, pending: '', message: '' }, t), t, false)
     },
-    wheel: (dir) => setScroll((s) => Math.min(Math.max(0, rows.length - 1), Math.max(0, s - dir * WHEEL_ROWS))),
+    wheel: (dir) => {
+      const n = Math.min(Math.max(0, rows.length - 1), Math.max(0, scrollRef.current - dir * WHEEL_ROWS))
+      scrollRef.current = n
+      scrollTo(anchor(rows[n]?.start ?? 0, false, text))
+    },
   }
 
   usePaste((pasted) => paste(pasted), { isActive: active })

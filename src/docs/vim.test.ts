@@ -519,6 +519,24 @@ test('visual d x y c s', () => {
   assert.equal(run('foo bar', 'wvbd').text, 'ar')
 })
 
+test('Ctrl+A selects the whole document, and Backspace or Delete delete a selection', () => {
+  for (const text of ['abc', 'abc\n', 'a\n\nb', '']) {
+    const all = run(text, '<C-a>')
+    assert.equal(all.mode, 'visual', JSON.stringify(text))
+    const sel = selection(all.state, text)
+    assert.deepEqual(sel === null ? [0, 0] : [sel.start, sel.end], [0, text.length], JSON.stringify(text))
+    assert.equal(run(text, '<C-a><BS>').text, '', JSON.stringify(text))
+    assert.equal(run(text, '<C-a><Del>').text, '', JSON.stringify(text))
+  }
+  assert.equal(run('x', 'ihello<C-a>').mode, 'visual')
+  const bs = run('abcdef', 'vlll<BS>')
+  assert.equal(bs.text, 'ef')
+  assert.equal(bs.mode, 'normal')
+  assert.deepEqual(bs.register, { text: 'abcd', line: false })
+  assert.equal(run('abc', '<BS>', 2).text, 'abc')
+  assert.equal(run('abc', ':<C-a>').mode, 'command')
+})
+
 test('visual-line d y c', () => {
   assert.equal(run('a\nb\nc', 'Vjd').text, 'c')
   assert.equal(run('a\nb\nc', 'jVd').text, 'a\nc')

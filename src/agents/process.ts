@@ -63,10 +63,13 @@ export function runProcess(
   const stdout = collect(child.stdout, STDOUT_CAP)
   const stderr = collect(child.stderr, STDERR_CAP)
   let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    killTree(child)
-  }, opts.timeoutMs)
+  const timer =
+    opts.timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true
+          killTree(child)
+        }, opts.timeoutMs)
+      : undefined
   child.on('error', (err) => {
     clearTimeout(timer)
     reject(err)

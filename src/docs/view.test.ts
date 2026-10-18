@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { diffText, indexAtRow, lineKinds, rowOf, rowPieces, shiftIndex, wrapRows } from './view.js'
+import { diffText, indexAtRow, lineKinds, rowOf, rowPieces, wrapRows } from './view.js'
 
 test('rows partition the text: wrapped at spaces, empty lines kept, every character on exactly one row', () => {
   const text = 'aaa bbb ccc ddd\n\neee'
@@ -45,12 +45,7 @@ test('row pieces mark the selection and the cursor cell, including a cursor park
   assert.deepEqual(rowPieces(text, row, 11, null).at(-1), { text: ' ', selected: false, cursor: true })
 })
 
-test('external edits shift the cursor so it keeps its character', () => {
-  const change = diffText('hello world', 'hello big world')
-  assert.deepEqual(change, { pos: 6, removed: 0, added: 4 })
-  assert.equal(shiftIndex(8, change), 12)
-  assert.equal(shiftIndex(3, change), 3)
-  const cut = diffText('abcdef', 'abef')
-  assert.equal(shiftIndex(3, cut), 2)
-  assert.equal(shiftIndex(5, cut), 3)
+test('diffText finds the one changed region', () => {
+  assert.deepEqual(diffText('hello world', 'hello big world'), { pos: 6, removed: 0, added: 4 })
+  assert.deepEqual(diffText('abcdef', 'abef'), { pos: 2, removed: 2, added: 0 })
 })

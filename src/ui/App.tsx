@@ -21,7 +21,7 @@ import { fitSegs, pillSeg } from './segs.js'
 import { ThemePicker } from './ThemePicker.js'
 import { BandTitle } from './kit.js'
 import { TerminalHeader } from './TerminalHeader.js'
-import { agentChip, chipWidth, filesChanged, questionBanner, questionFor, questionTarget, stateWord } from './agentChrome.js'
+import { agentChip, chipWidth, filesChanged, inviteChipWidth, questionBanner, questionFor, questionTarget, stateWord } from './agentChrome.js'
 import { agentHelpSections } from './agentHelp.js'
 import { CommandPalette, type PaletteItem } from './CommandPalette.js'
 import { HelpPanel, type HelpCtl } from './HelpPanel.js'
@@ -44,7 +44,10 @@ import { LookContext, ThemeContext } from './theme.js'
 import { Toasts, TOAST_LIFETIME_MS, type ToastItem } from './Toasts.js'
 import { useEngine } from './useEngine.js'
 import { useMouse } from './useMouse.js'
+import { focusReporting } from './focus.js'
 import { useTerminalFocus } from './useTerminalFocus.js'
+import { useWindowTitle } from './useWindowTitle.js'
+import { titleLabel } from './windowTitle.js'
 
 const MIN_COLUMNS = 60
 const MIN_ROWS = 12
@@ -169,16 +172,11 @@ export function App({ engine, onExit }: Props) {
     me: engine.me.name,
   }
 
-  // The window title carries the unread count so it shows in the taskbar/tab.
-  useEffect(() => {
-    process.stdout.write(`\x1b]0;${unread > 0 ? `(${unread}) ` : ''}pager\x07`)
-    return () => void process.stdout.write('\x1b]0;\x07')
-  }, [unread])
-
-  // Alerts (desktop notification + chime) come from the engine, which shows them whether or not this window is active. The window's
-  // focus only tells it when messages count as read. Indeterminate taskbar progress shows while agents run.
-  const focused = useTerminalFocus()
-  useEffect(() => engine.setFocused(focused), [engine, focused])
+  // Alerts (desktop notification + chime) come from the engine; it skips them while this window has focus and the terminal reports focus
+  // reliably. Focus also tells it when messages count as read. Indeterminate taskbar progress shows while agents run.
+  const { focused, reported } = useTerminalFocus()
+  const trusted = reported || focusReporting(process.env)
+  useEffect(() => engine.setFocused(focused, trusted), [engine, focused, trusted])
   useEffect(() => {
     if (!NOTIFY || !TASKBAR_PROGRESS) return
     process.stdout.write(`\x1b]9;4;${agentsActive > 0 ? '3;0' : '0;0'}\x07`)
@@ -202,7 +200,7 @@ export function App({ engine, onExit }: Props) {
   const shownQuestion = sharedRoom === undefined ? questionFor(questions, agentTab, activeId === ROOM_ID) : sharedRoom.access === 'control' ? sharedRoom.questions[0] : undefined
   const questionLine = questionBanner(questions, sharedRoom === undefined ? shownQuestion : undefined)
   const pickerH = shownQuestion === undefined ? 0 : pickerHeight(shownQuestion, Math.max(8, Math.floor(frame / 2)))
-  const menu = overlay === null && !inEditor && shownQuestion === undefined ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu) : []
+  const menu = overlay === null && !inEditor && shownQuestion === undefined ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu, engine.contactNames()) : []
   const bannerRow = !inEditor && questionLine !== undefined ? 1 : 0
   const paneRows = Math.max(MIN_PANE_ROWS, frame - (FIXED_ROWS - PROMPT_ROWS) - (shownQuestion === undefined || inEditor ? PROMPT_ROWS : pickerH) - bannerRow - menu.length)
   const mainWidth = columns - (sidebarShown ? SIDEBAR_WIDTH : 0)
@@ -269,6 +267,7 @@ export function App({ engine, onExit }: Props) {
       gesture.current = null
       setSel(null)
       if (overlay === null && agentView !== undefined && at.y === TITLE_ROW && at.x >= columns - chipWidth(agentChip(agentView), engine.agentReview()) - 1) return openModel(agentView.name)
+      if (overlay === null && inRoom && at.y === TITLE_ROW && at.x >= columns - inviteChipWidth(guestCount) - 1) return inviteToAgents()
       if (overlay !== null || at.x <= sidebarCols) return
       if (inDocs) return docsCtl.current?.click(at.x, at.y)
       const anchor = showBanner ? null : cellAt(at, false)
@@ -302,6 +301,10 @@ export function App({ engine, onExit }: Props) {
     if (target === undefined) return void engine.emit('toast', { kind: 'info', text: 'No agent is waiting for an answer' } satisfies Toast)
     engine.activate(agentTabId(target.agent))
   }
+  const inviteToAgents = (): void => {
+    engine.activate(ROOM_ID)
+    fillPrompt('/agent invite ')
+  }
   // Alt chords only: nothing printable is a shortcut while a text field may have focus.
   useInput(
     (input, key) => {
@@ -309,6 +312,7 @@ export function App({ engine, onExit }: Props) {
       if (key.ctrl && input === 'h') return void engine.activate(null)
       if (!key.meta) return
       if (input === 'm') openModel()
+      else if (input === 'i') inviteToAgents()
       else if (input === 'q') jumpToQuestion()
     },
     { isActive: overlay === null && !inEditor },
@@ -347,11 +351,8 @@ export function App({ engine, onExit }: Props) {
     quitTimer.current = setTimeout(() => setQuitArmed(false), QUIT_WINDOW_MS)
   }
 
-  if (columns < MIN_COLUMNS || rows < MIN_ROWS) {
-    return <Text>Terminal too small (need {MIN_COLUMNS}x{MIN_ROWS})</Text>
-  }
-
   const inRoom = activeId === ROOM_ID
+  const guestCount = engine.sessionGuests().filter((g) => g.state === 'joined').length
   const inTerm = activeId === TERM_ID
   const term = engine.terminal()
   const openDocName = inDocs ? engine.docs.info(engine.openedDoc() ?? '')?.name : undefined
@@ -371,6 +372,10 @@ export function App({ engine, onExit }: Props) {
             : activeConv
               ? { kind: 'dm', title: activeConv.title }
               : { kind: 'home', title: '' }
+  useWindowTitle({ state: questions.length > 0 ? 'attention' : agentsActive > 0 || term.running ? 'working' : 'idle', unread, label: titleLabel(place, activeConv?.online === true) })
+  if (columns < MIN_COLUMNS || rows < MIN_ROWS) {
+    return <Text>Terminal too small (need {MIN_COLUMNS}x{MIN_ROWS})</Text>
+  }
   const tint = agentView === undefined ? undefined : (agentView.color ?? agentTint(theme, look, agentView.name))
   // The title row under the header: what this tab is, plus the one fact worth a glance (presence, scroll state). The terminal has its own header.
   const sharedHere = sharedRoom?.guests.filter((g) => g.online).map((g) => g.name) ?? []
@@ -389,7 +394,7 @@ export function App({ engine, onExit }: Props) {
       : inRoom
       ? room.agents.length === 0
         ? 'No agents are ready: /agent setup'
-        : `Ask ${room.agents.slice(0, 3).map((a) => `@${a.name}`).join(', ')} or @all (@a>b chains)`
+        : `Ask ${room.agents.slice(0, 3).map((a) => `@${a.name}`).join(', ')} or @all (@a>b chains) · Alt+I invites a contact`
       : agentView !== undefined
         ? `message ${agentView.name} (@mention others, /command)`
         : activeConv
@@ -459,11 +464,14 @@ export function App({ engine, onExit }: Props) {
       : []),
     { label: 'Check agents', hint: '/agent check', run: () => void engine.submit('/agent check') },
     { label: 'Agents: setup', hint: '/agent setup', run: () => setOverlay('agents') },
+    ...engine.agentTeam().map((n): PaletteItem => ({ label: `Delete agent: ${n}`, hint: '/agent remove', run: () => void engine.submit(`/agent remove ${n}`) })),
     { label: `Agents: turn review ${review ? 'off' : 'on'}`, hint: `/agent review ${review ? 'off' : 'on'}`, run: () => void engine.submit(`/agent review ${review ? 'off' : 'on'}`) },
     { label: 'Agents: usage', hint: '/agent usage', run: () => void engine.submit('/agent usage') },
     { label: 'Agent: model…', hint: 'Alt+M', run: () => openModel() },
     { label: 'Agent: effort…', hint: 'Alt+M', run: () => openModel() },
     { label: 'Agents: set the goal…', hint: '/agent goal', run: () => fillPrompt('/agent goal ') },
+    { label: 'Agents: invite a contact…', hint: 'Alt+I', run: inviteToAgents },
+    { label: 'Agents: who is in my session', hint: '/agent guests', run: () => void engine.submit('/agent guests') },
     { label: 'Agents: show shared memory', hint: '/agent memory', run: () => void engine.submit('/agent memory') },
     { label: 'Agents: add a note to memory…', hint: '/agent memory add', run: () => fillPrompt('/agent memory add ') },
     ...room.agents.flatMap((a): PaletteItem[] => {
@@ -563,7 +571,7 @@ export function App({ engine, onExit }: Props) {
                 {agentView !== undefined ? (
                   <AgentHeader view={agentView} files={filesChanged(room.runs, agentView.name)} review={engine.agentReview()} />
                 ) : inRoom ? (
-                  <HubHeader agents={room.agents} goal={engine.agentGoal()} />
+                  <HubHeader agents={room.agents} goal={engine.agentGoal()} guests={guestCount} />
                 ) : inTerm ? (
                   <TerminalHeader term={term} width={mainWidth} />
                 ) : (

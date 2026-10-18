@@ -24,6 +24,7 @@ const LIST_HINTS: readonly KeyHint[] = [
   ['↑↓', 'select'],
   ['Enter', 'add'],
   ['r', 'recheck'],
+  ['x', 'remove'],
   ['Esc', 'close'],
 ]
 const TEXT_HINTS: readonly KeyHint[] = [
@@ -32,7 +33,7 @@ const TEXT_HINTS: readonly KeyHint[] = [
   ['Esc', 'close'],
 ]
 
-/** Replaces the message pane: every known agent with its readiness; Enter adds an instance, `r` rechecks, Esc closes. */
+/** Replaces the message pane: every known agent with its readiness; Enter adds an instance, `r` rechecks, `x` removes one, Esc closes. */
 export function AgentSetup({ engine, height, onClose }: Props) {
   const theme = useTheme()
   const rows = engine.agentSetup()
@@ -53,6 +54,8 @@ export function AgentSetup({ engine, height, onClose }: Props) {
       case 'recheck':
         toast('info', `checking ${effect.cli}…`)
         return void engine.recheckAgent(effect.cli)
+      case 'remove':
+        return void engine.removeAgentOf(effect.cli)
       case 'custom':
         return void engine.submit(effect.command)
       case 'usage':

@@ -116,10 +116,3 @@ export function diffText(prev: string, next: string): { pos: number; removed: nu
   while (tail < prev.length - head && tail < next.length - head && prev[prev.length - 1 - tail] === next[next.length - 1 - tail]) tail++
   return { pos: head, removed: prev.length - head - tail, added: next.length - head - tail }
 }
-
-/** Move an index across an external edit so it keeps pointing at the same character. */
-export function shiftIndex(index: number, change: { pos: number; removed: number; added: number }): number {
-  if (index <= change.pos) return index
-  if (index >= change.pos + change.removed) return index + change.added - change.removed
-  return change.pos
-}

@@ -109,3 +109,12 @@ test('agent commands never show without an agent tab, after a space, or on plain
   assert.deepEqual(menuItems('/usage x', 8, false, [], OMP), [])
   assert.deepEqual(menuItems('usage', 5, false, [], OMP), [])
 })
+
+test('/agent invite lists the contacts that match what was typed and completes the last word', () => {
+  assert.deepEqual(matchCommands('/agent invite ', [], ['bob', 'ann']).map((c) => c.name), ['bob', 'ann'])
+  assert.deepEqual(matchCommands('/agent invite B', [], ['bob', 'ann']).map((c) => c.name), ['bob'])
+  assert.deepEqual(matchCommands('/agent invite ', [], []), [])
+  assert.deepEqual(menuItems('/agent invite b', 15, false, [], undefined, ['bob']).map((i) => i.insert), ['/agent invite bob '])
+  assert.equal(completion('/agent invite b', { name: 'bob', usage: '', summary: '' }), '/agent invite bob ')
+  assert.equal(completion('/agent n', { name: 'new', usage: '', summary: '' }), '/agent new ')
+})
