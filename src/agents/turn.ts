@@ -87,10 +87,13 @@ export async function runViaAcp(turn: AcpTurn): Promise<AcpOutcome> {
   turn.onChild(child)
   if (turn.isCancelled()) killTree(child)
   let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    killTree(child)
-  }, turn.timeoutMs)
+  const timer =
+    turn.timeoutMs > 0
+      ? setTimeout(() => {
+          timedOut = true
+          killTree(child)
+        }, turn.timeoutMs)
+      : undefined
   const conn = new AcpConnection(child, turn.handlers)
   const notes: string[] = []
   let options: AcpConfigOption[] = []

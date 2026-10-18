@@ -52,7 +52,8 @@ export interface Actor {
 export { repoKey, ROOM_ID }
 export const MAX_CONCURRENT = 3
 export const CLI_OUTPUT_MAX = 100_000
-export const RUN_TIMEOUT_MS = 900_000
+/** Per-turn wall-clock limit for an agent run; 0 means none. A stuck run is ended with `/agent stop`. */
+export const RUN_TIMEOUT_MS = 0
 export const CHECK_TIMEOUT_MS = 120_000
 export const VERSION_TIMEOUT_MS = 15_000
 export const PEER_MAX_DEPTH = 3
