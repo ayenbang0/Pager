@@ -6,11 +6,15 @@ import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { stripVTControlCharacters } from 'node:util'
 import type { MessageView, Toast, ToastKind } from '../engine.js'
+import { isRecord } from '../guards.js'
 import { ADAPTERS, findBinary, type AdapterSpec } from './adapters.js'
 import type { AcpCommand, AcpConfigOption } from './acp.js'
 import { renderBoard } from './board.js'
 import { PRESETS } from './catalog.js'
-import { changedFiles, commitAll, currentSha, diffSince, ensureWorktree, headSha, isAncestor, isDirty, aheadCount, mergeBranch, removeWorktree, repoRoot, syncWorktree } from './git.js'
+import { CheckpointLog, checkpointLines, type Checkpoint, type RestoreResult } from './checkpoints.js'
+import { CHECKOUT, ConflictBook, conflictsOf, describeConflict, predictConflicts } from './conflicts.js'
+import { formatStat, type DiffStat } from './diffstat.js'
+import { changedFiles, commitAll, currentSha, diffNumstat, diffSince, ensureWorktree, headSha, isAncestor, isDirty, aheadCount, mergeBranch, removeWorktree, repoRoot, syncWorktree } from './git.js'
 import { LiveMessage } from './live.js'
 import { killTree, runProcess } from './process.js'
 import {
@@ -28,12 +32,15 @@ import {
 import { Registry, RESERVED_NAMES, type AgentConfig, type Readiness } from './registry.js'
 import { askUserResult, contentFromAnswers, fieldsFromAskUser, fieldsFromElicitation, Questions, type QuestionView } from './questions.js'
 import { feedbackText, pickReviewer, reviewRequest, REVIEW_MAX_ROUNDS, type Verdict } from './review.js'
+import { classifyRisk, describeCall, riskDecision, riskQuestion } from './risk.js'
 import { FORWARD_THRESHOLD, parseMentions, relevance } from './router.js'
+import { BudgetStore, BUDGET_USAGE, ALL_KEY, check, DailyOnce, describeCap, describeUse, parseBudget, refusal, usedToday, warning } from './budget.js'
 import { StatsLog, summarize, type AgentTotals } from './stats.js'
 import { BoardState, CommandStore, errMsg, Memory, repoKey, ROOM_ID, RoomLog, SessionStore, type RoomEntry } from './store.js'
 import { shimSpec, ToolServer, type AskQuestion, type ToolHost, type TurnToken } from './toolserver.js'
 import { probeAcp, runOneShot, runViaAcp, type Reply } from './turn.js'
 import type { AgentView } from './types.js'
+import { mergeGate, runVerify, VerifyStore, verifyHeadline, verifyReport, verifyWord, type VerifyResult } from './verify.js'
 import { Worker, type Inbox, type Outcome, type TurnCtx } from './worker.js'
 
 /** A guest of a shared session speaking through the host's room. `label` is unique among the room's names; `pk` is their public key. */
@@ -109,6 +116,12 @@ interface Run {
   state: RunState
   files: string[]
   merged: boolean
+  /** Added and deleted lines of the branch against the base, as of this run's end. */
+  stat?: DiffStat
+  /** Its turn was undone with `/agent undo`: the work is gone from the branch. */
+  undone?: true
+  /** The agent's board notes before its turn, restored if the turn is undone. */
+  notesBefore?: { task: string; purpose: string }
 }
 
 class CancelledError extends Error {}
@@ -127,12 +140,21 @@ export class Orchestrator extends EventEmitter {
   private readonly memoryStore: Memory
   private readonly boardState: BoardState
   private readonly statsLog: StatsLog
+  private readonly budgets: BudgetStore
+  private readonly budgetNotices = new DailyOnce()
   private readonly commandStore: CommandStore
   private readonly cliOptions = new Map<string, AcpConfigOption[]>()
   private readonly tools: ToolServer
   private readonly inflight = new Set<Promise<unknown>>()
   private readonly waiters: { worker: Worker; wake: (granted: boolean) => void }[] = []
+  private readonly checkpoints = new Map<string, CheckpointLog>()
   private readonly reviewing = new Map<string, { author: string }>()
+  private readonly verifyStore: VerifyStore
+  /** The last verify run per agent: what the merge gate, the board and `/agent log` read. */
+  private readonly verifyResults = new Map<string, VerifyResult>()
+  /** Lines added and deleted by each agent's unmerged work. */
+  private readonly lineStats = new Map<string, DiffStat>()
+  private readonly conflicts = new ConflictBook()
   private active = 0
   private closing = false
   private root: string | undefined
@@ -151,7 +173,9 @@ export class Orchestrator extends EventEmitter {
     this.memoryStore = new Memory(dir)
     this.boardState = new BoardState(path.join(dir, 'agents-state.json'))
     this.statsLog = new StatsLog(path.join(dir, 'agent-stats.jsonl'))
+    this.budgets = new BudgetStore(path.join(dir, 'agent-budgets.json'))
     this.commandStore = new CommandStore(path.join(dir, 'agents-commands.json'))
+    this.verifyStore = new VerifyStore(path.join(dir, 'agents-verify.json'))
     this.adapters = { ...ADAPTERS, ...opts.adapters }
     this.limits = {
       maxConcurrent: opts.limits?.maxConcurrent ?? MAX_CONCURRENT,
@@ -174,7 +198,7 @@ export class Orchestrator extends EventEmitter {
 
   room(): RoomView {
     const latest = new Map<string, Run>()
-    for (const r of this.runs.values()) latest.set(r.agent, r)
+    for (const r of this.runs.values()) if (r.undone !== true) latest.set(r.agent, r)
     return {
       id: ROOM_ID,
       unread: this.log.unread(ROOM_ID),
@@ -486,8 +510,9 @@ export class Orchestrator extends EventEmitter {
     this.emit('change')
   }
 
-  merge(target: string): Promise<void> {
-    const job = this.mergeQueue.then(() => this.doMerge(target)).catch((err: unknown) => this.toast('error', errMsg(err)))
+  /** Merges an agent's branch; `force` skips the verify gate. */
+  merge(target: string, force = false): Promise<void> {
+    const job = this.mergeQueue.then(() => this.doMerge(target, force)).catch((err: unknown) => this.toast('error', errMsg(err)))
     this.mergeQueue = job
     return job
   }
@@ -524,6 +549,10 @@ export class Orchestrator extends EventEmitter {
     }
     for (const [id, r] of this.runs) if (r.worker === w) this.runs.delete(id)
     this.workers.delete(w.name)
+    this.checkpoints.delete(w.name)
+    this.verifyResults.delete(w.name)
+    this.lineStats.delete(w.name)
+    this.conflicts.forget(w.name)
   }
 
   /** Forgets the agent's saved session and queued messages; its next turn starts fresh. */
@@ -535,14 +564,138 @@ export class Orchestrator extends EventEmitter {
     if (w !== undefined) {
       for (const m of w.inbox.splice(0)) m.done?.({ ...NO_OUTCOME, text: '(reset)' })
       w.context = undefined
+      w.undoNote = undefined
     }
     this.sessions.clear(root, name)
     this.toast('success', `${name} will start a fresh session`)
   }
 
+  /** `/agent undo <name> [n]`: puts the agent's worktree back to where it was before its last n turns. */
+  async undo(target: string, count = 1): Promise<void> {
+    try {
+      await this.doUndo(target, count)
+    } catch (err) {
+      this.toast('error', `Undo failed: ${errMsg(err)}`)
+    }
+  }
+
+  /** `/agent checkpoints <name>`: lists the turns that `undo` can take back, newest first (1 = the last turn). */
+  async listCheckpoints(target: string): Promise<void> {
+    const root = await this.rootDir()
+    if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
+    const w = await this.checkpointWorker(target)
+    if (w === undefined) return this.toast('error', `No agent "${target}"`)
+    const items = await this.checkpointsFor(w, root).list()
+    if (items.length === 0) return this.post(`${w.name} has no turns to undo`, [w.name])
+    this.post([`${w.name} can undo ${items.length} turn(s) (/agent undo ${w.name} <n>):`, ...checkpointLines(items)].join('\n'), [w.name])
+  }
+
+  private checkpointsFor(w: Worker, root: string): CheckpointLog {
+    let log = this.checkpoints.get(w.name)
+    if (log === undefined) {
+      log = new CheckpointLog(root, w.branch)
+      this.checkpoints.set(w.name, log)
+    }
+    return log
+  }
+
+  /** The worker named `target` (or owning run `target`); a configured agent that has not run yet in this session gets its worker created, so checkpoints from an earlier session are reachable. */
+  private async checkpointWorker(target: string): Promise<Worker | undefined> {
+    const known = this.workers.get(target) ?? this.find(target)?.worker
+    if (known !== undefined) return known
+    const cfg = this.registry.ready().find((c) => c.name === target)
+    return cfg === undefined ? undefined : this.workerFor(cfg)
+  }
+
+  private async doUndo(target: string, count: number): Promise<void> {
+    const root = await this.rootDir()
+    if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
+    const w = await this.checkpointWorker(target)
+    if (w === undefined) return this.toast('error', `No agent "${target}"`)
+    if (w.draining || w.inbox.length > 0) return this.toast('error', `${w.name} is working or has messages queued. Stop it first.`)
+    const log = this.checkpointsFor(w, root)
+    const available = (await log.list()).length
+    if (available === 0) return this.toast('error', `${w.name} has no turns to undo`)
+    if (!Number.isInteger(count) || count < 1 || count > available) return this.toast('error', `${w.name} has ${available} turn(s) to undo: /agent undo ${w.name} [1-${available}]`)
+    w.draining = true // messages sent meanwhile wait in the inbox until the reset is done
+    let res: RestoreResult
+    try {
+      res = await log.restore(w.dir, count)
+    } finally {
+      w.draining = false
+      if (w.inbox.length > 0) this.track(this.drain(w))
+    }
+    const undone = new Set(res.removed.map((c) => c.run))
+    for (const r of this.runs.values()) {
+      if (r.worker === w && undone.has(r.id)) {
+        r.undone = true
+        r.files = []
+      }
+    }
+    const head = await headSha(root)
+    w.files = await changedFiles(w.dir, head)
+    const stat = await diffNumstat(w.dir, head).catch(() => undefined)
+    for (const r of this.runs.values()) if (r.worker === w && r.undone === true) delete r.stat
+    const latest = [...this.runs.values()].filter((r) => r.worker === w && r.undone !== true).at(-1)
+    if (latest !== undefined) {
+      latest.files = w.files
+      if (stat === undefined) delete latest.stat
+      else latest.stat = stat
+    }
+    if (stat === undefined) this.lineStats.delete(w.name)
+    else this.lineStats.set(w.name, stat)
+    this.verifyResults.delete(w.name)
+    await this.scanConflicts(root, true)
+    const oldest = res.removed[0] as Checkpoint
+    w.task = oldest.task
+    w.purpose = oldest.purpose
+    this.boardState.setNotes(root, w.name, { task: w.task, purpose: w.purpose })
+    w.undoNote = `Your last ${count === 1 ? 'turn was' : `${count} turns were`} undone by the user; the files are back as they were before ${count === 1 ? 'it' : 'them'}. Do not assume that work still exists.`
+    this.emit('change')
+    this.post(`undid last ${count} turn(s) of ${w.name} (back to ${oldest.sha.slice(0, 7)})`, [w.name])
+    if (res.snapshot) this.post(`${w.name} had uncommitted changes; they were committed first and stay in git reflog of ${w.dir}`, [w.name])
+    this.toast('success', `Undid ${count} turn(s) of ${w.name}`)
+  }
+
   list(): void {
     if (this.runs.size === 0) return this.post('No agent runs yet.')
-    for (const r of this.runs.values()) this.post(`${r.id}  ${r.state}  ${r.files.length} file(s)${r.merged ? '  merged' : ''}`)
+    const latest = new Map<string, Run>()
+    for (const r of this.runs.values()) if (r.undone !== true) latest.set(r.agent, r)
+    const found = this.conflicts.all()
+    for (const r of this.runs.values()) {
+      const open = latest.get(r.agent) === r && !r.merged
+      const counts = r.stat === undefined ? '' : ` ${formatStat(r.stat)}`
+      const verify = open ? this.verifyResults.get(r.agent) : undefined
+      const clash = open ? conflictsOf(found, r.agent) : ''
+      this.post(
+        `${r.id}  ${r.undone === true ? 'undone' : r.state}  ${r.files.length} file(s)${counts}${r.merged ? '  merged' : ''}${verify === undefined ? '' : `  verify: ${verifyWord(verify)}`}${clash === '' ? '' : `  conflicts: ${clash}`}`,
+      )
+    }
+  }
+
+  /** `/agent verify`: shows, sets (a command line) or clears (`off`) the check run in each worktree after a turn and before a merge. */
+  async setVerify(text: string): Promise<void> {
+    const root = await this.rootDir()
+    if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
+    const command = text.trim()
+    if (command === '') {
+      const current = this.verifyStore.get(root)
+      return this.post(current === undefined ? 'verify is off: /agent verify <command> runs it in each worktree after a turn and before a merge' : `verify: ${current}`)
+    }
+    const why = this.verifyStore.set(root, command.toLowerCase() === 'off' ? undefined : command)
+    if (why !== undefined) return this.toast('error', `Could not save the verify command: ${why}`)
+    this.post(command.toLowerCase() === 'off' ? 'verify is off' : `verify: ${command}`)
+    this.emit('change')
+  }
+
+  /** `/agent log <run|agent>`: posts the output the last verify run of that agent's branch left, so nobody has to rerun it. */
+  showLog(target: string): void {
+    const w = this.workers.get(target) ?? this.find(target)?.worker
+    if (w === undefined) return this.toast('error', `No agent or run "${target}"`)
+    const last = this.verifyResults.get(w.name)
+    if (last === undefined) return this.toast('info', `No verify output for ${w.name} yet (/agent verify <command>)`)
+    const age = Math.max(0, Math.round((Date.now() - last.at) / 1000))
+    this.post(`${w.name} ${verifyHeadline(last)} on ${last.sha.slice(0, 7)}, ${age}s ago: ${last.command}${last.truncated ? '\n(earlier output dropped)' : ''}\n${last.output.trimEnd() || '(no output)'}`, [w.name])
   }
 
   setGoal(text: string): void {
@@ -737,6 +890,33 @@ export class Orchestrator extends EventEmitter {
     this.emit('change')
   }
 
+  setRiskApproval(on: boolean): void {
+    this.registry.setRiskApproval(on)
+    this.emit('change')
+  }
+
+  /** `/agent budget`: show the daily caps and today's use, or set or lift a cap. `args` follow the word `budget`. */
+  budget(args: string[]): void {
+    const cmd = parseBudget(args, this.names())
+    if (cmd.kind === 'error') return this.toast('error', cmd.message)
+    if (cmd.kind === 'set') {
+      this.budgets.set(cmd.key, cmd.cap)
+      return this.toast('success', `${cmd.key === ALL_KEY ? 'every agent' : cmd.key}: ${describeCap(cmd.cap)} per day`)
+    }
+    if (cmd.kind === 'off') {
+      const had = this.budgets.clear(cmd.key)
+      return this.toast(had ? 'success' : 'info', `${cmd.key === ALL_KEY ? 'The default budget' : `${cmd.key}'s budget`} ${had ? 'is lifted' : 'was not set'}`)
+    }
+    const now = Date.now()
+    const records = this.statsLog.read()
+    const lines = this.names().map((name) => {
+      const cap = this.budgets.get(name)
+      const used = usedToday(records, name, now)
+      return cap === undefined ? `${name}: no cap (${used.turns} turns today)` : `${name}: ${describeUse(cap, used)} today`
+    })
+    this.post(`Daily budgets (local day; ${BUDGET_USAGE}):\n${lines.join('\n') || 'no agents yet'}`)
+  }
+
   // ---- notes, commands, usage ----
 
   /** Shared notes for this repository, fed into every agent prompt. */
@@ -929,6 +1109,11 @@ export class Orchestrator extends EventEmitter {
       while (w.inbox.length > 0 && !this.closing) {
         w.stopped = false
         const batch = w.inbox.splice(0)
+        const blocked = this.budgetBlock(w)
+        if (blocked !== undefined) {
+          this.refuseBatch(w, batch, blocked)
+          continue
+        }
         let outcome: Outcome = NO_OUTCOME
         try {
           outcome = await this.runBatch(w, batch)
@@ -985,8 +1170,38 @@ export class Orchestrator extends EventEmitter {
     }
   }
 
+  /** Why `w` may not start a turn now (its daily budget is spent), or undefined. */
+  private budgetBlock(w: Worker): string | undefined {
+    const cap = this.budgets.get(w.name)
+    if (cap === undefined) return undefined
+    const c = check(cap, usedToday(this.statsLog.read(), w.name, Date.now()))
+    return c.status === 'over' ? refusal(w.name, cap, c) : undefined
+  }
+
+  /** A budget refusal drops the queued messages (the senders are told), rather than holding them for tomorrow. */
+  private refuseBatch(w: Worker, batch: Inbox[], reason: string): void {
+    this.post(reason, [w.name])
+    this.toast('warn', reason)
+    for (const m of batch) m.done?.({ ...NO_OUTCOME, text: `(${reason})` })
+    if (batch.some((m) => m.kind === 'review')) this.reviewEnded(w, reason)
+  }
+
+  /** One note per agent per local day once a turn brings it to 80% of a cap. */
+  private warnBudget(w: Worker): void {
+    const cap = this.budgets.get(w.name)
+    if (cap === undefined) return
+    const now = Date.now()
+    const used = usedToday(this.statsLog.read(), w.name, now)
+    const c = check(cap, used)
+    if (c.status === 'ok' || !this.budgetNotices.first(w.name, now)) return
+    const text = warning(w.name, cap, used, c)
+    this.post(text, [w.name])
+    this.toast('warn', text)
+  }
+
   /** The post-turn follow ups: automatic peer review and automatic compaction. */
   private afterTurn(w: Worker, batch: Inbox[], outcome: Outcome): void {
+    this.warnBudget(w)
     const verbatim = batch.length === 1 && batch[0]?.text.startsWith('/') === true
     if (outcome.ok && verbatim && batch[0]?.text.startsWith('/compact') === true) w.context = undefined
     else if (outcome.ok && !verbatim && w.turnKind === 'normal') void this.maybeReview(w, outcome)
@@ -999,9 +1214,10 @@ export class Orchestrator extends EventEmitter {
     }
   }
 
-  private promptMessages(batch: Inbox[], conflict: boolean): PromptMessage[] {
+  private promptMessages(batch: Inbox[], conflict: boolean, undoNote?: string): PromptMessage[] {
     const out: PromptMessage[] = batch.map((m) => ({ from: m.from, kind: m.kind, text: m.text, ...(m.also === undefined || m.also.length === 0 ? {} : { also: m.also }) }))
     if (conflict) out.unshift({ from: 'pager', kind: 'user', text: 'SYNC CONFLICT: your branch could not merge the main branch; resolve it first.' })
+    if (undoNote !== undefined) out.unshift({ from: 'pager', kind: 'user', text: undoNote })
     return out
   }
 
@@ -1009,7 +1225,18 @@ export class Orchestrator extends EventEmitter {
     const entries = this.registry.ready().map((c) => {
       const x = this.workers.get(c.name)
       const notes = this.boardState.notes(root, c.name)
-      return { name: c.name, state: x?.state ?? ('idle' as const), task: x?.task ?? notes?.task ?? '', purpose: x?.purpose ?? notes?.purpose ?? '', files: x?.files ?? [], branch: `pager/${c.name}` }
+      const lines = this.lineStats.get(c.name)
+      const verified = x !== undefined && x.files.length > 0 ? this.verifyResults.get(c.name) : undefined
+      return {
+        name: c.name,
+        state: x?.state ?? ('idle' as const),
+        task: x?.task ?? notes?.task ?? '',
+        purpose: x?.purpose ?? notes?.purpose ?? '',
+        files: x?.files ?? [],
+        branch: `pager/${c.name}`,
+        ...(lines === undefined || x === undefined || x.files.length === 0 ? {} : { lines }),
+        ...(verified === undefined ? {} : { verify: verifyWord(verified) }),
+      }
     })
     return renderBoard(entries, this.boardState.goal(root), w.name)
   }
@@ -1069,6 +1296,7 @@ export class Orchestrator extends EventEmitter {
     }
     if (w.stopped) throw new CancelledError()
     const startSha = await currentSha(w.dir)
+    run.notesBefore = { task: w.task, purpose: w.purpose }
     const kind = batch.some((m) => m.kind === 'review') ? 'review' : 'normal'
     const verbatim = batch.length === 1 && batch[0]?.text.startsWith('/') === true && batch[0]?.kind === 'user' && batch[0]?.guest !== true
     // Documents are named only by the host: a guest's #name never pulls one into a prompt.
@@ -1096,11 +1324,12 @@ export class Orchestrator extends EventEmitter {
             docs: ctx.shownDocs,
             room: this.log
               .all()
-              .filter((e) => e.kind === 'text' || / changed \d+ file/.test(e.text))
+              .filter((e) => e.kind === 'text' || / (changed \d+ file|verify (passed|failed|timed out))/.test(e.text))
               .map((e) => ({ author: e.author, text: e.text })),
-            messages: formatMessages(this.promptMessages(batch, conflict)),
+            messages: formatMessages(this.promptMessages(batch, conflict, w.undoNote)),
             tools,
           })
+    const allowedThisRun = new Set<string>()
     const common = { cwd: w.dir, env, timeoutMs: this.limits.runTimeoutMs, isCancelled: () => w.stopped, onChild: (c: Worker['child']) => (w.child = c), timeoutReason: () => this.timeoutReason() }
     try {
       let reply: Reply | undefined
@@ -1129,6 +1358,7 @@ export class Orchestrator extends EventEmitter {
               this.emit('change')
             },
             onElicit: (params) => this.elicit(w, params),
+            onPermission: (params) => this.permit(w, params, allowedThisRun),
           },
         })
         for (const note of acp.notes) this.post(`${w.name}: ${note}`, scope)
@@ -1160,6 +1390,7 @@ export class Orchestrator extends EventEmitter {
       if (reply.stopReason === 'refusal') return failed('agent refused')
       if (reply.stopReason === 'cancelled') return failed('agent cancelled the turn')
       if (sessionId !== undefined && spec.resume !== false) this.sessions.set(root, w.name, sessionId)
+      if (!verbatim) w.undoNote = undefined
       return await this.finishTurn(w, run, { root, head, startSha, started, text, stopReason: reply.stopReason, batch, ctx, live, settle, failed })
     } finally {
       this.tools.revoke(token)
@@ -1193,9 +1424,13 @@ export class Orchestrator extends EventEmitter {
       turnFiles = await changedFiles(w.dir, t.startSha)
       run.files = await changedFiles(w.dir, t.head)
       w.files = run.files
+      run.stat = await diffNumstat(w.dir, t.head).catch(() => undefined)
+      if (run.stat === undefined) this.lineStats.delete(w.name)
+      else this.lineStats.set(w.name, run.stat)
     } catch (err) {
       return t.failed(errMsg(err))
     }
+    await this.recordCheckpoint(w, run, t.root, t.startSha, first)
     run.state = 'done'
     const text = t.text === '' ? '(no output)' : t.text
     t.settle(text)
@@ -1206,14 +1441,27 @@ export class Orchestrator extends EventEmitter {
     if (t.stopReason === 'max_tokens' || t.stopReason === 'max_turn_requests') this.post(`${run.id} stopped early: ${t.stopReason}`, scope)
     if (turnFiles.length > 0) {
       const shown = turnFiles.slice(0, 5).join(', ')
-      this.post(`${run.id} changed ${turnFiles.length} file(s): ${shown}${turnFiles.length > 5 ? ', ...' : ''}`, scope)
+      this.post(`${run.id} changed ${turnFiles.length} file(s)${run.stat === undefined ? '' : ` (${formatStat(run.stat)})`}: ${shown}${turnFiles.length > 5 ? ', ...' : ''}`, scope)
     }
     this.announce('info', `${w.name}: ${(text.split('\n', 1)[0] ?? '').slice(0, 80)}`, w.name)
     this.warnOverlap(w, turnFiles)
+    if (turnFiles.length > 0) await this.scanConflicts(t.root, false, w)
     this.statsLog.append({ ts: Date.now(), agent: w.name, cli: w.cli, ms: Date.now() - t.started, files: turnFiles.length, stop: t.stopReason })
+    const verifyCommand = this.verifyStore.get(t.root)
+    if (verifyCommand !== undefined && turnFiles.length > 0 && !this.closing) await this.verifyWorker(w, verifyCommand, run.id, true)
     if (w.turnKind === 'review' && this.reviewing.has(w.name)) this.reviewEnded(w, text)
     this.boardState.setNotes(t.root, w.name, { task: w.task, purpose: w.purpose })
     return { runId: run.id, text, ok: true, files: turnFiles }
+  }
+
+  /** Remembers where the agent's branch stood before a turn that changed it, for `/agent undo`. */
+  private async recordCheckpoint(w: Worker, run: Run, root: string, startSha: string, ask: string): Promise<void> {
+    try {
+      if ((await currentSha(w.dir)) === startSha) return
+      await this.checkpointsFor(w, root).record({ sha: startSha, run: run.id, ask, task: run.notesBefore?.task ?? '', purpose: run.notesBefore?.purpose ?? '' })
+    } catch (err) {
+      this.post(`${w.name}: could not save an undo point (${errMsg(err)})`, [w.name])
+    }
   }
 
   private warnOverlap(w: Worker, turnFiles: string[]): void {
@@ -1227,7 +1475,46 @@ export class Orchestrator extends EventEmitter {
     }
   }
 
-  private async doMerge(target: string): Promise<void> {
+  /** Dry-run merges of every unmerged agent branch into the checkout and into each other. A conflict that is new since the last scan is posted, and toasted unless `quiet` or it does not involve `about`. */
+  private async scanConflicts(root: string, quiet: boolean, about?: Worker): Promise<void> {
+    const branches = [...this.workers.values()].filter((x) => x.files.length > 0).map((x) => ({ name: x.name, branch: x.branch }))
+    for (const c of this.conflicts.update(await predictConflicts(root, branches))) {
+      const text = describeConflict(c)
+      if (!quiet && (about === undefined || c.a === about.name || c.b === about.name)) this.toast('warn', text)
+      this.post(text, c.b === CHECKOUT ? [c.a] : [c.a, c.b])
+    }
+  }
+
+  /** Runs the repository's verify command in the agent's worktree, posts the outcome and keeps it for the gate, the board and `/agent log`. `stoppable`: `/agent stop` kills it and drops the result. */
+  private async verifyWorker(w: Worker, command: string, label: string, stoppable: boolean): Promise<VerifyResult | undefined> {
+    const sha = await currentSha(w.dir)
+    const run = await runVerify(command, w.dir, { env: this.env, ...(stoppable ? { onSpawn: (c: NonNullable<Worker['child']>) => (w.child = c) } : {}) })
+    if (stoppable) w.child = undefined
+    if (stoppable && w.stopped) return undefined
+    const result: VerifyResult = { ...run, sha, command, at: Date.now() }
+    this.verifyResults.set(w.name, result)
+    this.post(`${label} ${verifyReport(run)}`, [w.name])
+    if (!run.ok) this.toast('warn', `${w.name}: ${verifyHeadline(run)}`)
+    this.emit('change')
+    return result
+  }
+
+  /** Applies the verify gate before a merge (running the command when it has not run on the branch's current commit). Returns why the merge is refused, or undefined. */
+  private async verifyGate(w: Worker, root: string, force: boolean): Promise<string | undefined> {
+    const command = this.verifyStore.get(root)
+    if (command === undefined || force) return undefined
+    const head = await currentSha(w.dir)
+    let gate = mergeGate({ command, head, last: this.verifyResults.get(w.name), force })
+    if (gate.action === 'run') {
+      this.toast('info', `Verifying ${w.name} before merging...`)
+      const result = await this.verifyWorker(w, command, w.name, false)
+      if (result === undefined) return 'verification did not finish'
+      gate = mergeGate({ command, head, last: result, force })
+    }
+    return gate.action === 'block' ? gate.reason : undefined
+  }
+
+  private async doMerge(target: string, force: boolean): Promise<void> {
     const w = this.workers.get(target) ?? this.find(target)?.worker
     if (w === undefined) return
     if (w.draining) return this.toast('error', 'The agent is still working')
@@ -1235,6 +1522,12 @@ export class Orchestrator extends EventEmitter {
     if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
     if (await isDirty(root)) return this.toast('error', 'Commit or stash your changes first, then merge again.')
     if ((await aheadCount(root, w.branch)) === 0) return this.toast('info', 'Nothing to merge')
+    const blocked = await this.verifyGate(w, root, force)
+    if (blocked !== undefined) {
+      this.toast('error', `Not merged: ${w.name} ${blocked}. /agent log ${w.name} shows the output; /agent merge ${w.name} --force merges anyway.`)
+      this.post(`merge of ${w.name} refused: ${blocked}`, [w.name])
+      return
+    }
     const res = await mergeBranch(root, w.branch)
     if (!res.ok) {
       const shown = res.conflicts.slice(0, 3).join(', ')
@@ -1245,9 +1538,11 @@ export class Orchestrator extends EventEmitter {
     for (const other of this.workers.values()) {
       if (!other.draining && (await isAncestor(root, other.branch).catch(() => false))) {
         other.files = []
+        this.lineStats.delete(other.name)
         for (const r of this.runs.values()) if (r.worker === other) r.merged = true
       }
     }
+    await this.scanConflicts(root, true)
     this.emit('change')
     this.post(`merged ${w.name}`, [w.name])
     this.toast('success', `Merged ${w.name}`)
@@ -1310,6 +1605,26 @@ export class Orchestrator extends EventEmitter {
   }
 
   // ---- questions ----
+
+  /** An ACP permission request: risky ones (see risk.ts) are put to the user and block the turn until answered; the rest are approved. */
+  private async permit(w: Worker, params: Record<string, unknown>, allowedThisRun: Set<string>): Promise<boolean> {
+    if (!this.registry.riskApproval) return true
+    const call = isRecord(params.toolCall) ? params.toolCall : {}
+    const reason = classifyRisk(call, w.dir)
+    if (reason === undefined) return true
+    const what = describeCall(call)
+    if (allowedThisRun.has(reason)) {
+      this.post(`${w.name}: allowed ${what} (${reason}; allowed for this run)`, [w.name])
+      return true
+    }
+    const q = riskQuestion(reason, what)
+    const answers = await this.questions.ask(w.name, q.message, q.fields)
+    const decision = riskDecision(answers)
+    if (decision === 'run') allowedThisRun.add(reason)
+    const verdict = decision === 'deny' ? (answers === null ? 'denied (no answer)' : 'denied') : decision === 'run' ? 'allowed for this run' : 'allowed once'
+    this.post(`${w.name}: ${verdict}: ${what} (${reason})`, [w.name])
+    return decision !== 'deny'
+  }
 
   private async elicit(w: Worker, params: Record<string, unknown>): Promise<Record<string, unknown> | undefined> {
     const form = fieldsFromElicitation(params)

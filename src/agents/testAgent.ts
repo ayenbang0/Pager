@@ -1,5 +1,5 @@
 // Fake coding agent used by orchestrator and engine tests: `node testAgent.js <prompt>`.
-// Message lines: WRITE f=x | APPEND f=x | ECHO text | HAS f | SLEEP ms | FAIL | MEM | DOCSEEN | BOARD | TOOL name {json}
+// Message lines: WRITE f=x | APPEND f=x | ECHO text | HAS f | UNDONE | SLEEP ms | FAIL | MEM | DOCSEEN | BOARD | TOOL name {json}
 // A review request (a message of kind "review") is answered with submit_review: verdict TEST_REVIEW_VERDICT (default approve).
 import fs from 'node:fs'
 import net from 'node:net'
@@ -65,6 +65,8 @@ for (const raw of block.split('\n')) {
     console.log(arg)
   } else if (op === 'HAS') {
     console.log(`${fs.existsSync(arg) ? 'has' : 'missing'} ${arg}`)
+  } else if (op === 'UNDONE') {
+    console.log(`undo note: ${block.includes('undone by the user') ? 'told' : 'not told'}`)
   } else if (op === 'SLEEP') {
     await sleep(Number(arg))
   } else if (op === 'FAIL') {

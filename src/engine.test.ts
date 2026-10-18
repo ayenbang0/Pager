@@ -321,6 +321,27 @@ test('/theme switches, persists across restarts, and rejects unknown names', asy
   assert.deepEqual(again.engine.settings(), { ...DEFAULT_SETTINGS, theme: 'mono', sidebar: false })
 })
 
+test('/search needs text; a restart recaps what the agents did while closed and /search finds agent room text', async () => {
+  const a = await boot('alice')
+  await a.engine.submit('/search')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  await a.engine.submit('/search anything')
+  assert.deepEqual(a.engine.home(), ['No matches for "anything"'])
+  assert.equal(fs.existsSync(path.join(a.dir, 'last-seen.json')), true)
+  await a.engine.close()
+  const quiet = await boot('alice', a.dir)
+  assert.ok(!quiet.engine.home().some((l) => l.startsWith('Since you left')), 'nothing happened, nothing shown')
+  await quiet.engine.close()
+  fs.writeFileSync(path.join(a.dir, 'last-seen.json'), JSON.stringify({ at: Date.now() - 3 * 3_600_000 }))
+  const entry = { n: 1, ts: Date.now() - 1000, author: 'omp', authorKey: '0'.repeat(64), kind: 'text', text: 'Found the Needle in src/a.ts' }
+  fs.appendFileSync(path.join(a.dir, 'agents-room.jsonl'), `${JSON.stringify(entry)}\n`)
+  const b = await boot('alice', a.dir)
+  assert.ok(b.engine.home().includes('Since you left (3h ago): agents: 1 turn'))
+  await b.engine.submit('/search needle')
+  assert.match(b.engine.home().at(-1) ?? '', /^\[agents\] omp, \d\d:\d\d: Found the Needle in src\/a\.ts$/)
+  await b.engine.close()
+})
+
 test('/theme with no argument opens the picker; /theme list names the themes', async () => {
   const a = await boot('alice')
   const opened: unknown[][] = []

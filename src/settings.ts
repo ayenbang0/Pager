@@ -69,3 +69,25 @@ export function saveSettings(dir: string, settings: Settings): void {
   fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n')
   fs.renameSync(tmp, file)
 }
+
+/** When pager was last open (ms since epoch), kept in its own small file so the periodic stamp never rewrites settings.json. Undefined on a first run or an unreadable file. */
+export function loadLastSeen(dir: string): number | undefined {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(path.join(dir, 'last-seen.json'), 'utf8'))
+    return isRecord(parsed) && typeof parsed.at === 'number' && Number.isFinite(parsed.at) && parsed.at > 0 ? parsed.at : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Best effort and atomic; a read-only data dir only costs the next recap. */
+export function saveLastSeen(dir: string, at: number): void {
+  const file = path.join(dir, 'last-seen.json')
+  const tmp = `${file}.tmp`
+  try {
+    fs.writeFileSync(tmp, JSON.stringify({ at }) + '\n')
+    fs.renameSync(tmp, file)
+  } catch {
+    // not worth a warning every minute
+  }
+}

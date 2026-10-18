@@ -1,5 +1,5 @@
 // Fake ACP agent used by acp tests: `node testAcpAgent.js` speaks JSON-RPC over stdio.
-// Message lines (after the NEW MESSAGES marker): ECHO text | TOOL title | WRITE f=x | CWD | SESSION | PERM | SLEEP ms | FAIL
+// Message lines (after the NEW MESSAGES marker): ECHO text | TOOL title | WRITE f=x | CWD | SESSION | PERM [{toolCall fields json}] | SLEEP ms | FAIL
 //   | MCP | CFG | USAGE used/size | ELICIT {requestedSchema json} | PAGER name {json}
 // Env: TEST_ACP_BAD_INIT=1 makes `initialize` fail; TEST_ACP_NO_LOAD=1 hides the loadSession capability.
 import fs from 'node:fs'
@@ -108,7 +108,7 @@ async function runTask(sessionId: string, task: string): Promise<void> {
     } else if (op === 'PERM') {
       const result = await ask('session/request_permission', {
         sessionId,
-        toolCall: { toolCallId: 't-perm' },
+        toolCall: { toolCallId: 't-perm', ...(arg === '' ? {} : (JSON.parse(arg) as object)) },
         options: [
           { optionId: 'r1', name: 'Reject', kind: 'reject_once' },
           { optionId: 'a1', name: 'Allow', kind: 'allow_once' },

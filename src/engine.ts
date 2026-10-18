@@ -22,7 +22,9 @@ import { LOCAL_CAPS, Net, type PeerLink } from './net.js'
 import { NetLog } from './netlog.js'
 import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
 import { Suggester } from './suggest.js'
-import { DENSITIES, isDensity, loadSettings, parseBadge, saveSettings, type Settings } from './settings.js'
+import { buildRecap } from './recap.js'
+import { formatSearch, readRoomLines, searchDocs, SEARCH_SCAN_LIMIT, type SearchDoc } from './search.js'
+import { DENSITIES, isDensity, loadLastSeen, loadSettings, parseBadge, saveLastSeen, saveSettings, type Settings } from './settings.js'
 import { findTheme, THEMES } from './themes.js'
 import { isNewer, latestVersion } from './update.js'
 import { VERSION } from './version.js'
@@ -108,6 +110,8 @@ const MAX_NOTE = 200
 const MAX_INCOMING = 20
 const MAX_UNKNOWN_LINKS = 20
 const UNKNOWN_LINK_TTL_MS = 30_000
+/** How often the last-seen stamp is refreshed while pager is open. */
+const LAST_SEEN_MS = 60_000
 const EVENTS_PER_FRAME = 100
 /** How many of the user's own sent messages seed the autocomplete at startup. */
 const SUGGEST_CORPUS = 2000
@@ -136,6 +140,8 @@ export class Engine extends EventEmitter {
   private openDocId: string | null = null
   private statsCache: { at: number; value: AgentStats } | undefined
   private readonly unknownTimers = new Set<NodeJS.Timeout>()
+  /** Stamps `last-seen.json` every LAST_SEEN_MS while open, for the "since you left" recap. */
+  private seenTimer: NodeJS.Timeout | undefined
   private activeId: string | null = null
   /** Text set by /help and /code; null shows the welcome banner. */
   private homeLines: string[] | null = null
@@ -242,6 +248,48 @@ export class Engine extends EventEmitter {
     })
     if (this.prefs.notify) warmDesktop()
     this.showNewRelease()
+    this.startRecap()
+  }
+
+  /** Shows what happened since pager was last open (appended to the changelog if that is up), then keeps the last-seen stamp fresh. */
+  private startRecap(): void {
+    const now = Date.now()
+    const lastSeen = loadLastSeen(this.dir)
+    if (lastSeen !== undefined) {
+      const labels = this.convLabels()
+      const chats = [...this.store.textCountsSince(this.me.pk, lastSeen)].flatMap(([id, count]) => {
+        const title = labels.get(id)
+        return title === undefined ? [] : [{ title, count }]
+      })
+      const line = buildRecap({ now, lastSeen, chats, room: readRoomLines(this.roomFile()) })
+      if (line !== undefined) this.homeLines = this.homeLines === null ? [line] : [...this.homeLines, '', line]
+    }
+    saveLastSeen(this.dir, now)
+    this.seenTimer = setInterval(() => saveLastSeen(this.dir, Date.now()), LAST_SEEN_MS)
+    this.seenTimer.unref()
+  }
+
+  private roomFile(): string {
+    return path.join(this.dir, 'agents-room.jsonl')
+  }
+
+  /** Conversation id to the name search and the recap show: `alice` for a contact, `#team` for a group. */
+  private convLabels(): Map<string, string> {
+    return new Map(this.convs().map((c) => [c.id, c.kind === 'group' ? `#${c.title}` : c.title]))
+  }
+
+  /** `/search`: the newest matches in chat history and the agent room, shown as a text block. */
+  private cmdSearch(query: string): void {
+    const q = query.trim()
+    if (q === '') return this.toast('error', 'Usage: /search <text>  (case-insensitive; chat history and the agent room, newest 20 matches)')
+    const labels = this.convLabels()
+    const docs: SearchDoc[] = []
+    for (const e of this.store.recentTexts(SEARCH_SCAN_LIMIT)) {
+      const where = labels.get(e.conv)
+      if (where !== undefined) docs.push({ where, author: this.nameOf(e.author), ts: e.ts, text: e.body })
+    }
+    for (const l of readRoomLines(this.roomFile())) docs.push({ where: 'agents', author: l.author, ts: l.ts, text: l.text })
+    this.setHome(formatSearch(q, searchDocs(docs, q), Date.now()))
   }
 
   private showNewRelease(): void {
@@ -731,6 +779,8 @@ export class Engine extends EventEmitter {
     this.closed = true
     for (const t of this.unknownTimers) clearTimeout(t)
     this.unknownTimers.clear()
+    if (this.seenTimer !== undefined) clearInterval(this.seenTimer)
+    saveLastSeen(this.dir, Date.now())
     this.term.close()
     this.docs.close()
     this.share.close()
@@ -785,6 +835,8 @@ export class Engine extends EventEmitter {
         return this.cmdUpdate()
       case 'changelog':
         return this.setHome(this.changelogText(rest.trim() || undefined))
+      case 'search':
+        return this.cmdSearch(rest)
       case 'agent':
         return this.cmdAgent(rest, args)
       case 'exit':
@@ -805,7 +857,7 @@ export class Engine extends EventEmitter {
 
   private async cmdAgent(rest: string, args: string[]): Promise<void> {
     const usage =
-      '/agent <name> <task> | new <cli> [name] | add <id> <command…> | remove <name> | setup | chain a>b <task> | model|effort <name> [value] | usage [name] | compact <name> | review on|off | goal <text> | memory [add <text>|clear] | commands <name> | cli <name> <args> | runs | stop [name|run] | merge <name|run> | drop <run|all|name> | reset <name> | check [name] | invite <contact> [--view] | guests | kick <contact|all> | leave [host]'
+      '/agent <name> <task> | new <cli> [name] | add <id> <command…> | remove <name> | setup | chain a>b <task> | model|effort <name> [value] | usage [name] | budget [<name|all> turns=<N> minutes=<N>|off] | compact <name> | review on|off | goal <text> | memory [add <text>|clear] | commands <name> | cli <name> <args> | runs | stop [name|run] | merge <name|run> [--force] | verify [<command>|off] | log <run|name> | drop <run|all|name> | reset <name> | undo <name> [n] | checkpoints <name> | check [name] | invite <contact> [--view] | guests | kick <contact|all> | leave [host]'
     const sub = (args[0] ?? '').toLowerCase()
     if (sub === '') return this.toast('info', usage)
     const names = this.agents.names()
@@ -890,6 +942,9 @@ export class Engine extends EventEmitter {
         this.activate(target === undefined ? ROOM_ID : agentTabId(nameArg))
         void this.agents.usage(target === undefined ? undefined : [nameArg])
         return
+      case 'budget':
+        this.activate(ROOM_ID)
+        return this.agents.budget(args.slice(1))
       case 'compact': {
         if (!needName('compact')) return
         const mode = (args[2] ?? 'compact').toLowerCase()
@@ -902,6 +957,12 @@ export class Engine extends EventEmitter {
         if (on !== 'on' && on !== 'off') return this.toast('info', `Peer review is ${this.agents.registry.review ? 'on' : 'off'}. /agent review on|off`)
         this.agents.setReview(on === 'on')
         return this.toast('success', `Peer review ${on}`)
+      }
+      case 'risk': {
+        const on = (target ?? '').toLowerCase()
+        if (on !== 'on' && on !== 'off') return this.toast('info', `Risky-action approval is ${this.agents.registry.riskApproval ? 'on' : 'off'}. /agent risk on|off`)
+        this.agents.setRiskApproval(on === 'on')
+        return this.toast('success', `Risky-action approval ${on}`)
       }
       case 'goal':
         this.activate(ROOM_ID)
@@ -918,13 +979,34 @@ export class Engine extends EventEmitter {
         return this.agents.list()
       case 'stop':
         return this.agents.stop(target ?? 'all')
-      case 'merge':
-        return target === undefined ? this.toast('error', 'Usage: /agent merge <name|run>') : this.agents.merge(target)
+      case 'merge': {
+        const force = args.includes('--force')
+        const which = args.slice(1).find((a) => a !== '--force')
+        return which === undefined ? this.toast('error', 'Usage: /agent merge <name|run> [--force]') : this.agents.merge(which, force)
+      }
+      case 'verify':
+        this.activate(ROOM_ID)
+        return void this.agents.setVerify(after)
+      case 'log':
+        if (target === undefined) return this.toast('error', 'Usage: /agent log <run|name>')
+        this.activate(ROOM_ID)
+        return this.agents.showLog(nameArg)
       case 'drop':
         return target === undefined ? this.toast('error', 'Usage: /agent drop <run|all|name>') : this.agents.drop(target)
       case 'reset':
         if (!needName('reset')) return
         return void this.agents.reset(nameArg)
+      case 'undo': {
+        if (!needName('undo')) return
+        const turns = args[2] === undefined ? 1 : Number(args[2])
+        if (!Number.isInteger(turns) || turns < 1) return this.toast('error', 'Usage: /agent undo <name> [n]')
+        this.activate(agentTabId(nameArg))
+        return void this.agents.undo(nameArg, turns)
+      }
+      case 'checkpoints':
+        if (!needName('checkpoints')) return
+        this.activate(agentTabId(nameArg))
+        return void this.agents.listCheckpoints(nameArg)
       case 'check':
         this.activate(ROOM_ID)
         void this.agents.check(target === undefined ? undefined : [nameArg])

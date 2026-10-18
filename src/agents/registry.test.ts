@@ -129,6 +129,7 @@ test('state persists across a second Registry and leaves no temp file', () => {
   first.setEffort('omp', 'high')
   first.setReview(false)
   first.setAutoCompact(false)
+  first.setRiskApproval(false)
   assert.equal(first.saveError, undefined)
   const second = new Registry(dir)
   assert.deepEqual(second.instances(), [
@@ -138,6 +139,7 @@ test('state persists across a second Registry and leaves no temp file', () => {
   assert.deepEqual(second.custom(), { mine: { command: 'bin', args: ['--acp'], env: { A: 'B' } } })
   assert.equal(second.review, false)
   assert.equal(second.autoCompact, false)
+  assert.equal(second.riskApproval, false)
   assert.deepEqual(fs.readdirSync(dir), ['agents.json'])
   second.setModel('omp', undefined)
   second.setEffort('omp', undefined)
@@ -149,6 +151,7 @@ test('defaults: review and auto-compact on, nothing configured, readiness is not
   const reg = new Registry(dir)
   assert.equal(reg.review, true)
   assert.equal(reg.autoCompact, true)
+  assert.equal(reg.riskApproval, true)
   assert.equal(reg.hasInstances(), false)
   assert.equal(fs.existsSync(path.join(dir, 'agents.json')), false)
   reg.addInstance('omp')

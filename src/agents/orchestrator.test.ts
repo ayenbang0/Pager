@@ -624,4 +624,70 @@ test('deleting an agent in the middle of a turn stops it and the turn still reso
     assert.ok(!orch.room().agents.some((a) => a.name === 'omp'))
   }))
 
+test('undo puts the worktree back to before the last turn, marks the run and tells the agent once', () =>
+  withOrch(async ({ orch, repo }) => {
+    await orch.ask('omp', 'WRITE a.txt=1')
+    await settled(orch)
+    await orch.ask('omp', 'WRITE b.txt=2')
+    await settled(orch)
+    await orch.listCheckpoints('omp')
+    assert.ok(texts(orch, 'omp').some((t) => t.startsWith('pager: omp can undo 2 turn(s)')))
+    const before = git(repo, 'rev-parse', 'pager/omp~1')
+    await orch.undo('omp')
+    assert.equal(git(repo, 'rev-parse', 'pager/omp'), before)
+    assert.equal(git(repo, 'rev-list', '--count', 'main..pager/omp'), '1')
+    assert.ok(texts(orch).some((t) => t === `pager: undid last 1 turn(s) of omp (back to ${before.slice(0, 7)})`))
+    const runs = orch.room().runs
+    assert.deepEqual(runs.map((r) => [r.files, r.mergeable]), [[1, true], [0, false]])
+    await orch.ask('omp', 'UNDONE\nHAS b.txt')
+    await settled(orch)
+    assert.ok(texts(orch, 'omp').includes('omp: undo note: told\nmissing b.txt'))
+    await orch.ask('omp', 'UNDONE')
+    assert.ok(texts(orch, 'omp').includes('omp: undo note: not told'))
+  }))
+
+test('undo refuses while the agent works and when there is nothing to undo', () =>
+  withOrch(async ({ orch, toasts }) => {
+    await orch.undo('omp')
+    assert.match(toasts.at(-1)?.text ?? '', /no turns to undo/)
+    const turn = orch.ask('omp', 'WRITE a.txt=1\nSLEEP 60000')
+    await waitFor(() => orch.room().agents.find((a) => a.name === 'omp')?.state === 'working', 20_000, 'omp working')
+    await orch.undo('omp')
+    assert.equal(toasts.at(-1)?.kind, 'error')
+    assert.match(toasts.at(-1)?.text ?? '', /working/)
+    orch.stop('omp')
+    await turn
+    await orch.undo('nobody')
+    assert.match(toasts.at(-1)?.text ?? '', /No agent "nobody"/)
+  }))
+
+test('checkpoints survive a restart and dropping the workspace deletes their refs', async () => {
+  const repo = makeRepo()
+  const dataDir = tmp('pager-data-')
+  try {
+    const first = new Orchestrator({ dataDir, workdir: repo, adapters: fakes })
+    await first.refresh()
+    first.setReview(false)
+    await first.ask('omp', 'WRITE a.txt=1')
+    await first.close()
+    assert.equal(git(repo, 'for-each-ref', '--format=%(refname)', 'refs/pager/checkpoints'), 'refs/pager/checkpoints/pager/omp/1')
+    const second = new Orchestrator({ dataDir, workdir: repo, adapters: fakes })
+    try {
+      await second.refresh()
+      await second.undo('omp')
+      assert.equal(git(repo, 'rev-list', '--count', 'main..pager/omp'), '0')
+      assert.ok(texts(second).some((t) => t.startsWith('pager: undid last 1 turn(s) of omp')))
+      await second.ask('omp', 'WRITE b.txt=2')
+      await settled(second)
+      assert.equal(git(repo, 'for-each-ref', '--format=%(refname)', 'refs/pager/checkpoints'), 'refs/pager/checkpoints/pager/omp/1')
+      await second.drop('omp')
+      assert.equal(git(repo, 'for-each-ref', '--format=%(refname)', 'refs/pager/checkpoints'), '')
+    } finally {
+      await second.close()
+    }
+  } finally {
+    for (const d of [repo, dataDir]) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5 })
+  }
+})
+
 after(removeTmpDirs)

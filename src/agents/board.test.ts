@@ -76,3 +76,13 @@ test('a viewer missing from the entries gets no YOU line', () => {
   assert.ok(!board.includes('YOU:'))
   assert.ok(board.includes('- omp (idle)'))
 })
+
+test('line counts and the verify status appear on the entry only when known', () => {
+  const board = renderBoard(
+    [entry('omp', { files: ['a.ts'], lines: { adds: 12, dels: 3 }, verify: 'fail' }), entry('claude', { files: ['b.ts'], lines: { adds: 1, dels: 0 } })],
+    '',
+    'omp',
+  )
+  assert.ok(board.includes('YOU: omp (idle) task: (none) | fits: ? | files: a.ts (+12/-3) | verify: fail | branch pager/omp'))
+  assert.ok(board.includes('- claude (idle) task: (none) | fits: ? | files: b.ts (+1/-0) | branch pager/claude'))
+})

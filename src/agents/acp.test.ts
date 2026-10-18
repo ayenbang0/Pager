@@ -85,6 +85,101 @@ test('permission requests are granted', () =>
     assert.ok(messages(orch).some((m) => m.text === 'perm:a1'))
   }))
 
+const push = (command = 'git push --force origin main'): string => `PERM ${JSON.stringify({ title: 'bash', kind: 'execute', rawInput: { command } })}`
+const agentText = (orch: Orchestrator): string => messages(orch).filter((m) => m.author === 'omp').map((m) => m.text).join('\n')
+const roomLines = (orch: Orchestrator): string[] => messages(orch, 'omp').filter((m) => m.author === 'pager').map((m) => m.text)
+
+async function answerRisk(orch: Orchestrator, decision: string | null): Promise<{ message: string; options: string[] }> {
+  await waitFor(() => orch.questions.views().length === 1, 15_000, 'risk question')
+  const [view] = orch.questions.views()
+  assert.ok(view)
+  assert.equal(view.agent, 'omp')
+  orch.questions.answer(view.id, decision === null ? null : { decision })
+  return { message: view.message, options: view.fields[0]?.options.map((o) => o.value) ?? [] }
+}
+
+test('a risky permission request is put to the user and allowing once reaches the agent', () =>
+  withOrch(async ({ orch }) => {
+    const done = orch.ask('omp', push())
+    const q = await answerRisk(orch, 'once')
+    assert.match(q.message, /git push --force to main/)
+    assert.deepEqual(q.options, ['once', 'run', 'deny'])
+    await done
+    assert.ok(agentText(orch).includes('perm:a1'))
+    assert.ok(roomLines(orch).some((t) => t.startsWith('omp: allowed once: git push --force origin main')))
+  }))
+
+test('denying a risky permission request rejects it for the agent', () =>
+  withOrch(async ({ orch }) => {
+    const done = orch.ask('omp', push())
+    await answerRisk(orch, 'deny')
+    await done
+    assert.ok(agentText(orch).includes('perm:r1'))
+    assert.ok(roomLines(orch).some((t) => t.startsWith('omp: denied: git push --force origin main')))
+  }))
+
+test('a cancelled risk question counts as a denial', () =>
+  withOrch(async ({ orch }) => {
+    const done = orch.ask('omp', push())
+    await answerRisk(orch, null)
+    await done
+    assert.ok(agentText(orch).includes('perm:r1'))
+    assert.ok(roomLines(orch).some((t) => t.startsWith('omp: denied (no answer)')))
+  }))
+
+test('"allow for this run" is not asked again in the same turn, but is next turn', () =>
+  withOrch(async ({ orch }) => {
+    let asked = 0
+    orch.questions.on('asked', () => asked++)
+    const first = orch.ask('omp', `${push()}\n${push()}`)
+    await answerRisk(orch, 'run')
+    await first
+    assert.equal(asked, 1)
+    assert.equal(agentText(orch).split('perm:a1').length - 1, 2)
+    assert.ok(roomLines(orch).some((t) => t.includes('allowed for this run')))
+    const second = orch.ask('omp', push())
+    await answerRisk(orch, 'once')
+    await second
+    assert.equal(asked, 2)
+  }))
+
+test('harmless permission requests are approved without a question', () =>
+  withOrch(async ({ orch }) => {
+    let asked = 0
+    orch.questions.on('asked', () => asked++)
+    await orch.ask('omp', `${push('git status')}\nPERM ${JSON.stringify({ title: 'Edit a.ts', kind: 'edit', rawInput: { file_path: 'a.ts' } })}`)
+    assert.equal(asked, 0)
+    assert.equal(agentText(orch).split('perm:a1').length - 1, 2)
+  }))
+
+test('a write outside the agent worktree asks the user', () =>
+  withOrch(async ({ orch, repo }) => {
+    const outside = path.join(repo, 'base.txt')
+    const done = orch.ask('omp', `PERM ${JSON.stringify({ title: 'Write', kind: 'edit', rawInput: { file_path: outside } })}`)
+    const q = await answerRisk(orch, 'deny')
+    assert.match(q.message, /writes outside the worktree/)
+    await done
+    assert.ok(agentText(orch).includes('perm:r1'))
+  }))
+
+test('with risk approval off every permission request is granted', () =>
+  withOrch(async ({ orch, dataDir }) => {
+    orch.setRiskApproval(false)
+    await orch.ask('omp', push())
+    assert.equal(orch.questions.views().length, 0)
+    assert.ok(agentText(orch).includes('perm:a1'))
+    assert.equal(JSON.parse(fs.readFileSync(path.join(dataDir, 'agents.json'), 'utf8')).riskApproval, false)
+  }))
+
+test('stopping a turn that waits on a risk question denies it and ends the turn', () =>
+  withOrch(async ({ orch }) => {
+    const done = orch.ask('omp', push())
+    await waitFor(() => orch.questions.views().length === 1, 15_000, 'risk question')
+    orch.stop('omp')
+    await done
+    assert.equal(orch.questions.views().length, 0)
+  }))
+
 test('the next task resumes the stored session, also after a restart; a stale id falls back to a new one', () =>
   withOrch(async ({ orch, repo, dataDir }) => {
     await orch.ask('omp', 'SESSION')

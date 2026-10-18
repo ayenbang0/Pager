@@ -50,6 +50,7 @@ export class Registry {
   private list: AgentConfig[] = []
   private reviewOn = true
   private compactOn = true
+  private riskOn = true
   private readonly states = new Map<string, Readiness>()
 
   constructor(dataDir: string) {
@@ -72,6 +73,16 @@ export class Registry {
 
   setAutoCompact(on: boolean): void {
     this.compactOn = on
+    this.save()
+  }
+
+  /** Whether risky permission requests (push, force, rm -rf, publish…) are put to the user instead of auto-approved. */
+  get riskApproval(): boolean {
+    return this.riskOn
+  }
+
+  setRiskApproval(on: boolean): void {
+    this.riskOn = on
     this.save()
   }
 
@@ -247,11 +258,12 @@ export class Registry {
     }
     if (typeof data['review'] === 'boolean') this.reviewOn = data['review']
     if (typeof data['autoCompact'] === 'boolean') this.compactOn = data['autoCompact']
+    if (typeof data['riskApproval'] === 'boolean') this.riskOn = data['riskApproval']
   }
 
   private save(): void {
     const tmp = `${this.file}.tmp`
-    const body = { custom: this.customAgents, instances: this.list, review: this.reviewOn, autoCompact: this.compactOn }
+    const body = { custom: this.customAgents, instances: this.list, review: this.reviewOn, autoCompact: this.compactOn, riskApproval: this.riskOn }
     try {
       fs.mkdirSync(path.dirname(this.file), { recursive: true })
       fs.writeFileSync(tmp, `${JSON.stringify(body, null, 2)}\n`)

@@ -1,3 +1,4 @@
+import { formatStat, type DiffStat } from './diffstat.js'
 import type { AgentState } from './types.js'
 
 export const BOARD_TASK_CHARS = 200
@@ -12,6 +13,10 @@ export interface BoardEntry {
   purpose: string
   files: string[]
   branch: string
+  /** Added and deleted lines of the agent's unmerged work, when known. */
+  lines?: DiffStat
+  /** The last verify command result for that work (pass, fail, timed out), when known. */
+  verify?: string
 }
 
 /** One line, whitespace collapsed, cut to `max` characters including the ellipsis. */
@@ -26,7 +31,9 @@ function line(e: BoardEntry): string {
   const files = shown.length === 0 ? 'none' : `${shown.join(', ')}${extra > 0 ? `, +${extra}` : ''}`
   const task = oneLine(e.task, BOARD_TASK_CHARS)
   const fits = oneLine(e.purpose, BOARD_PURPOSE_CHARS)
-  return `${e.name} (${e.state}) task: ${task === '' ? '(none)' : task} | fits: ${fits === '' ? '?' : fits} | files: ${files} | branch ${e.branch}`
+  const counts = e.lines === undefined ? '' : ` (${formatStat(e.lines)})`
+  const verify = e.verify === undefined ? '' : ` | verify: ${e.verify}`
+  return `${e.name} (${e.state}) task: ${task === '' ? '(none)' : task} | fits: ${fits === '' ? '?' : fits} | files: ${files}${counts}${verify} | branch ${e.branch}`
 }
 
 /** The text every agent sees at the top of its prompt: the goal, its own task and everyone else's. */
