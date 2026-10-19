@@ -5,18 +5,18 @@ import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { stripVTControlCharacters } from 'node:util'
-import type { MessageView, Toast, ToastKind } from '../engine.js'
-import { isRecord } from '../guards.js'
-import { ADAPTERS, findBinary, type AdapterSpec } from './adapters.js'
-import type { AcpCommand, AcpConfigOption } from './acp.js'
-import { renderBoard } from './board.js'
-import { PRESETS } from './catalog.js'
-import { CheckpointLog, checkpointLines, type Checkpoint, type RestoreResult } from './checkpoints.js'
-import { CHECKOUT, ConflictBook, conflictsOf, describeConflict, predictConflicts } from './conflicts.js'
-import { formatStat, type DiffStat } from './diffstat.js'
-import { changedFiles, commitAll, currentSha, diffNumstat, diffSince, ensureWorktree, headSha, isAncestor, isDirty, aheadCount, mergeBranch, removeWorktree, repoRoot, syncWorktree } from './git.js'
-import { LiveMessage } from './live.js'
-import { killTree, runProcess } from './process.js'
+import type { MessageView, Toast, ToastKind } from '../app/engine.js'
+import { isRecord } from '../util/guards.js'
+import { ADAPTERS, findBinary, type AdapterSpec } from './run/adapters.js'
+import type { AcpCommand, AcpConfigOption } from './run/acp.js'
+import { renderBoard } from './state/board.js'
+import { PRESETS } from './run/catalog.js'
+import { CheckpointLog, checkpointLines, type Checkpoint, type RestoreResult } from './git/checkpoints.js'
+import { CHECKOUT, ConflictBook, conflictsOf, describeConflict, predictConflicts } from './git/conflicts.js'
+import { formatStat, type DiffStat } from './git/diffstat.js'
+import { changedFiles, commitAll, currentSha, diffNumstat, diffSince, ensureWorktree, headSha, isAncestor, isDirty, aheadCount, mergeBranch, removeWorktree, repoRoot, syncWorktree } from './git/git.js'
+import { LiveMessage } from './run/live.js'
+import { killTree, runProcess } from './run/process.js'
 import {
   buildPrompt,
   chainTask,
@@ -28,20 +28,20 @@ import {
   NOTE_MAX_CHARS,
   splitArgs,
   type PromptMessage,
-} from './protocol.js'
-import { Registry, RESERVED_NAMES, type AgentConfig, type Readiness } from './registry.js'
-import { askUserResult, contentFromAnswers, fieldsFromAskUser, fieldsFromElicitation, Questions, type QuestionView } from './questions.js'
-import { feedbackText, pickReviewer, reviewRequest, REVIEW_MAX_ROUNDS, type Verdict } from './review.js'
-import { classifyRisk, describeCall, riskDecision, riskQuestion } from './risk.js'
-import { FORWARD_THRESHOLD, parseMentions, relevance } from './router.js'
-import { BudgetStore, BUDGET_USAGE, ALL_KEY, check, DailyOnce, describeCap, describeUse, parseBudget, refusal, usedToday, warning } from './budget.js'
-import { StatsLog, summarize, type AgentTotals } from './stats.js'
-import { BoardState, CommandStore, errMsg, Memory, repoKey, ROOM_ID, RoomLog, SessionStore, type RoomEntry } from './store.js'
-import { shimSpec, ToolServer, type AskQuestion, type ToolHost, type TurnToken } from './toolserver.js'
-import { probeAcp, runOneShot, runViaAcp, type Reply } from './turn.js'
+} from './run/protocol.js'
+import { Registry, RESERVED_NAMES, type AgentConfig, type Readiness } from './run/registry.js'
+import { askUserResult, contentFromAnswers, fieldsFromAskUser, fieldsFromElicitation, Questions, type QuestionView } from './run/questions.js'
+import { feedbackText, pickReviewer, reviewRequest, REVIEW_MAX_ROUNDS, type Verdict } from './git/review.js'
+import { classifyRisk, describeCall, riskDecision, riskQuestion } from './state/risk.js'
+import { FORWARD_THRESHOLD, parseMentions, relevance } from './run/router.js'
+import { BudgetStore, BUDGET_USAGE, ALL_KEY, check, DailyOnce, describeCap, describeUse, parseBudget, refusal, usedToday, warning } from './state/budget.js'
+import { StatsLog, summarize, type AgentTotals } from './state/stats.js'
+import { BoardState, CommandStore, errMsg, Memory, repoKey, ROOM_ID, RoomLog, SessionStore, type RoomEntry } from './state/store.js'
+import { shimSpec, ToolServer, type AskQuestion, type ToolHost, type TurnToken } from './tools/toolserver.js'
+import { probeAcp, runOneShot, runViaAcp, type Reply } from './run/turn.js'
 import type { AgentView } from './types.js'
-import { mergeGate, runVerify, VerifyStore, verifyHeadline, verifyReport, verifyWord, type VerifyResult } from './verify.js'
-import { Worker, type Inbox, type Outcome, type TurnCtx } from './worker.js'
+import { mergeGate, runVerify, VerifyStore, verifyHeadline, verifyReport, verifyWord, type VerifyResult } from './git/verify.js'
+import { Worker, type Inbox, type Outcome, type TurnCtx } from './run/worker.js'
 
 /** A guest of a shared session speaking through the host's room. `label` is unique among the room's names; `pk` is their public key. */
 export interface Actor {
@@ -92,6 +92,8 @@ export interface OrchestratorOptions {
   adapters?: Record<string, AdapterSpec>
   /** Shared documents: agents see them in the prompt and may read and edit them with the doc tools. */
   docs?: DocsPort
+  /** Web search and page reading for the web_search and web_read tools; absent or throwing means the web is off. */
+  web?: { search(query: string): Promise<string>; read(url: string): Promise<string> }
   limits?: Partial<{ maxConcurrent: number; runTimeoutMs: number }>
 }
 export interface SetupRow {
@@ -376,7 +378,7 @@ export class Orchestrator extends EventEmitter {
     const to = targets.length > 0 ? targets : own === undefined ? [] : [own]
     this.append(who, 'text', text, to.length > 0 ? to : undefined, actor?.pk)
     if (to.length === 0) {
-      const hint = names.length === 0 ? 'No agents are ready: /agent setup' : `Name an agent: ${names.map((n) => `@${n}`).join(', ')} or @all`
+      const hint = names.length === 0 ? 'No agents are ready: Settings > Agents' : `Name an agent: ${names.map((n) => `@${n}`).join(', ')} or @all`
       if (actor === undefined) this.toast('warn', hint)
       else this.post(hint)
       return
@@ -580,7 +582,7 @@ export class Orchestrator extends EventEmitter {
     }
   }
 
-  /** `/agent checkpoints <name>`: lists the turns that `undo` can take back, newest first (1 = the last turn). */
+  /** `Agent <name>: checkpoints`: lists the turns that `undo` can take back, newest first (1 = the last turn). */
   async listCheckpoints(target: string): Promise<void> {
     const root = await this.rootDir()
     if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
@@ -674,14 +676,14 @@ export class Orchestrator extends EventEmitter {
     }
   }
 
-  /** `/agent verify`: shows, sets (a command line) or clears (`off`) the check run in each worktree after a turn and before a merge. */
+  /** Settings > Agents verify: shows, sets (a command line) or clears (`off`) the check run in each worktree after a turn and before a merge. */
   async setVerify(text: string): Promise<void> {
     const root = await this.rootDir()
     if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
     const command = text.trim()
     if (command === '') {
       const current = this.verifyStore.get(root)
-      return this.post(current === undefined ? 'verify is off: /agent verify <command> runs it in each worktree after a turn and before a merge' : `verify: ${current}`)
+      return this.post(current === undefined ? 'verify is off: set a command in Settings > Agents to run it in each worktree after a turn and before a merge' : `verify: ${current}`)
     }
     const why = this.verifyStore.set(root, command.toLowerCase() === 'off' ? undefined : command)
     if (why !== undefined) return this.toast('error', `Could not save the verify command: ${why}`)
@@ -694,7 +696,7 @@ export class Orchestrator extends EventEmitter {
     const w = this.workers.get(target) ?? this.find(target)?.worker
     if (w === undefined) return this.toast('error', `No agent or run "${target}"`)
     const last = this.verifyResults.get(w.name)
-    if (last === undefined) return this.toast('info', `No verify output for ${w.name} yet (/agent verify <command>)`)
+    if (last === undefined) return this.toast('info', `No verify output for ${w.name} yet (set one in Settings > Agents)`)
     const age = Math.max(0, Math.round((Date.now() - last.at) / 1000))
     this.post(`${w.name} ${verifyHeadline(last)} on ${last.sha.slice(0, 7)}, ${age}s ago: ${last.command}${last.truncated ? '\n(earlier output dropped)' : ''}\n${last.output.trimEnd() || '(no output)'}`, [w.name])
   }
@@ -795,7 +797,7 @@ export class Orchestrator extends EventEmitter {
     return hint !== undefined && hint !== '' && AUTH_HINT.test(reason) ? `${reason} (${hint})` : reason
   }
 
-  /** `/agent check`: re-checks every agent and posts what it found, including a real prompt round trip for one-shot capable agents. */
+  /** `Agents: check installs`: re-checks every agent and posts what it found, including a real prompt round trip for one-shot capable agents. */
   async check(names?: string[]): Promise<void> {
     const clis = names === undefined ? [...new Set([...SEED_CLIS, ...this.registry.instances().map((i) => i.cli)])] : names.map((n) => this.registry.instances().find((i) => i.name === n)?.cli ?? n)
     await this.refresh(clis)
@@ -828,7 +830,7 @@ export class Orchestrator extends EventEmitter {
 
   /** Adds a named teammate, checking its CLI first when needed. */
   async addAgent(cli: string, name?: string): Promise<AgentConfig | string> {
-    if (!this.registry.isKnownCli(cli)) return `Unknown agent "${cli}". See /agent setup`
+    if (!this.registry.isKnownCli(cli)) return `Unknown agent "${cli}". See Settings > Agents`
     if (this.registry.readiness(cli).state !== 'ready') await this.refresh([cli])
     const state = this.registry.readiness(cli)
     if (state.state !== 'ready') return `${cli} is not ready: ${state.state === 'missing' || state.state === 'failed' ? state.reason : state.state}`
@@ -896,7 +898,23 @@ export class Orchestrator extends EventEmitter {
     this.emit('change')
   }
 
-  /** `/agent budget`: show the daily caps and today's use, or set or lift a cap. `args` follow the word `budget`. */
+  /** Every stored daily cap as Settings rows: the default for all agents (key `*`) and one per agent that has its own. */
+  budgetList(): { key: string; text: string }[] {
+    return this.budgets.entries().map(([key, cap]) => ({ key, text: describeCap(cap) }))
+  }
+
+  /** Sets (`turns=20 minutes=60`) or lifts (`off`) one cap through the same parser and toasts as `budget`. */
+  setBudget(key: string, text: string): void {
+    this.budget([key === ALL_KEY ? 'all' : key, ...text.trim().split(/\s+/).filter(Boolean)])
+  }
+
+  /** The command run after each turn and before a merge, if one is set (undefined without a repository). */
+  async verifyCommand(): Promise<string | undefined> {
+    const root = await this.rootDir()
+    return root === undefined ? undefined : this.verifyStore.get(root)
+  }
+
+  /** Daily budgets: show the daily caps and today's use, or set or lift a cap. `args` follow the word `budget`. */
   budget(args: string[]): void {
     const cmd = parseBudget(args, this.names())
     if (cmd.kind === 'error') return this.toast('error', cmd.message)
@@ -925,7 +943,7 @@ export class Orchestrator extends EventEmitter {
     const root = await this.rootDir()
     if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
     if (action === 'add') {
-      if (text.trim() === '') return this.toast('error', 'Usage: /agent memory add <text>')
+      if (text.trim() === '') return this.toast('error', 'Write the note in Settings > Agents > Add a note to memory')
       this.addMemory(root, 'you', text.replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX_CHARS))
       return this.toast('success', 'Remembered')
     }
@@ -942,7 +960,7 @@ export class Orchestrator extends EventEmitter {
     const cfg = this.registry.instances().find((c) => c.name === name)
     const spec = cfg === undefined ? undefined : this.specFor(cfg.cli)
     if (cfg === undefined || spec === undefined || !this.acpPossible(spec)) {
-      return this.toast('error', `${name} has no ACP mode here; try /agent cli ${name} --help`)
+      return this.toast('error', `${name} has no ACP mode here; try the palette: Agent ${name}: CLI… (--help)`)
     }
     let list = this.commandStore.get(cfg.cli)
     if (list.length === 0) {
@@ -1025,6 +1043,11 @@ export class Orchestrator extends EventEmitter {
   }
 
   /** A pager line in the hub, and in the tabs of the agents it is about. */
+  /** A pager note in the room (shown to the user, never sent to an agent). */
+  notice(text: string): void {
+    this.post(text)
+  }
+
   private post(text: string, to?: string[]): void {
     this.append('pager', 'system', text, to)
   }
@@ -1652,6 +1675,8 @@ export class Orchestrator extends EventEmitter {
       docRead: (from, name) => this.toolDocRead(from, name),
       docWrite: (from, name, text, append) => this.toolDocWrite(from, name, text, append),
       submitReview: (from, verdict, comments) => this.toolReview(from, verdict, comments),
+      webSearch: async (_from, query) => this.opts.web?.search(query) ?? Promise.reject(new Error('Web search is off')),
+      webRead: async (_from, url) => this.opts.web?.read(url) ?? Promise.reject(new Error('Web search is off')),
     }
   }
 

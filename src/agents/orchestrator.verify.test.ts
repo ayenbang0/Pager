@@ -5,12 +5,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import type { Toast } from '../engine.js'
-import { tmpDir } from '../testutil.js'
-import type { AdapterSpec } from './adapters.js'
+import type { Toast } from '../app/engine.js'
+import { tmpDir } from '../testing/testutil.js'
+import type { AdapterSpec } from './run/adapters.js'
 import { Orchestrator } from './orchestrator.js'
 
-const fixture = fileURLToPath(new URL('./testAgent.js', import.meta.url))
+const fixture = fileURLToPath(new URL('./testing/testAgent.js', import.meta.url))
 const fake: AdapterSpec = { bin: process.execPath, args: (p) => [fixture, p], extract: (s) => s.trim() }
 const fakes: Record<string, AdapterSpec> = { omp: fake, claude: fake, opencode: fake, hermes: fake }
 

@@ -39,7 +39,6 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 |---|---|
 | `/help` | List commands |
 | `/code` | Show your name and contact code |
-| `/name <new name>` | Change your display name (1–64 chars) |
 | `/add <code> [note]` | Send a contact request (delivered when they are online) |
 | `/accept [n]` | Accept pending item `n` (number in the sidebar) |
 | `/decline [n]` | Decline: blocks a contact request, or leaves a group invite |
@@ -48,16 +47,15 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/group new <name>` | Create a group (you are its creator) |
 | `/group invite <name>` | Invite an accepted contact (creator only, max 16 members) |
 | `/group members` | List members of the open group |
+| `/group rename <new name>` | Rename the open group (creator only; every member sees it) |
 | `/group leave` | Leave the open group permanently |
-| `/theme [name]` | Show or switch the color theme: `omp` (default), `terminal`, `mono`, `ocean`, `amber`, `light` (saved) |
+| `/settings [section]` | Open the Settings tab (Alt+S): name, badge, theme, accent, density, notifications, folders, agents, AI backends, privacy and advanced switches |
 | `/terminal` | Open the built-in Terminal tab |
 | `/doc new <name> [in <chat>]` | Create a shared Markdown document; also `open`, `rename`, `rm`, `list`. Without `in <chat>` it is private |
-| `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `chain`, `memory`, `commands`, `runs`, `stop`, `merge`, `drop`, `check` |
-| `/agent invite <contact> [--view]` | Let a contact into your agent room: they can message the agents and answer questions (`--view`: only watch). Also `guests`, `kick <contact\|all>`; a guest uses `/accept n` and `/agent leave` |
-| `/net` | Show which contacts are connected, their capabilities, and where `net.log` (link events and protocol errors) is |
-| `/agent setup` | See which agent CLIs are installed and ready, add a teammate (Enter) or register a custom ACP agent (`custom: <id> <command…>`) |
+| `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `chain`, `runs`, `stop`, `merge`, `drop`, `undo`, `log` |
+| `/agent invite <contact> [--view]` | Let a contact into your agent room: they can message the agents and answer questions (`--view`: only watch). Remove guests or leave a session in Settings > Agents; a guest uses `/accept n` |
 | `/search <text>` | Find text in your chats and the agent room (newest 20 of the last 20,000 messages) |
-| `/changelog [version]` | Show what changed in recent updates |
+| `/changelog [version]` | Show what changed in recent updates, or exactly one version |
 | `/quit` | Exit |
 
 ## Keys
@@ -67,15 +65,18 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | Enter | Send / run command |
 | Tab, Up/Down | Complete the highlighted command / move in the palette (or input history) |
 | Right, End, Tab | Accept the dim suggestion. It learns from what you type: whole lines you have sent before (most-used first), then your own vocabulary and the words you usually put after each word. Shell lines in the Terminal tab are learned as whole lines only |
-| Ctrl+P | Command palette: switch conversation, accept/decline, change theme, and more |
+| Ctrl+P | Command palette: switch conversation, accept/decline, open Settings, file a chat in a folder, and more |
+| Alt+S | Open Settings |
 | Ctrl+G | Keyboard shortcut help (no printable key is a shortcut, so every character, `?` included, types normally) |
 | Alt+Up / Alt+Down | Previous / next conversation (home is first) |
 | Ctrl+O / Ctrl+N | Same, for terminals that do not send Alt+arrows (macOS Terminal.app by default) |
-| Alt+M | In an agent tab: pick that agent's model and effort (also the palette, `/agent model|effort <name>`, or a click on the chip in the tab header) |
+| Alt+M | In an agent tab: pick that agent's model and effort (also the palette, Settings > Agents, or a click on the chip in the tab header) |
 | Alt+Q | Jump to the agent that is asking you a question; the question appears in place of the prompt (Up/Down, Space, Enter, Tab, Esc) |
 | Ctrl+B | Toggle the sidebar (saved) |
 | Mouse wheel / trackpad scroll, PgUp / PgDn | Scroll messages (3 lines per wheel notch). With the wheel active, hold Shift (Option in iTerm2) to select text with the mouse |
 | Ctrl+T, click `▸ N more lines` | Fold / expand long messages (over 30 rows) |
+| Click a message | Open the emoji row under it and react; click a reaction again to take it back (needs the mouse) |
+| Click a sidebar header / wheel over the sidebar | Fold or unfold a section / scroll it when it is taller than the terminal |
 | Ctrl+A / Ctrl+E, Home / End | Start / end of line |
 | Alt+B / Alt+F, Ctrl+Left / Right | Word left / right (Option+Left / Right on macOS; Option+B / F also works without "Option as Meta") |
 | Alt+Backspace | Delete word back (Option+Delete on macOS) |
@@ -96,8 +97,15 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `PAGER_NO_NOTIFY` | Set to `1` to turn off the bell when pager is unfocused and the taskbar progress indicator |
 | `PAGER_NO_ACP` | Set to `1` to run every agent one-shot instead of over ACP |
 | `PAGER_ACP_LOG` | Path of a file that receives the ACP JSON-RPC traffic (debugging) |
+| `PAGER_NO_WEB` | Set to `1` to turn off the web tab and the agents' web tools |
+| `PAGER_NO_AGENTS` | Set to `1` to turn off the agents room, the AI tab and the agent tool server (same as `--no-agents`) |
+| `PAGER_LAN` | Set to `1` for LAN-only mode (same as `--lan`) |
+| `PAGER_PASSPHRASE` | The passphrase to try first when pager is locked (`pager lock`) |
+| `PAGER_AI_KEY` / `OPENAI_API_KEY`, `PAGER_AI_URL` | API key and address for an OpenAI-compatible AI backend (they win over `ai.json` and lock the Settings rows) |
 
-Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar), `history.json` (your last 500 inputs, for Up and the dim suggestion), `update.json` (cached latest version and check time), `agents-room.jsonl` (agents room transcript), `agent-sessions.json` (agent session ids), `memory/` (shared agent notes per repository), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
+A setting that an environment variable or flag fixes shows `locked by <source>` in Settings. Switches marked "restart to apply" are read when pager starts.
+
+Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar, folders, switches), `ai.json` (AI backends; mode 0600, may hold an API key), `ai-chat.jsonl` (AI tab history), `ai/work/` (the AI tab's scratch folder), `history.json` (your last 500 inputs, for Up and the dim suggestion), `update.json` (cached latest version and check time), `agents-room.jsonl` (agents room transcript), `agent-sessions.json` (agent session ids), `memory/` (shared agent notes per repository), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
 
 When pager is not focused (terminals that report focus: Windows Terminal, iTerm2, kitty, Ghostty, WezTerm, tmux with `focus-events`) it rings the bell when a message arrives or the agents finish, and Windows Terminal, iTerm2, Ghostty and WezTerm also show an indeterminate progress indicator while agents run. A message that arrives in the conversation you are looking at rings too, and ghostty, WezTerm and iTerm2 also get a desktop notification (sender and a preview); other terminals rely on the bell.
 
@@ -132,6 +140,25 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Groups.** The creator invites contacts with signed `member-add` events (max 16). Members connect to each other directly. `member-leave` is permanent for that group. New members receive the full history.
 - **Hardening.** Frames are newline-delimited JSON, validated with zod, capped at 256 KiB, and peer-supplied text containing control characters (terminal escape injection) is rejected.
 
+## Settings, folders and reactions
+
+- **Settings tab** (Alt+S, `/settings [section]`, or Ctrl+P → Settings): Up/Down move, Left/Right change a switch or choice, Enter edits a text field or runs an action (twice when it asks to confirm), Esc goes Home. The old `/theme`, `/accent`, `/badge`, `/density`, `/notify`, `/sound`, `/name` and `/net` commands moved here and say where when typed; most `/agent` subcommands moved to Settings > Agents and the palette (`Agent <name>: compact`, `reset session`, `slash commands`, `checkpoints`, `CLI…`).
+- **Folders.** Settings > Folders (or Ctrl+P → `New folder…`) creates folders; Ctrl+P → `Move "<tab>" to folder <name>` files the open chat, group, docs tab, AI tab or agents room. Folders sit above DIRECT in the sidebar; click a header to fold it (the open tab stays visible), and `[` / `]` in Settings reorder them.
+- **Reactions.** Click a message and pick an emoji (or `…` for any other). Reactions are events in the same signed log: they never count as unread. About 500 `:shortcodes:` complete with Tab.
+- **Group rename.** The creator's `/group rename <name>` reaches every member; pager 1.4.1 and older show it as one garbled line.
+
+## Web and AI tabs
+
+- **⌕ web** (sidebar → tools): type to search DuckDuckGo, then `open <n>` (your browser) or `read <n>` (the page as text). Agents get `web_search` and `web_read` tools while the web is on. Pages are untrusted data and private-network addresses are refused. Turn it off in Settings > AI chat and Web or with `PAGER_NO_WEB=1`.
+- **✦ ai** (sidebar → agents): chat without a git repository with a ready agent CLI (headless, in a scratch folder), a local **Ollama**, or any **OpenAI-compatible** API. `@claude`, `@ollama` or `@openai` picks who answers and sticks until you pick another. CLI replies arrive whole; Ollama and API replies stream and have no tools. History is `ai-chat.jsonl` on your machine; the API key lives in `ai.json` (mode 0600), so prefer `PAGER_AI_KEY`.
+
+## Privacy and network
+
+- **Encryption at rest.** `pager lock` asks for a passphrase and seals your identity seed (AES-256-GCM, scrypt) and the database fields `body`, `title` and contact `name`/`note`; `pager unlock` reverses it. Pager asks for the passphrase at start (3 tries, or `PAGER_PASSPHRASE`). A forgotten passphrase cannot be recovered. **Not encrypted:** conversation ids, authors, sequence numbers, timestamps, kinds, signatures, acks, contact public keys, `settings.json`, `agents-room.jsonl`, `ai-chat.jsonl`, `ai.json`, `history.json`, `net.log` and agent state files.
+- **LAN mode.** `pager --lan` (or Settings > Privacy and Network, then restart) finds the local network's DHT by UDP broadcast, or starts one when nobody answers; `pager --lan host:port` joins an explicit node. No internet is used: the web tab and the update check are off and HTTP AI backends must be on a private address. CLI agents are not restricted and may reach the internet themselves.
+- **Secure sessions** (encryption or LAN mode) keep shared documents out of agent prompts and tools; `#name` references say so.
+- **No-agents mode.** `pager --no-agents` (or Settings > Privacy and Network) turns off the agents room, the AI tab and the agent tool server.
+
 ## Terminal tab
 
 `▸ terminal` in the sidebar (or `/terminal`, or the palette) runs shell commands without leaving pager: each line runs in your shell (`cmd` on Windows, `$SHELL` elsewhere) in a persistent directory (`cd` works, `clear` empties the tab), output streams in with escape codes stripped, and a line typed while a command runs goes to its stdin. Ctrl+C stops the command; one that ran over 5 s rings an unfocused terminal when it ends. There is no pseudo-terminal, so full-screen programs (vim, htop) do not work. A line that must start with `/` is typed with `//`.
@@ -162,27 +189,27 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Chains.** `/agent chain omp>claude <task>` (or `@omp>claude <task>` in the room) does not depend on an agent volunteering `@@ask`: the first agent works, and each next one starts on top of the previous commit with the original task plus the previous reply and the instruction to review it and fix what it finds. Up to 4 agents; the chain stops at the first failed step.
 - **Merging.** Nothing reaches your checkout until you `/agent merge <run>`. It refuses on a dirty checkout, and on a conflict it aborts, names the conflicting files and leaves the tree untouched. Merging a run also retires the earlier runs it was built on. Pager warns when separate tasks change the same files.
 - **Conflict prediction.** After each turn that changes files, pager dry-runs a merge of every unmerged agent branch into your checkout and into each other with `git merge-tree --write-tree` (git 2.38+, never touches a worktree) and warns once per new conflict; `/agent runs` ends the line with `conflicts: …`. Older git shows nothing.
-- **Verify gate.** `/agent verify <command>` sets a per-repo shell command (`off` clears it, no argument shows it). It runs in the agent's worktree after every turn that changed files (5 min timeout, last 20,000 characters kept) and the result goes to the room. `/agent merge` refuses when verify failed on the branch's current commit and runs it first when it has not run; `--force` skips it. `/agent log <run|name>` posts the kept output, so nobody reruns it. The board shows `verify: pass|fail`. Turn summaries and `/agent runs` show `+adds/-dels`.
+- **Verify gate.** `Settings > Agents > Verify command sets a per-repo shell command (`off` clears it). It runs in the agent's worktree after every turn that changed files (5 min timeout, last 20,000 characters kept) and the result goes to the room. `/agent merge` refuses when verify failed on the branch's current commit and runs it first when it has not run; `--force` skips it. `/agent log <run|name>` posts the kept output, so nobody reruns it. The board shows `verify: pass|fail`. Turn summaries and `/agent runs` show `+adds/-dels`.
 - **Undo.** Pager records the last 10 pre-turn commits per agent under `refs/pager/checkpoints/` (they survive restarts). `/agent undo <name> [n]` resets the worktree to before its last `n` turns; `/agent checkpoints <name>` lists them. It refuses while the agent works, and for work already merged into your checkout (use `git revert`). The agent is told on its next prompt.
-- **Risky actions.** `/agent risk on|off` (default on). For ACP agents, permission requests for `git push` (force or to main/prod/release flagged), `reset --hard`, `clean -f`, `branch -D`, `rm -rf` / `Remove-Item -Recurse -Force` / `del /s`, package publish, deploys (`wrangler`, `vercel --prod`, `docker push`, `kubectl apply|delete`), `curl | sh` and writes outside the worktree become a question (Allow once / Allow for this run / Deny). Everything else stays auto-approved. One-shot runs (`PAGER_NO_ACP`, `claude`) cannot be intercepted, and the check is a pattern match on command text (`bash script.sh` is not caught).
-- **Budgets.** `/agent budget [<name|all> turns=N minutes=N | <name|all> off]` sets daily (local day) caps from the stats log; reviews are not turns. A capped agent's next turn is refused (not queued) with a notice; one warning per day at 80%. Saved in `agent-budgets.json`.
-- **Invocations.** `omp`, `opencode` and `hermes` run as Agent Client Protocol servers (`<agent> acp`, one process per run in the run's worktree): their reply streams live into the room (text plus `⚙`/`✓` tool lines, then one final message and a `used N tools` line), and permission requests are auto-approved like the other agents' flags. If the ACP handshake fails, the run falls back to the one-shot call (`omp -p --no-session`, `opencode run --auto`, `hermes chat -Q --oneshot --yolo`) with a notice. `claude` has no ACP mode and always runs `claude -p --permission-mode bypassPermissions`. `/agent check` asks each one to reply `PAGER_OK` (and whether ACP starts) so you can verify your installs. `PAGER_NO_ACP=1` forces one-shot everywhere; `PAGER_ACP_LOG=<file>` records the JSON-RPC traffic.
+- **Risky actions.** Settings > Agents > Ask before risky actions (default on). For ACP agents, permission requests for `git push` (force or to main/prod/release flagged), `reset --hard`, `clean -f`, `branch -D`, `rm -rf` / `Remove-Item -Recurse -Force` / `del /s`, package publish, deploys (`wrangler`, `vercel --prod`, `docker push`, `kubectl apply|delete`), `curl | sh` and writes outside the worktree become a question (Allow once / Allow for this run / Deny). Everything else stays auto-approved. One-shot runs (`PAGER_NO_ACP`, `claude`) cannot be intercepted, and the check is a pattern match on command text (`bash script.sh` is not caught).
+- **Budgets.** Settings > Agents > Daily cap (`turns=N minutes=N`, or `off`) sets daily (local day) caps from the stats log; reviews are not turns. A capped agent's next turn is refused (not queued) with a notice; one warning per day at 80%. Saved in `agent-budgets.json`.
+- **Invocations.** `omp`, `opencode` and `hermes` run as Agent Client Protocol servers (`<agent> acp`, one process per run in the run's worktree): their reply streams live into the room (text plus `⚙`/`✓` tool lines, then one final message and a `used N tools` line), and permission requests are auto-approved like the other agents' flags. If the ACP handshake fails, the run falls back to the one-shot call (`omp -p --no-session`, `opencode run --auto`, `hermes chat -Q --oneshot --yolo`) with a notice. `claude` has no ACP mode and always runs `claude -p --permission-mode bypassPermissions`. `Agents: check installs` in the palette asks each one to reply `PAGER_OK` (and whether ACP starts) so you can verify your installs. `PAGER_NO_ACP=1` forces one-shot everywhere; `PAGER_ACP_LOG=<file>` records the JSON-RPC traffic.
 - **Persistence.** The room transcript is saved to `<data dir>/agents-room.jsonl` (last 500 messages) and survives restarts. Runs themselves live in memory only: after a restart, leftover worktrees stay in `<data dir>/worktrees/`; remove one with `git worktree remove --force <dir>` and `git branch -D pager/<id>` (`/agent drop` only knows runs from the current session).
-- **Memory.** Three layers. The room transcript (the last 40 messages, up to 60k characters, including what other agents said and which files they changed) goes into every prompt. A repository-scoped notes file (`<data dir>/memory/<repo>.md`, passed as a `--- MEMORY ---` section, newest 8k characters) carries durable facts across restarts: agents add one with an `@@remember` … `@@end` block (up to 5 per reply), you manage it with `/agent memory [add <text>|clear]`. And `hermes` keeps its own ACP session between tasks (`omp` and `opencode` cannot resume a session across worktrees, so they rely on the first two layers).
-- **Agent commands.** `/agent cli <name> <args>` (or `@name !<args>` in the room) runs the agent's own CLI, for example `/agent cli claude mcp list` or `/agent cli opencode models`, and posts the output. It is non-interactive, so commands that open a TUI or ask questions time out. A task that starts with `/` (for example `/agent claude /review`) is sent to the agent verbatim so its own slash command runs; such a run does not get the pager preamble, so it cannot delegate. `/agent commands <name>` lists the slash commands an ACP agent advertises.
+- **Memory.** Three layers. The room transcript (the last 40 messages, up to 60k characters, including what other agents said and which files they changed) goes into every prompt. A repository-scoped notes file (`<data dir>/memory/<repo>.md`, passed as a `--- MEMORY ---` section, newest 8k characters) carries durable facts across restarts: agents add one with an `@@remember` … `@@end` block (up to 5 per reply), you manage it in Settings > Agents (show, add a note, clear). And `hermes` keeps its own ACP session between tasks (`omp` and `opencode` cannot resume a session across worktrees, so they rely on the first two layers).
+- **Agent commands.** The palette item `Agent <name>: CLI…` (or `@name !<args>` in the room) runs the agent's own CLI, for example `mcp list` or `models`, and posts the output. It is non-interactive, so commands that open a TUI or ask questions time out. A task that starts with `/` (for example `/agent claude /review`) is sent to the agent verbatim so its own slash command runs; such a run does not get the pager preamble, so it cannot delegate. `Agent <name>: slash commands` in the palette lists the slash commands an ACP agent advertises.
 
 ## Shared agent sessions
 
 `/agent invite <contact> [--view]` lets one contact into your Agents room, like omp's `/collab`. The guest gets `/accept n`; the session then appears in their sidebar as `◈ <your name>` (separate from their own agents). The agents always run on **your** machine in your repository.
 
 - **Control** (default): the guest can message the agents (`@omp …`, `@all`, chains) and answer their questions; their messages show under their own name and run immediately. **A control guest has the same power over your worktree as you do through the agents** (shell, file edits, auto-approved tools), so invite only people you trust. **View** (`--view`): the guest only watches.
-- **Host only:** every `/agent` command, `/…` slash commands and `@agent !…` passthrough typed by a guest are refused, and a guest's `#document` names never pull your documents into a prompt. Remove someone with `/agent kick <name|all>`; at most 8 guests.
-- Needs both sides on a version that lists the `collab` capability (`/net` shows it); the guest list persists in `<data dir>/agent-guests.json` (host) and `agent-shared.json` (guest). The guest sees the last 100 room messages on joining, live updates after, and nothing while offline.
+- **Host only:** every `/agent` command, `/…` slash commands and `@agent !…` passthrough typed by a guest are refused, and a guest's `#document` names never pull your documents into a prompt. Remove someone in Settings > Agents; at most 8 guests.
+- Needs both sides on a version that lists the `collab` capability (Settings > Privacy and Network shows it); the guest list persists in `<data dir>/agent-guests.json` (host) and `agent-shared.json` (guest). The guest sees the last 100 room messages on joining, live updates after, and nothing while offline.
 
 ## Limitations
 
 - Messages only flow while both peers are online at the same time (no relay or store-and-forward server).
-- `identity.json` and `pager.db` are not encrypted at rest.
+- `identity.json` and `pager.db` are plaintext unless you run `pager lock`; even then only the fields listed under Privacy and network are encrypted.
 - Display names are self-declared and can collide or impersonate; use the public-key prefix with `/open` and `/remove` to disambiguate.
 - Chat input is single-line; pasted newlines become spaces (documents take multi-line text).
 - Some carrier NATs cannot be hole-punched by HyperDHT; those peers cannot connect directly.
@@ -195,7 +222,7 @@ npm test             # build + node:test (integration tests use a local DHT, no 
 npm run typecheck
 ```
 
-Layout: `src/engine.ts` (contacts, groups, sync, commands), `src/ingest.ts` (event gate), `src/net.ts` (transport), `src/db.ts` (SQLite via `node:sqlite`), `src/wire.ts` (frames), `src/events.ts` (signed events), `src/ui/` (Ink components).
+Layout: `src/app/` (engine, commands, settings), `src/chat/` (events, ingest gate, SQLite via `node:sqlite`, reactions, encryption), `src/net/` (transport, frames, LAN discovery), `src/platform/` (env, lock, clipboard, desktop), `src/agents/` (orchestrator and its `run/`, `state/`, `git/`, `tools/`, `share/` parts), `src/tools/` (terminal, web), `src/ai/` (the AI tab), `src/docs/` (shared documents), `src/ui/` (Ink components by area).
 
 ## License
 

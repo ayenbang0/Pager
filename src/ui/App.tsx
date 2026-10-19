@@ -3,51 +3,59 @@ import { Box, Text, useInput, useWindowSize } from 'ink'
 import { agentTabId, parseAgentTab, parseSharedTab } from '../agents/ids.js'
 import { ROOM_ID } from '../agents/orchestrator.js'
 import type { AgentView } from '../agents/types.js'
-import { TERM_ID } from '../terminal.js'
+import { TERM_ID } from '../tools/terminal/terminal.js'
+import { WEB_ID } from '../tools/web/tool.js'
 import { DOCS_ID } from '../docs/store.js'
-import { copyText } from '../clipboard.js'
-import { AgentHeader, HubHeader } from './AgentHeader.js'
-import { AgentSetup } from './AgentSetup.js'
-import { watchCtrlH } from './ctrlH.js'
-import { DocsPanel, type DocsCtl } from './DocsPanel.js'
-import type { Engine, Toast } from '../engine.js'
-import { DENSITIES } from '../settings.js'
-import { resolveTheme, THEMES } from '../themes.js'
-import { agentTint, badgeGlyph, effectiveDensity, type Look } from './look.js'
-import { chipFor, crumbsFor, type Place } from './chrome.js'
-import { Header } from './Header.js'
-import { SegLine } from './SegLine.js'
-import { fitSegs, pillSeg } from './segs.js'
-import { ThemePicker } from './ThemePicker.js'
-import { BandTitle } from './kit.js'
-import { TerminalHeader } from './TerminalHeader.js'
-import { agentChip, chipWidth, filesChanged, inviteChipWidth, questionBanner, questionFor, questionTarget, stateWord } from './agentChrome.js'
-import { agentHelpSections } from './agentHelp.js'
-import { CommandPalette, type PaletteItem } from './CommandPalette.js'
-import { HelpPanel, type HelpCtl } from './HelpPanel.js'
-import { BANNER_ROWS, HomeBanner } from './HomeBanner.js'
-import { homeAgents, type HomeAgents } from './homeAgents.js'
-import { emptyInput, setText, type InputBuffer } from './inputBuffer.js'
-import { buildLines, plainLines, windowLines, type Line } from './layout.js'
-import { ModelPicker } from './ModelPicker.js'
-import type { Point } from './mouse.js'
-import { menuItems, type AgentMenu } from './palette.js'
-import { Prompt } from './Prompt.js'
-import { pickerHeight } from './questionState.js'
-import { QuestionPicker } from './QuestionPicker.js'
-import { selectedText, withSelection, type Cell, type Sel } from './selection.js'
-import { Sidebar, SIDEBAR_WIDTH } from './Sidebar.js'
-import { tabGroups, tabOrder } from './tabs.js'
-import { StatusBar } from './StatusBar.js'
-import { frameRows } from './frame.js'
-import { LookContext, ThemeContext } from './theme.js'
-import { Toasts, TOAST_LIFETIME_MS, type ToastItem } from './Toasts.js'
-import { useEngine } from './useEngine.js'
-import { useMouse } from './useMouse.js'
-import { focusReporting } from './focus.js'
-import { useTerminalFocus } from './useTerminalFocus.js'
-import { useWindowTitle } from './useWindowTitle.js'
-import { titleLabel } from './windowTitle.js'
+import { copyText } from '../platform/clipboard.js'
+import { splitArgs } from '../agents/run/protocol.js'
+import { AgentHeader, HubHeader } from './chrome/AgentHeader.js'
+import { AgentSetup } from './overlays/AgentSetup.js'
+import { watchCtrlH } from './input/ctrlH.js'
+import { DocsPanel, type DocsCtl } from './docs/DocsPanel.js'
+import { SETTINGS_ID } from '../app/settingsView.js'
+import type { FieldRequest } from '../app/settingsActions.js'
+import { SettingsPanel, type SettingsCtl } from './settings/SettingsPanel.js'
+import type { Engine, Toast } from '../app/engine.js'
+import { resolveTheme } from './theme/themes.js'
+import { agentTint, badgeGlyph, effectiveDensity, type Look } from './theme/look.js'
+import { chipFor, crumbsFor, type Place } from './chrome/chrome.js'
+import { Header } from './chrome/Header.js'
+import { SegLine } from './kit/SegLine.js'
+import { fitSegs, pillSeg } from './kit/segs.js'
+import { ThemePicker } from './overlays/ThemePicker.js'
+import { BandTitle } from './kit/kit.js'
+import { TerminalHeader } from './chrome/TerminalHeader.js'
+import { agentChip, chipWidth, filesChanged, inviteChipWidth, questionBanner, questionFor, questionTarget, stateWord } from './chrome/agentChrome.js'
+import { agentHelpSections } from './overlays/agentHelp.js'
+import { CommandPalette, type PaletteItem } from './overlays/CommandPalette.js'
+import { HelpPanel, type HelpCtl } from './overlays/HelpPanel.js'
+import { BANNER_ROWS, HomeBanner } from './home/HomeBanner.js'
+import { homeAgents, type HomeAgents } from './home/homeAgents.js'
+import { emptyInput, setText, type InputBuffer } from './input/inputBuffer.js'
+import { buildLines, PICK_CELL, plainLines, windowLines, type Line } from './chat/layout.js'
+import { expandEmoji } from '../chat/emoji.js'
+import { QUICK_REACTIONS } from '../chat/reactions.js'
+import { ModelPicker } from './overlays/ModelPicker.js'
+import type { Point } from './input/mouse.js'
+import { menuItems, type AgentMenu } from './overlays/palette.js'
+import { Prompt } from './input/Prompt.js'
+import { pickerHeight } from './overlays/questionState.js'
+import { QuestionPicker } from './overlays/QuestionPicker.js'
+import { selectedText, withSelection, type Cell, type Sel } from './chat/selection.js'
+import { Sidebar, SIDEBAR_WIDTH } from './sidebar/Sidebar.js'
+import { entryIndexOf, fileable, sidebarEntries, sidebarHit, visibleTabIds } from './sidebar/tabs.js'
+import { AI_ID } from '../ai/chat.js'
+import { folderOf } from '../app/folders.js'
+import { StatusBar } from './chrome/StatusBar.js'
+import { frameRows } from './kit/frame.js'
+import { LookContext, ThemeContext } from './theme/theme.js'
+import { Toasts, TOAST_LIFETIME_MS, type ToastItem } from './chrome/Toasts.js'
+import { useEngine } from './kit/useEngine.js'
+import { useMouse } from './input/useMouse.js'
+import { focusReporting } from './input/focus.js'
+import { useTerminalFocus } from './chrome/useTerminalFocus.js'
+import { useWindowTitle } from './chrome/useWindowTitle.js'
+import { titleLabel } from './chrome/windowTitle.js'
 
 const MIN_COLUMNS = 60
 const MIN_ROWS = 12
@@ -63,6 +71,8 @@ const FIXED_ROWS = 1 + 1 + 3 + 1
 const PANE_TOP_ROW = 3
 /** Terminal row (1-based) of the title row, where an agent tab's model chip sits. */
 const TITLE_ROW = 2
+/** Terminal row (1-based) of the sidebar's first entry: below the header. */
+const SIDEBAR_TOP_ROW = 2
 const MIN_PANE_ROWS = 3
 /** A second Ctrl+C within this window quits. */
 const QUIT_WINDOW_MS = 2000
@@ -106,6 +116,11 @@ export function App({ engine, onExit }: Props) {
   const [foldsOn, setFoldsOn] = useState(true)
   const [docPick, setDocPick] = useState<string | null>(null)
   const [sel, setSel] = useState<Sel | null>(null)
+  /** A one-shot text field that takes the prompt's place (renaming, a new folder, an API key). */
+  const [field, setField] = useState<FieldRequest | null>(null)
+  const [sbScroll, setSbScroll] = useState(0)
+  /** The message whose emoji picker is open, and the highlighted cell (the last one is the `…` cell for any other emoji). */
+  const [react, setReact] = useState<{ key: string; at: number } | null>(null)
   /** The left-button gesture in progress: where it started and, once the pointer moved, where it is now. */
   const gesture = useRef<{ anchor: Cell; head: Cell | null } | null>(null)
   const helpCtl = useRef<HelpCtl | null>(null)
@@ -148,6 +163,8 @@ export function App({ engine, onExit }: Props) {
 
   const activeId = engine.active()
   useEffect(() => setOffset(0), [activeId])
+  useEffect(() => setField(null), [activeId])
+  useEffect(() => setReact(null), [activeId])
 
   const settings = engine.settings()
   const theme = resolveTheme(overlay === 'theme' && previewTheme !== null ? previewTheme : settings.theme, settings.accent === '' ? undefined : settings.accent)
@@ -160,13 +177,37 @@ export function App({ engine, onExit }: Props) {
   const agentTab = parseAgentTab(activeId)
   const agentView = room.agents.find((a) => a.name === agentTab)
   const shared = engine.sharedSessions()
+  const entries = sidebarEntries({
+    convs,
+    pendingCount: pending.length,
+    agentNames: room.agents.map((a) => a.name),
+    shared: shared.map((s) => s.pk),
+    agentsOn: engine.agentsEnabled(),
+    folders: settings.folders,
+    collapsed: new Set(settings.collapsed),
+    activeId,
+  })
+  /** Rows the sidebar has: the screen less the header and the status bar. */
+  const sbRows = Math.max(1, frame - 2)
+  const maxScroll = Math.max(0, entries.length - sbRows)
+  const activeAt = entryIndexOf(entries, activeId)
+  useEffect(() => {
+    setSbScroll((cur) => {
+      let next = Math.min(cur, maxScroll)
+      if (activeAt >= 0 && activeAt < next) next = activeAt
+      else if (activeAt >= next + sbRows) next = activeAt - sbRows + 1
+      return Math.max(0, Math.min(next, maxScroll))
+    })
+  }, [activeId, activeAt, sbRows, maxScroll])
   const sharedPk = parseSharedTab(activeId)
   const sharedRoom = sharedPk === undefined ? undefined : engine.sharedRoom(sharedPk)
   const review = engine.agentReview()
   const inTermTab = activeId === TERM_ID
+  const inWeb = activeId === WEB_ID
+  const inAi = activeId === AI_ID
   // Short panes fall back to compact rows, and the terminal tab is always compact: its rows are commands and output, not speakers.
   const look: Look = {
-    density: inTermTab ? 'compact' : effectiveDensity(settings.density, frame),
+    density: inTermTab || inWeb ? 'compact' : effectiveDensity(settings.density, frame),
     badge: badgeGlyph(settings.badge, engine.me.name),
     agentColors: Object.fromEntries(room.agents.flatMap((a) => (a.color === undefined ? [] : [[a.name, a.color] as const]))),
     me: engine.me.name,
@@ -184,6 +225,7 @@ export function App({ engine, onExit }: Props) {
   }, [agentsActive])
 
   const inDocs = activeId === DOCS_ID
+  const inSettings = activeId === SETTINGS_ID
   const inEditor = inDocs && engine.openedDoc() !== null
   // Ctrl+H goes to the Home tab. Legacy terminals deliver it as the backspace byte, so it is read from raw input (not while an overlay
   // or the document editor owns the keyboard).
@@ -191,8 +233,9 @@ export function App({ engine, onExit }: Props) {
   homeOk.current = overlay === null && !inEditor
   useEffect(() => watchCtrlH(() => homeOk.current && engine.activate(null)), [engine])
   const docsCtl = useRef<DocsCtl | null>(null)
+  const settingsCtl = useRef<SettingsCtl | null>(null)
   // Emoji shortcodes expand in chats and agent tabs only; the terminal and the Docs list take text as typed.
-  const emojiOk = activeId !== null && activeId !== TERM_ID && !inDocs
+  const emojiOk = activeId !== null && activeId !== TERM_ID && !inDocs && !inSettings && !inWeb
   const agentMenu: AgentMenu | undefined = agentView === undefined ? undefined : { agent: agentView.name, commands: engine.agentCommands(agentView.name) }
   // An agent's question takes the prompt's place in its own tab and in the hub; in any other tab a banner points to it.
   const questions = engine.questions()
@@ -200,14 +243,15 @@ export function App({ engine, onExit }: Props) {
   const shownQuestion = sharedRoom === undefined ? questionFor(questions, agentTab, activeId === ROOM_ID) : sharedRoom.access === 'control' ? sharedRoom.questions[0] : undefined
   const questionLine = questionBanner(questions, sharedRoom === undefined ? shownQuestion : undefined)
   const pickerH = shownQuestion === undefined ? 0 : pickerHeight(shownQuestion, Math.max(8, Math.floor(frame / 2)))
-  const menu = overlay === null && !inEditor && shownQuestion === undefined ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu, engine.contactNames()) : []
+  const menu = overlay === null && !inEditor && shownQuestion === undefined && field === null ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu, engine.contactNames()) : []
   const bannerRow = !inEditor && questionLine !== undefined ? 1 : 0
-  const paneRows = Math.max(MIN_PANE_ROWS, frame - (FIXED_ROWS - PROMPT_ROWS) - (shownQuestion === undefined || inEditor ? PROMPT_ROWS : pickerH) - bannerRow - menu.length)
+  const noPrompt = inEditor || (inSettings && field === null)
+  const paneRows = Math.max(MIN_PANE_ROWS, frame - (FIXED_ROWS - PROMPT_ROWS) - (shownQuestion === undefined || noPrompt ? PROMPT_ROWS : pickerH) - bannerRow - menu.length)
   const mainWidth = columns - (sidebarShown ? SIDEBAR_WIDTH : 0)
   const activeConv = convs.find((c) => c.id === activeId)
 
   const lines: Line[] = activeId
-    ? buildLines(engine.messages(activeId, HISTORY_LIMIT), mainWidth - 2, theme, new Date(), { enabled: foldsOn, expanded }, look)
+    ? buildLines(engine.messages(activeId, HISTORY_LIMIT), mainWidth - 2, theme, new Date(), { enabled: foldsOn, expanded }, look, react)
     : plainLines(engine.home(), mainWidth - 2)
   const { visible, maxOffset } = windowLines(lines, paneRows, offset)
   // New content while scrolled up must not move what the user is reading.
@@ -255,12 +299,14 @@ export function App({ engine, onExit }: Props) {
   // Rows shift when messages arrive or the view scrolls or resizes, so a highlight would land on the wrong text.
   useEffect(() => setSel(null), [activeId, lines.length, offset, paneRows, mainWidth, overlay])
   useMouse({
-    onWheel: (dir) => {
+    onWheel: (dir, at) => {
       gesture.current = null
       setSel(null)
+      if (overlay === null && sidebarShown && at.x <= sidebarCols) return setSbScroll((cur) => Math.max(0, Math.min(maxScroll, cur - dir * WHEEL_LINES)))
       if (overlay === 'help') return helpCtl.current?.wheel(dir)
       if (overlay !== null) return
       if (inDocs) docsCtl.current?.wheel(dir)
+      else if (inSettings) settingsCtl.current?.wheel(dir)
       else setOffset((o) => Math.min(maxOffset, Math.max(0, o + dir * WHEEL_LINES)))
     },
     onPress: (at) => {
@@ -268,8 +314,15 @@ export function App({ engine, onExit }: Props) {
       setSel(null)
       if (overlay === null && agentView !== undefined && at.y === TITLE_ROW && at.x >= columns - chipWidth(agentChip(agentView), engine.agentReview()) - 1) return openModel(agentView.name)
       if (overlay === null && inRoom && at.y === TITLE_ROW && at.x >= columns - inviteChipWidth(guestCount) - 1) return inviteToAgents()
+      if (overlay === null && sidebarShown && at.x <= sidebarCols) {
+        const hit = sidebarHit(entries, sbScroll, at.y - SIDEBAR_TOP_ROW + 1)
+        if (hit?.kind === 'header') engine.toggleSection(hit.key)
+        else if (hit?.kind === 'tab') engine.activate(hit.id)
+        return
+      }
       if (overlay !== null || at.x <= sidebarCols) return
       if (inDocs) return docsCtl.current?.click(at.x, at.y)
+      if (inSettings) return settingsCtl.current?.click(at.x, at.y)
       const anchor = showBanner ? null : cellAt(at, false)
       if (anchor !== null) gesture.current = { anchor, head: null }
     },
@@ -286,16 +339,43 @@ export function App({ engine, onExit }: Props) {
       if (g === null) return
       if (g.head !== null) return copySelection({ anchor: g.anchor, head: g.head })
       // Pressed and released on one cell: a click, which expands a fold marker.
-      const key = visible[g.anchor.row]?.fold
-      if (key !== undefined) setExpanded((prev) => new Set(prev).add(key))
+      const line = visible[g.anchor.row]
+      if (line?.fold !== undefined) {
+        const key = line.fold
+        return setExpanded((prev) => new Set(prev).add(key))
+      }
+      if (line?.pick !== undefined && react !== null) {
+        const item = line.pick.items[Math.floor((g.anchor.col - line.pick.col) / PICK_CELL)]
+        if (item === undefined) return setReact(null)
+        return pickReaction(react.key, item)
+      }
+      if (line?.msg !== undefined) return setReact({ key: line.msg, at: 0 })
+      setReact(null)
     },
   })
   const openModel = (name?: string): void => {
     const names = room.agents.map((a) => a.name)
-    if (names.length === 0) return void engine.emit('toast', { kind: 'warn', text: 'No agents are ready: /agent setup' } satisfies Toast)
+    if (names.length === 0) return void engine.emit('toast', { kind: 'warn', text: 'No agents are ready: Alt+S › Agents' } satisfies Toast)
     setModelAgent(name ?? (agentTab !== undefined && names.includes(agentTab) ? agentTab : names.length === 1 ? (names[0] ?? null) : null))
     setOverlay('model')
   }
+  /** An emoji cell was chosen: react with it, or (the `…` cell) ask for any other emoji. */
+  const pickReaction = (key: string, item: string): void => {
+    setReact(null)
+    if (item !== '…') return engine.react(key, item)
+    askField({ label: 'Emoji (paste one, or :name:)', initial: '', masked: false, onSubmit: (text) => engine.react(key, expandEmoji(text.trim())) })
+  }
+  useInput(
+    (_input, key) => {
+      if (key.eventType === 'release' || react === null) return
+      const cells = QUICK_REACTIONS.length + 1
+      if (key.escape) return setReact(null)
+      if (key.leftArrow) return setReact({ ...react, at: (react.at + cells - 1) % cells })
+      if (key.rightArrow) return setReact({ ...react, at: (react.at + 1) % cells })
+      if (key.return) return pickReaction(react.key, [...QUICK_REACTIONS, '…'][react.at] ?? '…')
+    },
+    { isActive: react !== null && overlay === null },
+  )
   const jumpToQuestion = (): void => {
     const target = questionTarget(questions, shownQuestion)
     if (target === undefined) return void engine.emit('toast', { kind: 'info', text: 'No agent is waiting for an answer' } satisfies Toast)
@@ -314,21 +394,22 @@ export function App({ engine, onExit }: Props) {
       if (input === 'm') openModel()
       else if (input === 'i') inviteToAgents()
       else if (input === 'q') jumpToQuestion()
+      else if (input === 's') engine.openSettings()
     },
-    { isActive: overlay === null && !inEditor },
+    { isActive: overlay === null && !inEditor && field === null },
   )
   const onSwitch = (dir: 1 | -1): void => {
-    const ids = tabOrder(
-      tabGroups(
-        convs,
-        room.agents.map((a) => a.name),
-        shared.map((s) => s.pk),
-      ),
-    )
+    const ids = visibleTabIds(entries)
     const at = Math.max(0, ids.indexOf(activeId))
     engine.activate(ids[(at + dir + ids.length) % ids.length] ?? null)
   }
   const onSubmit = (text: string): void => {
+    if (field !== null) {
+      const done = field
+      setField(null)
+      done.onSubmit(text)
+      return
+    }
     if (inDocs && text.trim() === '') {
       const doc = docList[docSel]
       if (doc) engine.openDoc(doc.id)
@@ -359,7 +440,13 @@ export function App({ engine, onExit }: Props) {
   const title = activeConv ? (activeConv.kind === 'group' ? `#${activeConv.title}` : activeConv.title) : 'home'
   const place: Place = inDocs
     ? { kind: 'docs', title: openDocName ?? '' }
-    : inTerm
+    : inSettings
+      ? { kind: 'settings', title: '' }
+      : inWeb
+      ? { kind: 'web', title: '' }
+      : inAi
+      ? { kind: 'ai', title: '' }
+      : inTerm
       ? { kind: 'terminal', title: '' }
       : inRoom
         ? { kind: 'hub', title: '' }
@@ -381,9 +468,15 @@ export function App({ engine, onExit }: Props) {
   const sharedHere = sharedRoom?.guests.filter((g) => g.online).map((g) => g.name) ?? []
   const sharedNote =
     sharedRoom === undefined ? undefined : [sharedRoom.access, sharedRoom.connected ? undefined : 'host offline', sharedHere.length === 0 ? undefined : `with ${sharedHere.join(', ')}`].filter(Boolean).join(' · ')
-  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
+  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inWeb ? '⌕ web' : inAi ? '✦ ai' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
   const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : undefined
-  const placeholder = inTerm
+  const placeholder = field !== null
+    ? field.label
+    : inAi
+      ? 'Ask anything. @claude, @ollama or @openai picks who answers'
+      : inWeb
+      ? 'Search the web, or: open <n> · read <n> · clear'
+      : inTerm
     ? term.running
       ? 'Type to send input to the running command · Ctrl+C stops it'
       : 'Run a command (cd works) · // for a leading slash · Ctrl+C stops'
@@ -393,7 +486,7 @@ export function App({ engine, onExit }: Props) {
         : `Ask ${sharedRoom.agents.slice(0, 3).map((a) => `@${a.name}`).join(', ') || '@agent'} or @all in ${sharedRoom.host}'s session`
       : inRoom
       ? room.agents.length === 0
-        ? 'No agents are ready: /agent setup'
+        ? 'No agents are ready: Alt+S › Agents'
         : `Ask ${room.agents.slice(0, 3).map((a) => `@${a.name}`).join(', ')} or @all (@a>b chains) · Alt+I invites a contact`
       : agentView !== undefined
         ? `message ${agentView.name} (@mention others, /command)`
@@ -404,12 +497,72 @@ export function App({ engine, onExit }: Props) {
   // The editor has no prompt; leave it first so a palette action that fills the prompt is not typed into a hidden buffer.
   const fillPrompt = (text: string): void => {
     if (inEditor) engine.openDoc(null)
+    if (inSettings) engine.activate(null)
     setInput(setText(text))
   }
   const openThemePicker = (): void => {
     setPreviewTheme(settings.theme)
     setOverlay('theme')
   }
+  const askField = (f: FieldRequest): void => {
+    setInput(setText(f.initial))
+    setField(f)
+  }
+  // Filing: the active tab can be moved into a folder, or taken out of the one it is in.
+  const activeFile = fileable(activeId, convs, engine.agentsEnabled()) && activeId !== null ? activeId : undefined
+  const activeLabel = activeConv ? (activeConv.kind === 'group' ? `# ${activeConv.title}` : activeConv.title) : activeId === ROOM_ID ? 'agents' : activeId === AI_ID ? 'ai' : inDocs ? 'docs' : ''
+  const inFolder = activeFile === undefined ? undefined : folderOf(settings.folders, activeFile)
+  const folderItems: PaletteItem[] =
+    activeFile === undefined
+      ? []
+      : [
+          ...settings.folders.filter((f) => f.name !== inFolder?.name).map((f): PaletteItem => ({ label: `Move "${activeLabel}" to folder ${f.name}`, hint: 'folder', run: () => engine.folderFile(activeFile, f.name) })),
+          ...(inFolder === undefined ? [] : [{ label: `Take "${activeLabel}" out of folder ${inFolder.name}`, hint: 'folder', run: () => engine.folderFile(activeFile, null) }]),
+        ]
+  const agentItems: PaletteItem[] = [
+    { label: '⌁ Agents room', hint: agentsActive > 0 ? `${agentsActive} running` : '/open agents', run: () => engine.activate(ROOM_ID) },
+    ...engine.agentNames().map(
+      (n): PaletteItem => ({ label: `Ask ${n}…`, hint: `/agent ${n}`, run: () => fillPrompt(`/agent ${n} `) }),
+    ),
+    ...(room.agents.length >= 2
+      ? [{ label: 'Chain agents…', hint: '/agent chain', run: () => fillPrompt(`/agent chain ${room.agents[0]?.name}>${room.agents[1]?.name} `) }]
+      : []),
+    { label: 'Agents: check installs', hint: 'check', run: () => engine.agentAction('check') },
+    { label: 'Agents: setup', hint: 'Settings > Agents', run: () => setOverlay('agents') },
+    { label: 'Agents: usage', hint: 'usage', run: () => engine.agentAction('usage') },
+    { label: 'Agent: model…', hint: 'Alt+M', run: () => openModel() },
+    { label: 'Agent: effort…', hint: 'Alt+M', run: () => openModel() },
+    { label: 'Agents: invite a contact…', hint: 'Alt+I', run: inviteToAgents },
+    ...room.agents.flatMap((a): PaletteItem[] => {
+      const commands = engine.agentCommands(a.name)
+      return [
+        { label: `· ${a.name}`, hint: `${a.cli} · ${stateWord(a.state)}`, run: () => engine.activate(agentTabId(a.name)) },
+        { label: `Model & effort: ${a.name}`, hint: [a.model ?? 'default', a.effort ?? 'default'].join(' · '), run: () => openModel(a.name) },
+        { label: `Agent ${a.name}: usage`, hint: 'usage', run: () => engine.agentAction('usage', a.name) },
+        { label: `Agent ${a.name}: compact`, hint: 'handoff', run: () => engine.agentAction('compact', a.name) },
+        { label: `Agent ${a.name}: reset session`, hint: 'forget its saved session', run: () => engine.agentAction('reset', a.name) },
+        { label: `Agent ${a.name}: slash commands`, hint: 'list what it advertises', run: () => engine.agentAction('commands', a.name) },
+        { label: `Agent ${a.name}: checkpoints`, hint: 'turns you can undo', run: () => engine.agentAction('checkpoints', a.name) },
+        { label: `Agent ${a.name}: CLI…`, hint: 'its own CLI arguments', run: () => askField({ label: `CLI arguments for ${a.name}`, initial: '', masked: false, onSubmit: (text) => engine.agentCli(a.name, splitArgs(text)) }) },
+        ...commands.map(
+          (c): PaletteItem => ({
+            label: `${a.name}: /${c.name} — ${c.description}`,
+            run: () => (c.hint === undefined || c.hint === '' ? void engine.submit(`/agent ${a.name} /${c.name}`) : fillPrompt(`/agent ${a.name} /${c.name} `)),
+          }),
+        ),
+      ]
+    }),
+    ...(agentsActive > 0 ? [{ label: 'Stop all agents', hint: '/agent stop', run: () => void engine.submit('/agent stop') }] : []),
+    ...room.runs
+      .filter((r) => r.mergeable)
+      .map(
+        (r): PaletteItem => ({
+          label: `Merge ${r.id} (${r.files} file${r.files === 1 ? '' : 's'})`,
+          hint: '/agent merge',
+          run: () => void engine.submit(`/agent merge ${r.id}`),
+        }),
+      ),
+  ]
   const paletteItems: PaletteItem[] = [
     { label: '⌂ Home', run: () => engine.activate(null) },
     ...convs.map(
@@ -434,73 +587,19 @@ export function App({ engine, onExit }: Props) {
           { label: 'Leave this group…', hint: '/group leave', run: () => fillPrompt('/group leave') },
         ]
       : []),
-    { label: 'Change my name…', hint: '/name', run: () => fillPrompt('/name ') },
+    { label: '⚙ Settings', hint: 'Alt+S', run: () => engine.openSettings() },
     { label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: 'Ctrl+B', run: () => engine.toggleSidebar() },
     { label: 'Keyboard shortcuts', hint: 'Ctrl+G', run: () => setOverlay('help') },
     { label: foldsOn ? 'Show long messages in full' : 'Fold long messages', hint: 'Ctrl+T', run: () => setFoldsOn((v) => !v) },
-    { label: 'Theme picker…', hint: '/theme', run: openThemePicker },
-    { label: 'Accent color…', hint: '/accent', run: () => fillPrompt('/accent ') },
-    { label: 'Badge beside my name…', hint: '/badge', run: () => fillPrompt('/badge ') },
-    ...DENSITIES.map(
-      (d): PaletteItem => ({ label: `Density: ${d}`, hint: d === settings.density ? 'current' : '/density', run: () => void engine.submit(`/density ${d}`) }),
-    ),
-    ...THEMES.map(
-      (t): PaletteItem => ({
-        label: `Theme: ${t.name}`,
-        hint: t.name === theme.name ? 'current' : t.description,
-        run: () => void engine.submit(`/theme ${t.name}`),
-      }),
-    ),
+    ...folderItems,
+    { label: 'New folder…', hint: 'sidebar', run: () => askField({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) }) },
     { label: '▸ Terminal', hint: engine.terminal().running ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
+    { label: '⌕ Web', hint: 'search the web', run: () => engine.activate(WEB_ID) },
+    ...(engine.agentsEnabled() ? [{ label: '✦ AI', hint: 'chat without a repository', run: () => engine.activate(AI_ID) }, { label: 'Clear AI chat', hint: 'history and scratch files', run: () => engine.clearAi() }] : []),
     { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
     ...engine.docList().map((d): PaletteItem => ({ label: `Doc: ${d.name}`, hint: d.where, run: () => engine.openDoc(d.id) })),
     { label: 'New document…', hint: '/doc new', run: () => fillPrompt('/doc new ') },
-    { label: '⌁ Agents room', hint: agentsActive > 0 ? `${agentsActive} running` : '/open agents', run: () => engine.activate(ROOM_ID) },
-    ...engine.agentNames().map(
-      (n): PaletteItem => ({ label: `Ask ${n}…`, hint: `/agent ${n}`, run: () => fillPrompt(`/agent ${n} `) }),
-    ),
-    ...(room.agents.length >= 2
-      ? [{ label: 'Chain agents…', hint: '/agent chain', run: () => fillPrompt(`/agent chain ${room.agents[0]?.name}>${room.agents[1]?.name} `) }]
-      : []),
-    { label: 'Check agents', hint: '/agent check', run: () => void engine.submit('/agent check') },
-    { label: 'Agents: setup', hint: '/agent setup', run: () => setOverlay('agents') },
-    ...engine.agentTeam().map((n): PaletteItem => ({ label: `Delete agent: ${n}`, hint: '/agent remove', run: () => void engine.submit(`/agent remove ${n}`) })),
-    { label: `Agents: turn review ${review ? 'off' : 'on'}`, hint: `/agent review ${review ? 'off' : 'on'}`, run: () => void engine.submit(`/agent review ${review ? 'off' : 'on'}`) },
-    { label: 'Agents: usage', hint: '/agent usage', run: () => void engine.submit('/agent usage') },
-    { label: 'Agent: model…', hint: 'Alt+M', run: () => openModel() },
-    { label: 'Agent: effort…', hint: 'Alt+M', run: () => openModel() },
-    { label: 'Agents: set the goal…', hint: '/agent goal', run: () => fillPrompt('/agent goal ') },
-    { label: 'Agents: invite a contact…', hint: 'Alt+I', run: inviteToAgents },
-    { label: 'Agents: who is in my session', hint: '/agent guests', run: () => void engine.submit('/agent guests') },
-    { label: 'Agents: show shared memory', hint: '/agent memory', run: () => void engine.submit('/agent memory') },
-    { label: 'Agents: add a note to memory…', hint: '/agent memory add', run: () => fillPrompt('/agent memory add ') },
-    ...room.agents.flatMap((a): PaletteItem[] => {
-      const commands = engine.agentCommands(a.name)
-      return [
-        { label: `· ${a.name}`, hint: `${a.cli} · ${stateWord(a.state)}`, run: () => engine.activate(agentTabId(a.name)) },
-        { label: `Model & effort: ${a.name}`, hint: [a.model ?? 'default', a.effort ?? 'default'].join(' · '), run: () => openModel(a.name) },
-        { label: `Usage: ${a.name}`, hint: `/agent usage ${a.name}`, run: () => void engine.submit(`/agent usage ${a.name}`) },
-        ...(commands.some((c) => c.name === 'compact')
-          ? [{ label: `Compact: ${a.name}`, hint: `/agent compact ${a.name}`, run: () => void engine.submit(`/agent compact ${a.name}`) }]
-          : []),
-        ...commands.map(
-          (c): PaletteItem => ({
-            label: `${a.name}: /${c.name} — ${c.description}`,
-            run: () => (c.hint === undefined || c.hint === '' ? void engine.submit(`/agent ${a.name} /${c.name}`) : fillPrompt(`/agent ${a.name} /${c.name} `)),
-          }),
-        ),
-      ]
-    }),
-    ...(agentsActive > 0 ? [{ label: 'Stop all agents', hint: '/agent stop', run: () => void engine.submit('/agent stop') }] : []),
-    ...room.runs
-      .filter((r) => r.mergeable)
-      .map(
-        (r): PaletteItem => ({
-          label: `Merge ${r.id} (${r.files} file${r.files === 1 ? '' : 's'})`,
-          hint: '/agent merge',
-          run: () => void engine.submit(`/agent merge ${r.id}`),
-        }),
-      ),
+    ...(engine.agentsEnabled() ? agentItems : []),
     { label: 'Quit', hint: '/quit · /exit', run: onExit },
   ]
 
@@ -515,6 +614,7 @@ export function App({ engine, onExit }: Props) {
   else if (inDocs && input.text === '') hint = 'PgUp/PgDn pick · Enter open · /doc new <name> · Ctrl+G help'
   if (agentView !== undefined && !inEditor && input.text === '' && offset === 0 && sel === null) hint = 'Enter send · @name others · Alt+M model · Ctrl+C stop · Ctrl+G help'
   if (shownQuestion !== undefined && !inEditor) hint = 'Up/Down move · Space pick · Enter confirm · Tab field · Esc cancel'
+  if (inSettings) hint = field !== null ? 'Enter save · Esc cancel' : 'Alt+S settings'
   if (quitArmed) hint = 'Press Ctrl+C again to quit'
 
   const closeOverlay = (): void => setOverlay(null)
@@ -534,7 +634,21 @@ export function App({ engine, onExit }: Props) {
           badge={look.badge}
         />
         <Box flexGrow={1}>
-          {sidebarShown ? <Sidebar convs={convs} pending={pending} room={room} shared={shared} activeId={activeId} terminalRunning={term.running} /> : null}
+          {sidebarShown ? (
+            <Sidebar
+              entries={entries}
+              scroll={sbScroll}
+              rows={sbRows}
+              convs={convs}
+              pending={pending}
+              room={room}
+              shared={shared}
+              activeId={activeId}
+              terminalRunning={term.running}
+              webBusy={engine.webBusy()}
+              aiBusy={engine.aiBusy()}
+            />
+          ) : null}
           <Box flexDirection="column" flexGrow={1}>
             {overlay === 'palette' ? (
               <CommandPalette items={paletteItems} height={paneRows + 1} onClose={closeOverlay} />
@@ -557,7 +671,7 @@ export function App({ engine, onExit }: Props) {
                 onPick={(name) => {
                   setOverlay(null)
                   setPreviewTheme(null)
-                  void engine.submit(`/theme ${name}`)
+                  engine.setTheme(name)
                 }}
                 onCancel={() => {
                   setOverlay(null)
@@ -575,9 +689,25 @@ export function App({ engine, onExit }: Props) {
                 ) : inTerm ? (
                   <TerminalHeader term={term} width={mainWidth} />
                 ) : (
-                  <BandTitle title={tabTitle} width={mainWidth} right={tabNote} />
+                  <BandTitle title={tabTitle} width={mainWidth} right={inWeb ? 'DuckDuckGo' : inAi ? (engine.aiBusy() ? 'thinking…' : '@name picks who answers') : tabNote} />
                 )}
-                {inDocs ? (
+                {inSettings ? (
+                  <SettingsPanel
+                    engine={engine}
+                    width={mainWidth}
+                    height={field === null ? paneRows + PROMPT_ROWS : paneRows}
+                    top={PANE_TOP_ROW}
+                    active={overlay === null && field === null}
+                    ctl={settingsCtl}
+                    onField={askField}
+                    onInterrupt={onInterrupt}
+                    onPalette={() => setOverlay('palette')}
+                    onSidebar={() => engine.toggleSidebar()}
+                    onSwitch={onSwitch}
+                    onHelp={() => setOverlay('help')}
+                    onQuit={onExit}
+                  />
+                ) : inDocs ? (
                   <DocsPanel
                     engine={engine}
                     width={mainWidth}
@@ -595,7 +725,7 @@ export function App({ engine, onExit }: Props) {
                     onQuit={onExit}
                   />
                 ) : showBanner ? (
-                  <HomeBanner width={mainWidth - 2} height={paneRows} stats={engine.stats()} agents={homeData(engine, room.agents)} info={engine.home().slice(2)} />
+                  <HomeBanner width={mainWidth - 2} height={paneRows} stats={engine.stats()} agents={homeData(engine, room.agents)} agentsOn={engine.agentsEnabled()} info={engine.home().slice(2)} />
                 ) : (
                   <Box height={paneRows} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
                     {visible.map((line, row) => (
@@ -605,10 +735,10 @@ export function App({ engine, onExit }: Props) {
                 )}
               </>
             )}
-            {inEditor || questionLine === undefined ? null : (
+            {noPrompt || questionLine === undefined ? null : (
               <SegLine segs={fitSegs([{ text: ' ' }, pillSeg('?', theme.pill.warning), { text: ` ${questionLine}`, color: theme.warning, bold: true }], mainWidth)} />
             )}
-            {inEditor ? null : shownQuestion !== undefined ? (
+            {noPrompt ? null : shownQuestion !== undefined ? (
               <QuestionPicker
                 key={shownQuestion.id}
                 view={shownQuestion}
@@ -626,7 +756,7 @@ export function App({ engine, onExit }: Props) {
                 onEdit={setInput}
                 placeholder={placeholder}
                 menu={menu}
-                active={overlay === null}
+                active={overlay === null && react === null}
                 onSubmit={onSubmit}
                 onScroll={onScroll}
                 onSwitch={onSwitch}
@@ -635,8 +765,10 @@ export function App({ engine, onExit }: Props) {
                 onSidebar={() => engine.toggleSidebar()}
                 onHelp={() => setOverlay('help')}
                 onQuit={onExit}
-                history={engine.history()}
-                suggest={(t) => engine.suggest(t)}
+                history={field === null ? engine.history() : []}
+                suggest={(t) => (field === null ? engine.suggest(t) : '')}
+                mask={field?.masked === true}
+                onEscape={field === null ? undefined : () => setField(null)}
                 onToggleFolds={() => setFoldsOn((v) => !v)}
                 width={mainWidth}
                 chip={chipFor(place, input.text.startsWith('/'), tint)}

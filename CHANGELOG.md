@@ -7,8 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-10-18
+
 ### Added
-- Added PLAN.md describing the pager 1.5.1 release plan
+
+- **AI chat**: a ✦ ai tab to talk to your installed agents, a local Ollama or any OpenAI-compatible API without a git repository; tools run in a scratch folder, history stays on your machine, and @name picks who answers
+- **Web search**: a ⌕ web tab (search, open, read) backed by DuckDuckGo; agents can call web_search and web_read too
+- **Settings tab** (Alt+S or /settings): theme, accent, density, name, badge, notifications, folders, agents, AI backends, privacy and advanced switches in one place
+- **Sidebar folders**: sections fold with a click, the sidebar scrolls, and you can file chats, docs, the AI tab and the agents room into your own folders
+- **Group rename**: the creator renames a group with /group rename and every member sees it
+- **Message reactions**: click a message to react with an emoji; reacting again removes it
+- **More emojis**: about 500 :shortcodes:
+- **Encryption at rest**: pager lock protects your identity key and encrypts message history, group titles and contact names with a passphrase; pager unlock reverses it
+- **LAN mode**: pager --lan chats over a local network with no internet, discovering or hosting the local network automatically
+- **No-agents mode**: pager --no-agents turns off the agents room, the AI tab and the agent tool server
+- **Changelog system**: what's new shows on startup after an update, and `/changelog [version]` shows recent changes on demand
+- **Merge-conflict prediction** between agent branches and your checkout, shown after each turn and in `/agent runs`
+- **Verify gate**: `/agent verify <cmd>` runs after each turn and blocks `/agent merge` on failure (`--force` overrides); `/agent log` shows the output; `+/-` line counts per run
+- **Undo**: `/agent undo <name> [n]` and `/agent checkpoints <name>`
+- **Risky-action approval** for ACP agents: `/agent risk on|off`
+- **Daily budgets**: `/agent budget`
+- **`/search <text>`** over chats and the agent room, and a "Since you left" recap on startup
+
+### Changed
+
+- **Fewer commands**: /theme, /accent, /badge, /density, /notify, /sound, /name and /net moved to Settings; /agent keeps only the work-flow subcommands, the rest moved to Settings > Agents and the Ctrl+P palette
+- **Source layout**: the source tree is organized into domain folders (no behavior change)
+
+### Fixed
+
+- **What's new after install**: CHANGELOG.md is now shipped in the package and found at runtime, so the changelog appears after npm install
+- **/changelog <version>**: shows exactly that version
+
 ## [1.2.1]
 
 ### Added
