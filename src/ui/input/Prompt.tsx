@@ -57,6 +57,10 @@ interface Props {
   chip: PromptChip
   /** Contextual keys, on the right of the bottom border. */
   hint: string
+  /** Draws the text as dots (a secret being typed). */
+  mask?: boolean
+  /** When set, Esc calls this instead of clearing the input. */
+  onEscape?: () => void
 }
 
 export function Prompt({
@@ -79,6 +83,8 @@ export function Prompt({
   width,
   chip,
   hint,
+  mask = false,
+  onEscape,
 }: Props) {
   const theme = useTheme()
   const [selected, setSelected] = useState(0)
@@ -177,7 +183,7 @@ export function Prompt({
       if (key.end) return ghost === '' ? onEdit(end) : onEdit(() => setText(value.text + ghost))
       if (key.backspace) return ctrlH.pending ? undefined : onEdit(backspace)
       if (key.delete) return onEdit(deleteForward)
-      if (key.escape) return onEdit(() => emptyInput)
+      if (key.escape) return onEscape !== undefined ? onEscape() : onEdit(() => emptyInput)
       if (key.pageUp) return onScroll(1)
       if (key.pageDown) return onScroll(-1)
       if (input !== '') onEdit((b) => insert(b, input))
@@ -185,7 +191,11 @@ export function Prompt({
     { isActive: active },
   )
 
-  const { before, at, after } = splitAtCursor(value)
+  const split = splitAtCursor(value)
+  const dots = (t: string): string => (mask ? '•'.repeat([...t].length) : t)
+  const before = dots(split.before)
+  const at = dots(split.at)
+  const after = dots(split.after)
   // The first suggested character sits under the cursor block so the suggestion reads as one word.
   const ghostChars = [...ghost]
   const ghostHead = ghostChars[0]

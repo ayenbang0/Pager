@@ -10,9 +10,11 @@ import { AgentHeader, HubHeader } from './chrome/AgentHeader.js'
 import { AgentSetup } from './overlays/AgentSetup.js'
 import { watchCtrlH } from './input/ctrlH.js'
 import { DocsPanel, type DocsCtl } from './docs/DocsPanel.js'
+import { SETTINGS_ID } from '../app/settingsView.js'
+import type { FieldRequest } from '../app/settingsActions.js'
+import { SettingsPanel, type SettingsCtl } from './settings/SettingsPanel.js'
 import type { Engine, Toast } from '../app/engine.js'
-import { DENSITIES } from '../app/settings.js'
-import { resolveTheme, THEMES } from './theme/themes.js'
+import { resolveTheme } from './theme/themes.js'
 import { agentTint, badgeGlyph, effectiveDensity, type Look } from './theme/look.js'
 import { chipFor, crumbsFor, type Place } from './chrome/chrome.js'
 import { Header } from './chrome/Header.js'
@@ -106,6 +108,8 @@ export function App({ engine, onExit }: Props) {
   const [foldsOn, setFoldsOn] = useState(true)
   const [docPick, setDocPick] = useState<string | null>(null)
   const [sel, setSel] = useState<Sel | null>(null)
+  /** A one-shot text field that takes the prompt's place (renaming, a new folder, an API key). */
+  const [field, setField] = useState<FieldRequest | null>(null)
   /** The left-button gesture in progress: where it started and, once the pointer moved, where it is now. */
   const gesture = useRef<{ anchor: Cell; head: Cell | null } | null>(null)
   const helpCtl = useRef<HelpCtl | null>(null)
@@ -148,6 +152,7 @@ export function App({ engine, onExit }: Props) {
 
   const activeId = engine.active()
   useEffect(() => setOffset(0), [activeId])
+  useEffect(() => setField(null), [activeId])
 
   const settings = engine.settings()
   const theme = resolveTheme(overlay === 'theme' && previewTheme !== null ? previewTheme : settings.theme, settings.accent === '' ? undefined : settings.accent)
@@ -184,6 +189,7 @@ export function App({ engine, onExit }: Props) {
   }, [agentsActive])
 
   const inDocs = activeId === DOCS_ID
+  const inSettings = activeId === SETTINGS_ID
   const inEditor = inDocs && engine.openedDoc() !== null
   // Ctrl+H goes to the Home tab. Legacy terminals deliver it as the backspace byte, so it is read from raw input (not while an overlay
   // or the document editor owns the keyboard).
@@ -191,8 +197,9 @@ export function App({ engine, onExit }: Props) {
   homeOk.current = overlay === null && !inEditor
   useEffect(() => watchCtrlH(() => homeOk.current && engine.activate(null)), [engine])
   const docsCtl = useRef<DocsCtl | null>(null)
+  const settingsCtl = useRef<SettingsCtl | null>(null)
   // Emoji shortcodes expand in chats and agent tabs only; the terminal and the Docs list take text as typed.
-  const emojiOk = activeId !== null && activeId !== TERM_ID && !inDocs
+  const emojiOk = activeId !== null && activeId !== TERM_ID && !inDocs && !inSettings
   const agentMenu: AgentMenu | undefined = agentView === undefined ? undefined : { agent: agentView.name, commands: engine.agentCommands(agentView.name) }
   // An agent's question takes the prompt's place in its own tab and in the hub; in any other tab a banner points to it.
   const questions = engine.questions()
@@ -200,9 +207,10 @@ export function App({ engine, onExit }: Props) {
   const shownQuestion = sharedRoom === undefined ? questionFor(questions, agentTab, activeId === ROOM_ID) : sharedRoom.access === 'control' ? sharedRoom.questions[0] : undefined
   const questionLine = questionBanner(questions, sharedRoom === undefined ? shownQuestion : undefined)
   const pickerH = shownQuestion === undefined ? 0 : pickerHeight(shownQuestion, Math.max(8, Math.floor(frame / 2)))
-  const menu = overlay === null && !inEditor && shownQuestion === undefined ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu, engine.contactNames()) : []
+  const menu = overlay === null && !inEditor && shownQuestion === undefined && field === null ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu, engine.contactNames()) : []
   const bannerRow = !inEditor && questionLine !== undefined ? 1 : 0
-  const paneRows = Math.max(MIN_PANE_ROWS, frame - (FIXED_ROWS - PROMPT_ROWS) - (shownQuestion === undefined || inEditor ? PROMPT_ROWS : pickerH) - bannerRow - menu.length)
+  const noPrompt = inEditor || (inSettings && field === null)
+  const paneRows = Math.max(MIN_PANE_ROWS, frame - (FIXED_ROWS - PROMPT_ROWS) - (shownQuestion === undefined || noPrompt ? PROMPT_ROWS : pickerH) - bannerRow - menu.length)
   const mainWidth = columns - (sidebarShown ? SIDEBAR_WIDTH : 0)
   const activeConv = convs.find((c) => c.id === activeId)
 
@@ -261,6 +269,7 @@ export function App({ engine, onExit }: Props) {
       if (overlay === 'help') return helpCtl.current?.wheel(dir)
       if (overlay !== null) return
       if (inDocs) docsCtl.current?.wheel(dir)
+      else if (inSettings) settingsCtl.current?.wheel(dir)
       else setOffset((o) => Math.min(maxOffset, Math.max(0, o + dir * WHEEL_LINES)))
     },
     onPress: (at) => {
@@ -270,6 +279,7 @@ export function App({ engine, onExit }: Props) {
       if (overlay === null && inRoom && at.y === TITLE_ROW && at.x >= columns - inviteChipWidth(guestCount) - 1) return inviteToAgents()
       if (overlay !== null || at.x <= sidebarCols) return
       if (inDocs) return docsCtl.current?.click(at.x, at.y)
+      if (inSettings) return settingsCtl.current?.click(at.x, at.y)
       const anchor = showBanner ? null : cellAt(at, false)
       if (anchor !== null) gesture.current = { anchor, head: null }
     },
@@ -314,8 +324,9 @@ export function App({ engine, onExit }: Props) {
       if (input === 'm') openModel()
       else if (input === 'i') inviteToAgents()
       else if (input === 'q') jumpToQuestion()
+      else if (input === 's') engine.openSettings()
     },
-    { isActive: overlay === null && !inEditor },
+    { isActive: overlay === null && !inEditor && field === null },
   )
   const onSwitch = (dir: 1 | -1): void => {
     const ids = tabOrder(
@@ -329,6 +340,12 @@ export function App({ engine, onExit }: Props) {
     engine.activate(ids[(at + dir + ids.length) % ids.length] ?? null)
   }
   const onSubmit = (text: string): void => {
+    if (field !== null) {
+      const done = field
+      setField(null)
+      done.onSubmit(text)
+      return
+    }
     if (inDocs && text.trim() === '') {
       const doc = docList[docSel]
       if (doc) engine.openDoc(doc.id)
@@ -359,7 +376,9 @@ export function App({ engine, onExit }: Props) {
   const title = activeConv ? (activeConv.kind === 'group' ? `#${activeConv.title}` : activeConv.title) : 'home'
   const place: Place = inDocs
     ? { kind: 'docs', title: openDocName ?? '' }
-    : inTerm
+    : inSettings
+      ? { kind: 'settings', title: '' }
+      : inTerm
       ? { kind: 'terminal', title: '' }
       : inRoom
         ? { kind: 'hub', title: '' }
@@ -381,9 +400,11 @@ export function App({ engine, onExit }: Props) {
   const sharedHere = sharedRoom?.guests.filter((g) => g.online).map((g) => g.name) ?? []
   const sharedNote =
     sharedRoom === undefined ? undefined : [sharedRoom.access, sharedRoom.connected ? undefined : 'host offline', sharedHere.length === 0 ? undefined : `with ${sharedHere.join(', ')}`].filter(Boolean).join(' · ')
-  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
+  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
   const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : undefined
-  const placeholder = inTerm
+  const placeholder = field !== null
+    ? field.label
+    : inTerm
     ? term.running
       ? 'Type to send input to the running command · Ctrl+C stops it'
       : 'Run a command (cd works) · // for a leading slash · Ctrl+C stops'
@@ -404,6 +425,7 @@ export function App({ engine, onExit }: Props) {
   // The editor has no prompt; leave it first so a palette action that fills the prompt is not typed into a hidden buffer.
   const fillPrompt = (text: string): void => {
     if (inEditor) engine.openDoc(null)
+    if (inSettings) engine.activate(null)
     setInput(setText(text))
   }
   const openThemePicker = (): void => {
@@ -434,23 +456,10 @@ export function App({ engine, onExit }: Props) {
           { label: 'Leave this group…', hint: '/group leave', run: () => fillPrompt('/group leave') },
         ]
       : []),
-    { label: 'Change my name…', hint: '/name', run: () => fillPrompt('/name ') },
+    { label: '⚙ Settings', hint: 'Alt+S', run: () => engine.openSettings() },
     { label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: 'Ctrl+B', run: () => engine.toggleSidebar() },
     { label: 'Keyboard shortcuts', hint: 'Ctrl+G', run: () => setOverlay('help') },
     { label: foldsOn ? 'Show long messages in full' : 'Fold long messages', hint: 'Ctrl+T', run: () => setFoldsOn((v) => !v) },
-    { label: 'Theme picker…', hint: '/theme', run: openThemePicker },
-    { label: 'Accent color…', hint: '/accent', run: () => fillPrompt('/accent ') },
-    { label: 'Badge beside my name…', hint: '/badge', run: () => fillPrompt('/badge ') },
-    ...DENSITIES.map(
-      (d): PaletteItem => ({ label: `Density: ${d}`, hint: d === settings.density ? 'current' : '/density', run: () => void engine.submit(`/density ${d}`) }),
-    ),
-    ...THEMES.map(
-      (t): PaletteItem => ({
-        label: `Theme: ${t.name}`,
-        hint: t.name === theme.name ? 'current' : t.description,
-        run: () => void engine.submit(`/theme ${t.name}`),
-      }),
-    ),
     { label: '▸ Terminal', hint: engine.terminal().running ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
     { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
     ...engine.docList().map((d): PaletteItem => ({ label: `Doc: ${d.name}`, hint: d.where, run: () => engine.openDoc(d.id) })),
@@ -515,6 +524,7 @@ export function App({ engine, onExit }: Props) {
   else if (inDocs && input.text === '') hint = 'PgUp/PgDn pick · Enter open · /doc new <name> · Ctrl+G help'
   if (agentView !== undefined && !inEditor && input.text === '' && offset === 0 && sel === null) hint = 'Enter send · @name others · Alt+M model · Ctrl+C stop · Ctrl+G help'
   if (shownQuestion !== undefined && !inEditor) hint = 'Up/Down move · Space pick · Enter confirm · Tab field · Esc cancel'
+  if (inSettings) hint = field !== null ? 'Enter save · Esc cancel' : 'Alt+S settings'
   if (quitArmed) hint = 'Press Ctrl+C again to quit'
 
   const closeOverlay = (): void => setOverlay(null)
@@ -557,7 +567,7 @@ export function App({ engine, onExit }: Props) {
                 onPick={(name) => {
                   setOverlay(null)
                   setPreviewTheme(null)
-                  void engine.submit(`/theme ${name}`)
+                  engine.setTheme(name)
                 }}
                 onCancel={() => {
                   setOverlay(null)
@@ -577,7 +587,26 @@ export function App({ engine, onExit }: Props) {
                 ) : (
                   <BandTitle title={tabTitle} width={mainWidth} right={tabNote} />
                 )}
-                {inDocs ? (
+                {inSettings ? (
+                  <SettingsPanel
+                    engine={engine}
+                    width={mainWidth}
+                    height={field === null ? paneRows + PROMPT_ROWS : paneRows}
+                    top={PANE_TOP_ROW}
+                    active={overlay === null && field === null}
+                    ctl={settingsCtl}
+                    onField={(f) => {
+                      setInput(setText(f.initial))
+                      setField(f)
+                    }}
+                    onInterrupt={onInterrupt}
+                    onPalette={() => setOverlay('palette')}
+                    onSidebar={() => engine.toggleSidebar()}
+                    onSwitch={onSwitch}
+                    onHelp={() => setOverlay('help')}
+                    onQuit={onExit}
+                  />
+                ) : inDocs ? (
                   <DocsPanel
                     engine={engine}
                     width={mainWidth}
@@ -605,10 +634,10 @@ export function App({ engine, onExit }: Props) {
                 )}
               </>
             )}
-            {inEditor || questionLine === undefined ? null : (
+            {noPrompt || questionLine === undefined ? null : (
               <SegLine segs={fitSegs([{ text: ' ' }, pillSeg('?', theme.pill.warning), { text: ` ${questionLine}`, color: theme.warning, bold: true }], mainWidth)} />
             )}
-            {inEditor ? null : shownQuestion !== undefined ? (
+            {noPrompt ? null : shownQuestion !== undefined ? (
               <QuestionPicker
                 key={shownQuestion.id}
                 view={shownQuestion}
@@ -635,8 +664,10 @@ export function App({ engine, onExit }: Props) {
                 onSidebar={() => engine.toggleSidebar()}
                 onHelp={() => setOverlay('help')}
                 onQuit={onExit}
-                history={engine.history()}
-                suggest={(t) => engine.suggest(t)}
+                history={field === null ? engine.history() : []}
+                suggest={(t) => (field === null ? engine.suggest(t) : '')}
+                mask={field?.masked === true}
+                onEscape={field === null ? undefined : () => setField(null)}
                 onToggleFolds={() => setFoldsOn((v) => !v)}
                 width={mainWidth}
                 chip={chipFor(place, input.text.startsWith('/'), tint)}

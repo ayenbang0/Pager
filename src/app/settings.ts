@@ -12,6 +12,15 @@ export function isDensity(x: unknown): x is Density {
   return typeof x === 'string' && (DENSITIES as readonly string[]).includes(x)
 }
 
+export interface Folder {
+  name: string
+  /** Tab ids filed in this folder, in display order. */
+  ids: string[]
+}
+
+export const MAX_FOLDERS = 12
+export const MAX_FOLDER_NAME = 24
+
 export interface Settings {
   /** Name of a theme in THEMES. */
   theme: string
@@ -27,9 +36,22 @@ export interface Settings {
   sound: boolean
   /** The last pager version the user saw a changelog for; empty means "show on next launch". */
   lastSeenVersion: string
+  /** Restart-to-apply switches. Each maps to a PAGER_* variable (see envSettings.ts). */
+  reduceMotion: boolean
+  mouse: boolean
+  alerts: boolean
+  updateCheck: boolean
+  acp: boolean
+  web: boolean
+  agents: boolean
+  lan: boolean
+  /** Sidebar folders in display order. */
+  folders: Folder[]
+  /** Collapsed sidebar sections: `pending direct groups agents tools folder:<name>`. */
+  collapsed: string[]
 }
 
-export const DEFAULT_SETTINGS: Settings = { theme: DEFAULT_THEME.name, sidebar: true, accent: '', badge: 'auto', density: 'cozy', notify: true, sound: true, lastSeenVersion: '' }
+export const DEFAULT_SETTINGS: Settings = { theme: DEFAULT_THEME.name, sidebar: true, accent: '', badge: 'auto', density: 'cozy', notify: true, sound: true, lastSeenVersion: '', reduceMotion: false, mouse: true, alerts: true, updateCheck: true, acp: true, web: true, agents: true, lan: false, folders: [], collapsed: [] }
 
 /** A badge is `auto`, `none`, or one symbol or emoji (one grapheme, not a letter or digit). Returns the stored form or undefined. */
 export function parseBadge(input: string): string | undefined {
@@ -39,6 +61,42 @@ export function parseBadge(input: string): string | undefined {
   if (parts.length !== 1 || /^[\p{L}\p{N}\s]$/u.test(raw) || /\p{Cc}/u.test(raw)) return undefined
   return raw
 }
+
+/** A valid folder name: 1-24 characters, trimmed, no control characters. */
+export function validFolderName(raw: string): boolean {
+  const name = raw.trim()
+  return name.length >= 1 && name.length <= MAX_FOLDER_NAME && name === raw && !/\p{Cc}/u.test(name)
+}
+
+function loadFolders(raw: unknown): Folder[] {
+  if (!Array.isArray(raw)) return []
+  const out: Folder[] = []
+  const names = new Set<string>()
+  const filed = new Set<string>()
+  for (const item of raw) {
+    if (out.length >= MAX_FOLDERS) break
+    if (!isRecord(item) || typeof item.name !== 'string' || !Array.isArray(item.ids)) continue
+    const name = item.name.trim()
+    if (!validFolderName(name) || names.has(name.toLowerCase())) continue
+    names.add(name.toLowerCase())
+    const ids: string[] = []
+    for (const id of item.ids) {
+      if (ids.length >= 200) break
+      if (typeof id !== 'string' || id.length === 0 || id.length > 100 || filed.has(id)) continue
+      filed.add(id)
+      ids.push(id)
+    }
+    out.push({ name, ids })
+  }
+  return out
+}
+
+function loadCollapsed(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return []
+  return [...new Set(raw.filter((x): x is string => typeof x === 'string' && x.length > 0 && x.length <= 40))].slice(0, 40)
+}
+
+const flag = (v: unknown, fallback: boolean): boolean => (typeof v === 'boolean' ? v : fallback)
 
 /** Tolerant: a missing, unreadable or malformed file yields defaults, field by field. */
 export function loadSettings(dir: string): Settings {
@@ -59,6 +117,16 @@ export function loadSettings(dir: string): Settings {
     notify: typeof parsed.notify === 'boolean' ? parsed.notify : DEFAULT_SETTINGS.notify,
     sound: typeof parsed.sound === 'boolean' ? parsed.sound : DEFAULT_SETTINGS.sound,
     lastSeenVersion: typeof parsed.lastSeenVersion === 'string' ? parsed.lastSeenVersion : DEFAULT_SETTINGS.lastSeenVersion,
+    reduceMotion: flag(parsed.reduceMotion, DEFAULT_SETTINGS.reduceMotion),
+    mouse: flag(parsed.mouse, DEFAULT_SETTINGS.mouse),
+    alerts: flag(parsed.alerts, DEFAULT_SETTINGS.alerts),
+    updateCheck: flag(parsed.updateCheck, DEFAULT_SETTINGS.updateCheck),
+    acp: flag(parsed.acp, DEFAULT_SETTINGS.acp),
+    web: flag(parsed.web, DEFAULT_SETTINGS.web),
+    agents: flag(parsed.agents, DEFAULT_SETTINGS.agents),
+    lan: flag(parsed.lan, DEFAULT_SETTINGS.lan),
+    folders: loadFolders(parsed.folders),
+    collapsed: loadCollapsed(parsed.collapsed),
   }
 }
 

@@ -11,6 +11,7 @@ import { BandTitle } from '../kit/kit.js'
 import { colorFor } from '../theme/look.js'
 import { SegLine } from '../kit/SegLine.js'
 import { useTheme } from '../theme/theme.js'
+import type { Chords } from '../input/chords.js'
 
 /** What the app forwards to the panel: the mouse is owned by the app, not by components. */
 export interface DocsCtl {
@@ -18,13 +19,7 @@ export interface DocsCtl {
   wheel(direction: 1 | -1): void
 }
 
-export interface DocsChords {
-  onPalette(): void
-  onSidebar(): void
-  onSwitch(direction: 1 | -1): void
-  onHelp(): void
-  onQuit(): void
-}
+export type DocsChords = Chords
 
 interface Props extends DocsChords {
   engine: Engine

@@ -1,7 +1,3 @@
-import { COLOR_WORDS } from '../ui/theme/colors.js'
-import { DENSITIES } from './settings.js'
-import { THEMES } from '../ui/theme/themes.js'
-
 export interface CommandSpec {
   name: string
   usage: string
@@ -11,8 +7,6 @@ export interface CommandSpec {
 export const COMMANDS: readonly CommandSpec[] = [
   { name: 'help', usage: '/help', summary: 'List commands' },
   { name: 'code', usage: '/code', summary: 'Show your contact code' },
-  { name: 'name', usage: '/name <new name>', summary: 'Change your display name' },
-  { name: 'net', usage: '/net', summary: 'Show link state per contact and the net.log path' },
   { name: 'add', usage: '/add <code> [note]', summary: 'Send a contact request' },
   { name: 'accept', usage: '/accept [n]', summary: 'Accept a pending request or invite' },
   { name: 'decline', usage: '/decline [n]', summary: 'Decline a pending request or invite' },
@@ -25,13 +19,8 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'update', usage: '/update', summary: 'Check for a newer pager version' },
   { name: 'changelog', usage: '/changelog [version]', summary: 'Show what changed in recent updates' },
   { name: 'search', usage: '/search <text>', summary: 'Find text in your chats and the agent room (newest 20 matches)' },
-  { name: 'theme', usage: '/theme [name]', summary: 'Open the theme picker, or switch theme by name' },
-  { name: 'accent', usage: '/accent <color|#hex|auto>', summary: 'Recolor the accent everywhere (auto resets it)' },
-  { name: 'badge', usage: '/badge <emoji|none|auto>', summary: 'The glyph shown beside your name' },
-  { name: 'density', usage: '/density compact|cozy|roomy', summary: 'Spacing between messages' },
+  { name: 'settings', usage: '/settings [section]', summary: 'Open Settings' },
   { name: 'quit', usage: '/quit', summary: 'Exit pager' },
-  { name: 'notify', usage: '/notify on|off', summary: 'Desktop notifications outside the terminal' },
-  { name: 'sound', usage: '/sound on|off', summary: 'Chime with each notification' },
   { name: 'exit', usage: '/exit', summary: 'Exit pager (same as /quit)' },
 ]
 
@@ -42,38 +31,21 @@ export const GROUP_SUBCOMMANDS: readonly CommandSpec[] = [
   { name: 'leave', usage: '/group leave', summary: 'Leave this group for good' },
 ]
 
-export const THEME_ARGUMENTS: readonly CommandSpec[] = THEMES.map((t) => ({
-  name: t.name,
-  usage: `/theme ${t.name}`,
-  summary: t.description,
-}))
+export const SETTINGS_SECTIONS_KEYS = ['profile', 'appearance', 'notifications', 'folders', 'agents', 'ai', 'privacy', 'updates', 'advanced'] as const
 
-export const ACCENT_ARGUMENTS: readonly CommandSpec[] = ['auto', ...COLOR_WORDS].map((c) => ({
-  name: c,
-  usage: `/accent ${c}`,
-  summary: c === 'auto' ? "Use the theme's own accent" : `Accent ${c}`,
-}))
+export const SETTINGS_ARGUMENTS: readonly CommandSpec[] = SETTINGS_SECTIONS_KEYS.map((k) => ({ name: k, usage: `/settings ${k}`, summary: `Open Settings at ${k}` }))
 
-const BADGE_CHOICES: readonly [string, string][] = [
-  ['auto', 'A glyph chosen from your name'],
-  ['none', 'No badge'],
-  [':rocket:', '🚀'],
-  [':fire:', '🔥'],
-  [':sparkles:', '✨'],
-  [':crown:', '👑'],
-  [':zap:', '⚡'],
-  [':skull:', '💀'],
-]
-
-export const BADGE_ARGUMENTS: readonly CommandSpec[] = BADGE_CHOICES.map(([name, summary]) => ({ name, usage: `/badge ${name}`, summary }))
-
-const DENSITY_NOTES: Record<(typeof DENSITIES)[number], string> = {
-  compact: 'One row per message',
-  cozy: 'A header row for each speaker (default)',
-  roomy: 'A header row and a blank row between speakers',
+/** Commands that moved into the Settings tab, and the section that now holds each. */
+export const MOVED: Readonly<Record<string, string>> = {
+  name: 'Profile',
+  badge: 'Profile',
+  theme: 'Appearance',
+  accent: 'Appearance',
+  density: 'Appearance',
+  notify: 'Notifications',
+  sound: 'Notifications',
+  net: 'Privacy and Network',
 }
-
-export const DENSITY_ARGUMENTS: readonly CommandSpec[] = DENSITIES.map((d) => ({ name: d, usage: `/density ${d}`, summary: DENSITY_NOTES[d] }))
 
 /** Subcommands of `/agent` that do not depend on which agents exist. */
 const AGENT_SUBCOMMANDS: readonly CommandSpec[] = [

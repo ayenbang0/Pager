@@ -11,7 +11,7 @@ const bodyRows = (rows: readonly HelpRow[]): Extract<HelpRow, { kind: 'row' }>[]
 test('sections come in the documented order and end with the generated command list', () => {
   assert.deepEqual(
     SECTIONS.map((s) => s.title),
-    ['Move around', 'Write', 'Copy and paste', 'Chats and agents', 'Agents', 'When an agent asks you', 'Terminal tab', 'Docs tab (vim)', 'Commands', 'Leave', 'All commands'],
+    ['Move around', 'Write', 'Copy and paste', 'Chats and agents', 'Agents', 'When an agent asks you', 'Settings tab', 'Terminal tab', 'Docs tab (vim)', 'Commands', 'Leave', 'All commands'],
   )
 })
 

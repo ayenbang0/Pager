@@ -188,7 +188,7 @@ test('a fresh pager starts with START, everyone else with their agents', () => {
 
 test('START shows the key hints as keycaps and every step in full', () => {
   const out = lines(bodyRows(input({ width: 70, height: 80, stats: stats({ sent: 0, received: 0 }), agents: agents({ rows: [] }) }), parseInfo(INFO), 80)).join('\n')
-  for (const key of ['‹Ctrl+P›', '‹Ctrl+G›', '‹Alt+↑↓›', '‹/agent setup›']) assert.ok(out.includes(key), key)
+  for (const key of ['‹Ctrl+P›', '‹Ctrl+G›', '‹Alt+↑↓›', '‹Alt+S›']) assert.ok(out.includes(key), key)
   const flat = out.replace(/\s+/g, ' ')
   assert.ok(flat.includes('Send your contact code to a friend'))
   assert.ok(flat.includes('They run /add <your code>; you run /accept 1'))

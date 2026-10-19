@@ -16,6 +16,7 @@ import { dmConvId } from '../chat/events.js'
 import { resetDesktopState } from '../platform/desktop.js'
 import { DEFAULT_SETTINGS } from './settings.js'
 import { VERSION } from './version.js'
+import { SETTINGS_ID } from './settingsView.js'
 import { DatabaseSync } from 'node:sqlite'
 import { Store } from '../chat/db.js'
 import { deriveSecrets } from '../chat/secrets.js'
@@ -56,7 +57,7 @@ async function boot(
   engines.push(engine)
   const toasts: Toast[] = []
   engine.on('toast', (t: Toast) => toasts.push(t))
-  await engine.submit(`/name ${name}`)
+  engine.setName(name)
   return { engine, dir, toasts }
 }
 
@@ -302,21 +303,22 @@ test('name change propagates to contacts', async () => {
   const a = await boot('alice')
   const b = await boot('bob')
   await befriend(a, b)
-  await a.engine.submit('/name alicia')
+  a.engine.setName('alicia')
   await waitFor(() => b.engine.convs().some((v) => v.title === 'alicia'), 15_000, 'new name')
   // The re-sent hello must keep advertising capabilities, or read receipts silently stop until reconnect.
-  await b.engine.submit('/net')
-  const line = b.engine.home().find((l) => l.includes('alicia'))
-  assert.match(line ?? '', /online \(caps read\b/)
-  assert.match(b.engine.home().find((l) => l.startsWith('Network:')) ?? '', /^Network: nodes=\d+ online=true/)
+  const info = b.engine.netInfo()
+  const contact = info.contacts.find((c) => c.name === 'alicia')
+  assert.equal(contact?.online, true)
+  assert.ok(contact?.caps.includes('read'))
+  assert.match(info.stats, /^nodes=\d+ online=true/)
 })
 
-test('/theme switches, persists across restarts, and rejects unknown names', async () => {
+test('setTheme switches, persists across restarts, and rejects unknown names', async () => {
   const a = await boot('alice')
-  await a.engine.submit('/theme MONO')
+  a.engine.setTheme('MONO')
   assert.equal(a.engine.settings().theme, 'mono')
   assert.equal(a.toasts.at(-1)?.kind, 'success')
-  await a.engine.submit('/theme nope')
+  a.engine.setTheme('nope')
   assert.equal(a.engine.settings().theme, 'mono')
   assert.equal(a.toasts.at(-1)?.kind, 'error')
   a.engine.toggleSidebar()
@@ -346,44 +348,72 @@ test('/search needs text; a restart recaps what the agents did while closed and 
   await b.engine.close()
 })
 
-test('/theme with no argument opens the picker; /theme list names the themes', async () => {
+test('openThemePicker asks the app for the picker overlay', async () => {
   const a = await boot('alice')
   const opened: unknown[][] = []
   a.engine.on('overlay', (...args: unknown[]) => opened.push(args))
-  await a.engine.submit('/theme')
+  a.engine.openThemePicker()
   assert.deepEqual(opened, [['theme']])
-  await a.engine.submit('/theme list')
-  assert.match(a.toasts.at(-1)?.text ?? '', /Available: .*neon.*sunset.*aurora/)
   await a.engine.close()
 })
 
-test('/accent, /badge and /density persist, validate and reset', async () => {
+test('setAccent, setBadge and setDensity persist, validate and reset', async () => {
   const a = await boot('alice')
-  await a.engine.submit('/accent #F0A')
+  a.engine.setAccent('#F0A')
   assert.equal(a.engine.settings().accent, '#ff00aa')
-  await a.engine.submit('/accent not-a-color')
+  a.engine.setAccent('not-a-color')
   assert.equal(a.toasts.at(-1)?.kind, 'error')
   assert.equal(a.engine.settings().accent, '#ff00aa')
-  await a.engine.submit('/badge :rocket:')
+  a.engine.setBadge(':rocket:')
   assert.equal(a.engine.settings().badge, '🚀')
-  await a.engine.submit('/badge :nosuchcode:')
+  a.engine.setBadge(':nosuchcode:')
   assert.equal(a.toasts.at(-1)?.kind, 'error')
-  await a.engine.submit('/badge ab')
+  a.engine.setBadge('ab')
   assert.equal(a.toasts.at(-1)?.kind, 'error')
   assert.equal(a.engine.settings().badge, '🚀')
-  await a.engine.submit('/density roomy')
+  a.engine.setDensity('roomy')
   assert.equal(a.engine.settings().density, 'roomy')
-  await a.engine.submit('/density huge')
+  a.engine.setDensity('huge')
   assert.equal(a.toasts.at(-1)?.kind, 'error')
   assert.equal(a.engine.settings().density, 'roomy')
   await a.engine.close()
   const again = await boot('alice', a.dir)
   assert.deepEqual(again.engine.settings(), { ...DEFAULT_SETTINGS, lastSeenVersion: VERSION, accent: '#ff00aa', badge: '🚀', density: 'roomy' })
-  await again.engine.submit('/accent auto')
-  await again.engine.submit('/badge none')
+  again.engine.setAccent('auto')
+  again.engine.setBadge('none')
   assert.equal(again.engine.settings().accent, '')
   assert.equal(again.engine.settings().badge, 'none')
   await again.engine.close()
+})
+
+test('removed commands point at Settings; /settings opens the tab and validates its section', async () => {
+  const a = await boot('alice')
+  for (const [cmd, section] of [['/theme', 'Appearance'], ['/accent red', 'Appearance'], ['/name x', 'Profile'], ['/net', 'Privacy and Network'], ['/notify on', 'Notifications']] as const) {
+    await a.engine.submit(cmd)
+    assert.equal(a.toasts.at(-1)?.text, `Moved to Settings > ${section} (Alt+S, or Ctrl+P → Settings)`, cmd)
+  }
+  await a.engine.submit('/settings foo')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  assert.match(a.toasts.at(-1)?.text ?? '', /^Unknown section\. Try: profile, appearance/)
+  assert.notEqual(a.engine.active(), SETTINGS_ID)
+  await a.engine.submit('/settings appearance')
+  assert.equal(a.engine.active(), SETTINGS_ID)
+  assert.equal(a.engine.takeSettingsFocus(), 'appearance')
+  assert.equal(a.engine.takeSettingsFocus(), undefined)
+  await a.engine.close()
+})
+
+test('setSetting persists a switch, and a locked one refuses with the source', async () => {
+  const a = await boot('alice')
+  a.engine.setSetting('mouse', false)
+  assert.equal(a.engine.settings().mouse, false)
+  await a.engine.close()
+  const locked = await boot('alice', a.dir, { envLocks: [{ key: 'mouse', source: 'PAGER_NO_MOUSE' }] })
+  locked.engine.setSetting('mouse', true)
+  assert.equal(locked.toasts.at(-1)?.text, 'Locked by PAGER_NO_MOUSE')
+  assert.equal(locked.engine.settings().mouse, false)
+  assert.deepEqual(locked.engine.settingsView().locks, { mouse: 'PAGER_NO_MOUSE' })
+  await locked.engine.close()
 })
 
 test('/quit and /exit both ask the app to quit', async () => {
@@ -523,7 +553,7 @@ test('input history is de-duplicated, newest last, and survives a restart', asyn
   assert.equal(a.engine.history().filter((h) => h === '/theme nord').length, 1)
   await a.engine.close()
   const again = await boot('hist', a.dir)
-  assert.deepEqual(again.engine.history().slice(-3, -1), ['/theme dracula', '/theme nord'])
+  assert.deepEqual(again.engine.history().slice(-2), ['/theme dracula', '/theme nord'])
 })
 
 test('docs: a shared document syncs between peers and its operations never show up as chat', async () => {

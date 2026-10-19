@@ -11,6 +11,10 @@ export interface Press {
   escape?: boolean
   tab?: boolean
   shift?: boolean
+  pageUp?: boolean
+  pageDown?: boolean
+  home?: boolean
+  end?: boolean
   backspace?: boolean
   delete?: boolean
   ctrl?: boolean

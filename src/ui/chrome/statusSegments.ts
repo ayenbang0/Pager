@@ -2,7 +2,7 @@ import type { Theme } from '../theme/themes.js'
 import { fitSegs, pillSeg, segsWidth, spread, type Seg } from '../kit/segs.js'
 import { spinnerCell } from '../kit/spinnerCells.js'
 
-export type StatusMode = 'home' | 'chat' | 'group' | 'hub' | 'shared' | 'agent' | 'terminal' | 'docs'
+export type StatusMode = 'home' | 'chat' | 'group' | 'hub' | 'shared' | 'agent' | 'terminal' | 'docs' | 'settings' | 'web' | 'ai'
 
 export interface StatusInput {
   columns: number
@@ -38,6 +38,9 @@ const MODE_PILLS: Record<StatusMode, string> = {
   shared: '◈ SHARED',
   terminal: '▸ TERM',
   docs: '▤ DOCS',
+  settings: '⚙ SET',
+  web: '⌕ WEB',
+  ai: '✦ AI',
 }
 
 /** `HH:MM` in local time. */

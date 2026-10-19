@@ -7,6 +7,8 @@ import { MOUSE_OFF } from './ui/input/mouse.js'
 import { isNewer, latestVersion, runUpdate } from './app/update.js'
 import { VERSION } from './app/version.js'
 import { parseArgs } from './app/args.js'
+import { applyEnvFromSettings } from './app/envSettings.js'
+import { loadSettings } from './app/settings.js'
 import { promptSecret } from './platform/secretPrompt.js'
 import { runLock, runUnlock, unlockWithPassphrase } from './app/lockCommand.js'
 import { identityLockState } from './chat/identity.js'
@@ -75,6 +77,9 @@ if (lockState.locked) {
   }
 }
 
+// Settings that modules read from the environment at load time must be projected before the dynamic imports below.
+const envLocks = applyEnvFromSettings(loadSettings(dir), process.env, { lan: parsed.lan, noAgents: parsed.noAgents })
+
 const bootstrap = process.env.PAGER_BOOTSTRAP?.split(',')
   .map((s) => s.trim())
   .filter(Boolean)
@@ -83,7 +88,7 @@ let engine: Engine
 try {
   // Dynamic for the same reason as above: keep native addons out of `pager update` / --help / --version.
   const { Engine } = await import('./app/engine.js')
-  engine = await Engine.open({ dir, bootstrap: bootstrap && bootstrap.length > 0 ? bootstrap : undefined, checkAgents: true, secrets })
+  engine = await Engine.open({ dir, bootstrap: bootstrap && bootstrap.length > 0 ? bootstrap : undefined, checkAgents: process.env.PAGER_NO_AGENTS !== '1', secrets, envLocks, agents: process.env.PAGER_NO_AGENTS !== '1' })
 } catch (err) {
   release()
   process.stderr.write(`pager failed to start: ${err instanceof Error ? err.message : String(err)}\n`)

@@ -5,7 +5,7 @@ import { completion, matchCommands, matchEmoji, menuItems, type AgentMenu } from
 
 test('prefix matching on commands', () => {
   assert.deepEqual(matchCommands('/gr').map((c) => c.name), ['group'])
-  assert.deepEqual(matchCommands('/a').map((c) => c.name), ['add', 'accept', 'agent', 'accent'])
+  assert.deepEqual(matchCommands('/a').map((c) => c.name), ['add', 'accept', 'agent'])
   assert.equal(matchCommands('/').length, 6)
 })
 
@@ -15,10 +15,10 @@ test('group subcommands after "/group "', () => {
   assert.deepEqual(matchCommands('/group invite bo'), [])
 })
 
-test('theme names complete after "/theme "', () => {
-  assert.deepEqual(matchCommands('/theme mo').map((c) => c.name), ['mono'])
-  assert.ok(matchCommands('/theme ').length >= 2)
-  assert.deepEqual(matchCommands('/theme mono x'), [])
+test('section names complete after "/settings "', () => {
+  assert.deepEqual(matchCommands('/settings ap').map((c) => c.name), ['appearance'])
+  assert.ok(matchCommands('/settings ').length >= 2)
+  assert.deepEqual(matchCommands('/settings appearance x'), [])
 })
 
 test('agent names and subcommands complete after "/agent "', () => {
@@ -38,11 +38,11 @@ test('plain text, unknown commands and free-form arguments show nothing', () => 
 test('completion keeps the command prefix', () => {
   const [group] = matchCommands('/gr')
   const [invite] = matchCommands('/group i')
-  const [mono] = matchCommands('/theme mo')
-  assert.ok(group && invite && mono)
+  const [appearance] = matchCommands('/settings ap')
+  assert.ok(group && invite && appearance)
   assert.equal(completion('/gr', group), '/group ')
   assert.equal(completion('/group i', invite), '/group invite ')
-  assert.equal(completion('/theme mo', mono), '/theme mono ')
+  assert.equal(completion('/settings ap', appearance), '/settings appearance ')
 })
 
 test('a :name fragment at the end offers emoji, prefix matches first', () => {

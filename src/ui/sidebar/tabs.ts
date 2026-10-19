@@ -3,6 +3,7 @@ import { agentTabId, sharedTabId } from '../../agents/ids.js'
 import { ROOM_ID } from '../../agents/orchestrator.js'
 import { TERM_ID } from '../../tools/terminal/terminal.js'
 import { DOCS_ID } from '../../docs/store.js'
+import { SETTINGS_ID } from '../../app/settingsView.js'
 
 /** The sidebar's three groups, as tab ids. `null` is the home tab. */
 export interface TabGroups {
@@ -22,7 +23,7 @@ export function tabGroups(convs: readonly ConvView[], agents: readonly string[],
       ...agents.map(agentTabId),
       ...shared.map(sharedTabId),
     ],
-    tools: [TERM_ID, DOCS_ID],
+    tools: [TERM_ID, DOCS_ID, SETTINGS_ID],
   }
 }
 

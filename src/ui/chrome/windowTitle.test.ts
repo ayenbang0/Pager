@@ -37,5 +37,8 @@ test('every place has a label; a DM shows whether the contact is online, a docum
   assert.equal(titleLabel(at('terminal'), false), '▸ terminal')
   assert.equal(titleLabel(at('docs', 'plan.md'), false), '▤ plan.md')
   assert.equal(titleLabel(at('docs'), false), '▤ docs')
+  assert.equal(titleLabel(at('settings'), false), '⚙ settings')
+  assert.equal(titleLabel(at('web'), false), '⌕ web')
+  assert.equal(titleLabel(at('ai'), false), '✦ ai')
   assert.equal(titleLabel(at('shared', 'ann'), false), "◈ ann's agents")
 })

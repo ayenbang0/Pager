@@ -35,7 +35,7 @@ async function boot(name: string, extra: Partial<EngineOptions> = {}): Promise<P
   engines.push(engine)
   const toasts: Toast[] = []
   engine.on('toast', (t: Toast) => toasts.push(t))
-  await engine.submit(`/name ${name}`)
+  engine.setName(name)
   return { engine, toasts }
 }
 

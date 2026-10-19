@@ -17,6 +17,7 @@ export const KEY_SECTIONS: readonly KeySection[] = [
       ['Ctrl+H', 'Jump to the Home tab'],
       ['Ctrl+B', 'Show or hide the sidebar'],
       ['Ctrl+P', 'Command palette: every action, searchable'],
+      ['Alt+S', 'Open Settings'],
       ['PgUp / PgDn / wheel', 'Scroll messages'],
       ['Ctrl+T / click "▸ N more lines"', 'Fold / expand long messages'],
       ['Ctrl+G', 'This help'],
@@ -83,6 +84,16 @@ export const KEY_SECTIONS: readonly KeySection[] = [
       ['Tab / Shift+Tab', 'Next / previous question'],
       ['Other row', 'Type an answer of your own: every key types there, Backspace edits'],
       ['Esc', 'Cancel: the agent is told you did not answer'],
+    ],
+  },
+  {
+    title: 'Settings tab',
+    rows: [
+      ['Up / Down', 'Move between settings (PgUp / PgDn / Home / End jump)'],
+      ['Left / Right', 'Change a switch or pick another choice'],
+      ['Enter', 'Edit a text field, or run the highlighted action (twice when it asks to confirm)'],
+      ['[ and ]', 'On a folder: move it up or down the sidebar'],
+      ['Esc', 'Back to Home'],
     ],
   },
   {

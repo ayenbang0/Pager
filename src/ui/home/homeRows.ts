@@ -281,7 +281,7 @@ const KEY_HINTS: readonly (readonly [string, string])[] = [
   ['Ctrl+P', 'palette'],
   ['Ctrl+G', 'help'],
   ['Alt+↑↓', 'tabs'],
-  ['/agent setup', 'agents'],
+  ['Alt+S', 'settings'],
 ]
 
 export function startCard(width: number, info: HomeInfo, theme: Theme): Card {

@@ -6,6 +6,7 @@ import { ROOM_ID, type RoomView } from '../../agents/orchestrator.js'
 import type { AgentView } from '../../agents/types.js'
 import { TERM_ID } from '../../tools/terminal/terminal.js'
 import { DOCS_ID } from '../../docs/store.js'
+import { SETTINGS_ID } from '../../app/settingsView.js'
 import { SegLine } from '../kit/SegLine.js'
 import { useBlink } from '../kit/Spinner.js'
 import { SpinnerLine } from '../kit/SpinnerLine.js'
@@ -118,6 +119,7 @@ export function Sidebar({ convs, pending, room, shared, activeId, terminalRunnin
         active={activeId === TERM_ID}
       />
       <Row spec={{ glyph: '▤', glyphColor: theme.accent, label: 'docs' }} active={activeId === DOCS_ID} />
+      <Row spec={{ glyph: '⚙', glyphColor: theme.accent, label: 'settings' }} active={activeId === SETTINGS_ID} />
     </Box>
   )
 }

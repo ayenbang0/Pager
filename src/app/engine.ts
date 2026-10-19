@@ -7,7 +7,7 @@ import { agentTabId, parseAgentTab, parseSharedTab, sharedTabId } from '../agent
 import { AgentShare, type GuestView, type SharedRoom, type SharedView } from '../agents/share/share.js'
 import { Orchestrator, ROOM_ID, type AgentStats, type RoomView, type SetupRow } from '../agents/orchestrator.js'
 import type { AnswerMap, QuestionView } from '../agents/run/questions.js'
-import { COMMANDS, parseCommand } from './commands.js'
+import { COMMANDS, MOVED, parseCommand, SETTINGS_ARGUMENTS } from './commands.js'
 import { formatChangelog, getChangesSince, isNewer as isNewerChangelog, latestVersion as latestChangelogVersion, loadChangelog } from './changelog.js'
 import { Terminal, TERM_ID, type TermEntry, type TermState } from '../tools/terminal/terminal.js'
 import { DocStore, DOCS_ID, DOC_PREFIX, type DocInfo } from '../docs/store.js'
@@ -18,6 +18,8 @@ import { expandEmoji } from '../chat/emoji.js'
 import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from '../chat/events.js'
 import { loadOrCreateIdentity, saveName } from '../chat/identity.js'
 import type { Secrets } from '../chat/secrets.js'
+import type { EnvLock } from './envSettings.js'
+import { SETTINGS_ID, type SettingsView } from './settingsView.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from '../chat/ingest.js'
 import { LOCAL_CAPS, Net, type PeerLink } from '../net/net.js'
 import { NetLog } from '../net/netlog.js'
@@ -83,6 +85,16 @@ export interface MessageView {
   markdown?: boolean
   status: 'pending' | 'sent' | 'delivered' | 'read' | null
 }
+/** The plain on/off Settings switches that `setSetting` handles. */
+export type ToggleKey = 'sidebar' | 'reduceMotion' | 'mouse' | 'alerts' | 'updateCheck' | 'acp' | 'web' | 'agents' | 'lan'
+
+export interface NetInfo {
+  listening: boolean
+  contacts: { name: string; pending: boolean; online: boolean; caps: readonly string[] }[]
+  stats: string
+  logPath: string
+}
+
 export interface EngineOptions {
   dir: string
   bootstrap?: BootstrapNode[]
@@ -96,6 +108,10 @@ export interface EngineOptions {
   checkAgents?: boolean
   /** Keys derived from the passphrase when identity.json is locked. */
   secrets?: Secrets
+  /** Settings fixed by an environment variable or flag; they cannot be changed from Settings. */
+  envLocks?: EnvLock[]
+  /** False turns the agents room, the AI tab and the agent tool server off (default true). */
+  agents?: boolean
 }
 
 interface PendingItem {
@@ -134,6 +150,8 @@ export class Engine extends EventEmitter {
   private readonly dir: string
   /** True when the identity and database are protected by a passphrase. */
   readonly locked: boolean
+  private readonly envLocks: EnvLock[]
+  private settingsFocus: string | undefined
   private readonly secretKey: Buffer
   private readonly store: Store
   private readonly net: Net
@@ -179,6 +197,7 @@ export class Engine extends EventEmitter {
     super()
     this.dir = opts.dir
     this.locked = opts.secrets !== undefined
+    this.envLocks = opts.envLocks ?? []
     this.prefs = loadSettings(opts.dir)
     this.input = loadHistory(opts.dir)
     const identity = loadOrCreateIdentity(opts.dir, opts.secrets)
@@ -435,7 +454,7 @@ export class Engine extends EventEmitter {
 
   messages(convId: string, limit: number): MessageView[] {
     if (convId === TERM_ID) return this.termMessages(limit)
-    if (convId === DOCS_ID) return []
+    if (convId === DOCS_ID || convId === SETTINGS_ID) return []
     if (convId === ROOM_ID) return this.agents.messages(limit)
     const agent = parseAgentTab(convId)
     if (agent !== undefined) return this.agents.messages(limit, agent)
@@ -734,7 +753,7 @@ export class Engine extends EventEmitter {
       return
     }
     const agent = parseAgentTab(convId)
-    if (convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID || agent !== undefined) {
+    if (convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID || convId === SETTINGS_ID || agent !== undefined) {
       if (convId === ROOM_ID) this.agents.markRead()
       if (agent !== undefined) this.agents.markRead(agent)
       this.activeId = convId
@@ -769,7 +788,7 @@ export class Engine extends EventEmitter {
     const text = input.trim()
     if (text === '') return
     this.input = [...this.input.filter((h) => h !== text), text].slice(-HISTORY_MAX)
-    this.suggester.learn(text, this.activeId !== TERM_ID)
+    this.suggester.learn(text, this.activeId !== TERM_ID && this.activeId !== SETTINGS_ID)
     try {
       saveHistory(this.dir, this.input)
     } catch {
@@ -807,12 +826,10 @@ export class Engine extends EventEmitter {
         return this.activate(TERM_ID)
       case 'doc':
         return this.cmdDoc(args)
-      case 'net':
-        return this.cmdNet()
+      case 'settings':
+        return this.openSettings(args[0]?.toLowerCase())
       case 'code':
         return this.setHome([`Your name: ${this.me.name}`, `Your contact code: ${this.me.code}`, 'Share it so others can /add you.'])
-      case 'name':
-        return this.cmdName(rest)
       case 'add':
         return this.cmdAdd(args[0], rest.slice((args[0] ?? '').length))
       case 'accept':
@@ -825,22 +842,10 @@ export class Engine extends EventEmitter {
         return this.cmdRemove(rest)
       case 'group':
         return this.cmdGroup(args[0]?.toLowerCase(), rest.slice((args[0] ?? '').length).trim())
-      case 'theme':
-        return this.cmdTheme(rest)
-      case 'accent':
-        return this.cmdAccent(rest)
-      case 'badge':
-        return this.cmdBadge(rest)
-      case 'density':
-        return this.cmdDensity(rest)
-      case 'notify':
-        return this.cmdSwitch('notify', rest, 'Desktop notifications')
-      case 'sound':
-        return this.cmdSwitch('sound', rest, 'Notification sound')
       case 'update':
-        return this.cmdUpdate()
+        return this.checkForUpdate()
       case 'changelog':
-        return this.setHome(this.changelogText(rest.trim() || undefined))
+        return this.showChangelog(rest.trim() || undefined)
       case 'search':
         return this.cmdSearch(rest)
       case 'agent':
@@ -856,6 +861,7 @@ export class Engine extends EventEmitter {
           void this.agents.ask(agent, line.trim())
           return
         }
+        if (Object.hasOwn(MOVED, name)) return this.toast('info', `Moved to Settings > ${MOVED[name]} (Alt+S, or Ctrl+P → Settings)`)
         this.toast('error', `Unknown command /${name}. Try /help`)
       }
     }
@@ -888,20 +894,8 @@ export class Engine extends EventEmitter {
         const problem = await this.agents.addCustom(id.toLowerCase(), command)
         return this.toast(problem === undefined ? 'success' : 'error', problem ?? `${id} is ready: /agent new ${id.toLowerCase()}`)
       }
-      case 'remove': {
-        const team = this.agentTeam()
-        if (team.includes(nameArg)) {
-          const kept = (await this.agents.deleteAgent(nameArg)) === 'kept'
-          if (parseAgentTab(this.activeId) === nameArg) this.activate(ROOM_ID)
-          return this.toast('info', kept ? `${nameArg} left the team. Its workspace has unmerged work and was kept: /agent merge ${nameArg} or /agent drop ${nameArg}` : `${nameArg} was deleted`)
-        }
-        if (Object.hasOwn(this.agents.registry.custom(), nameArg)) {
-          const why = this.agents.registry.removeCustom(nameArg)
-          this.agents.emit('change')
-          return this.toast(why === null ? 'info' : 'error', why ?? `${nameArg} was removed`)
-        }
-        return this.toast('error', `Usage: /agent remove <${team.join('|') || 'name'}>`)
-      }
+      case 'remove':
+        return this.removeAgent(nameArg)
       case 'setup':
         this.emit('overlay', 'agents')
         return
@@ -1063,11 +1057,27 @@ export class Engine extends EventEmitter {
     return this.agents.registry.instances().map((c) => c.name)
   }
 
+  /** Removes a teammate (or forgets a custom agent definition by that name). */
+  async removeAgent(nameArg: string): Promise<void> {
+    const team = this.agentTeam()
+    if (team.includes(nameArg)) {
+      const kept = (await this.agents.deleteAgent(nameArg)) === 'kept'
+      if (parseAgentTab(this.activeId) === nameArg) this.activate(ROOM_ID)
+      return this.toast('info', kept ? `${nameArg} left the team. Its workspace has unmerged work and was kept: /agent merge ${nameArg} or /agent drop ${nameArg}` : `${nameArg} was deleted`)
+    }
+    if (Object.hasOwn(this.agents.registry.custom(), nameArg)) {
+      const why = this.agents.registry.removeCustom(nameArg)
+      this.agents.emit('change')
+      return this.toast(why === null ? 'info' : 'error', why ?? `${nameArg} was removed`)
+    }
+    this.toast('error', `Usage: /agent remove <${team.join('|') || 'name'}>`)
+  }
+
   /** The setup screen's `x`: removes the newest teammate that runs `cli`; with none, forgets the custom agent definition `cli`. */
   async removeAgentOf(cli: string): Promise<void> {
     const last = this.agents.registry.instances().filter((c) => c.cli === cli).at(-1)
-    if (last !== undefined) return this.runCommand(`/agent remove ${last.name}`)
-    if (Object.hasOwn(this.agents.registry.custom(), cli)) return this.runCommand(`/agent remove ${cli}`)
+    if (last !== undefined) return this.removeAgent(last.name)
+    if (Object.hasOwn(this.agents.registry.custom(), cli)) return this.removeAgent(cli)
     this.toast('info', `No ${cli} teammate to remove`)
   }
 
@@ -1157,35 +1167,30 @@ export class Engine extends EventEmitter {
     return this.update
   }
 
-  private async cmdUpdate(): Promise<void> {
+  async checkForUpdate(): Promise<void> {
     const latest = await latestVersion(this.dir, { force: true })
     if (latest === undefined) return this.toast('error', 'Could not reach the npm registry')
     if (isNewer(latest, VERSION)) return this.setUpdate(latest)
     this.toast('success', `pager ${VERSION} is up to date`)
   }
 
-  private cmdTheme(name: string): void {
-    const names = THEMES.map((t) => t.name).join(', ')
-    if (name === '') {
-      this.emit('overlay', 'theme')
-      return
-    }
-    if (name.toLowerCase() === 'list') {
-      this.toast('info', `Theme: ${this.prefs.theme}. Available: ${names}`)
-      return
-    }
+  showChangelog(version?: string): void {
+    this.setHome(this.changelogText(version))
+  }
+
+  openThemePicker(): void {
+    this.emit('overlay', 'theme')
+  }
+
+  setTheme(name: string): void {
     const theme = findTheme(name)
-    if (!theme) {
-      this.toast('error', `Unknown theme "${name.slice(0, 20)}". Available: ${names}`)
-      return
-    }
+    if (!theme) return this.toast('error', `Unknown theme "${name.slice(0, 20)}". Available: ${THEMES.map((t) => t.name).join(', ')}`)
     this.updateSettings({ theme: theme.name })
     this.toast('success', `Theme: ${theme.name}`)
   }
 
-  private cmdAccent(raw: string): void {
+  setAccent(raw: string): void {
     const wanted = raw.trim().toLowerCase()
-    if (wanted === '') return this.toast('info', `Accent: ${this.prefs.accent === '' ? 'auto (the theme accent)' : this.prefs.accent}. /accent <color|#hex|auto>`)
     if (wanted === 'auto') {
       this.updateSettings({ accent: '' })
       return this.toast('success', 'Accent: auto')
@@ -1196,9 +1201,8 @@ export class Engine extends EventEmitter {
     this.toast('success', `Accent: ${color}`)
   }
 
-  private cmdBadge(raw: string): void {
+  setBadge(raw: string): void {
     const wanted = raw.trim()
-    if (wanted === '') return this.toast('info', `Badge: ${this.prefs.badge}. /badge <emoji|:shortcode:|none|auto>`)
     const expanded = expandEmoji(wanted)
     const unknownShortcode = /^:[a-z0-9_+-]{2,24}:$/.test(wanted) && expanded === wanted
     const badge = unknownShortcode ? undefined : parseBadge(expanded)
@@ -1207,38 +1211,46 @@ export class Engine extends EventEmitter {
     this.toast('success', `Badge: ${badge}`)
   }
 
-  private cmdSwitch(key: 'notify' | 'sound', raw: string, label: string): void {
-    const wanted = raw.trim().toLowerCase()
-    if (wanted !== 'on' && wanted !== 'off') return this.toast('info', `${label}: ${this.prefs[key] ? 'on' : 'off'}. /${key} on|off`)
-    this.updateSettings({ [key]: wanted === 'on' })
-    this.toast('success', `${label}: ${wanted}`)
-    if (wanted === 'on' && key === 'notify') {
+  setNotify(on: boolean): void {
+    this.updateSettings({ notify: on })
+    this.toast('success', `Desktop notifications: ${on ? 'on' : 'off'}`)
+    if (on) {
       warmDesktop()
       this.alert('pager', 'Notifications are on', true)
     }
   }
 
-  private cmdDensity(raw: string): void {
+  setSound(on: boolean): void {
+    this.updateSettings({ sound: on })
+    this.toast('success', `Notification sound: ${on ? 'on' : 'off'}`)
+  }
+
+  setDensity(raw: string): void {
     const wanted = raw.trim().toLowerCase()
-    if (!isDensity(wanted)) return this.toast(wanted === '' ? 'info' : 'error', `Density: ${this.prefs.density}. Choose ${DENSITIES.join(', ')}`)
+    if (!isDensity(wanted)) return this.toast('error', `Density: ${this.prefs.density}. Choose ${DENSITIES.join(', ')}`)
     this.updateSettings({ density: wanted })
     this.toast('success', `Density: ${wanted}`)
   }
 
-  private cmdNet(): void {
-    const lines = ['Links:']
+  /** The plain on/off switches. A switch fixed by an environment variable or flag cannot be changed here. */
+  setSetting(key: ToggleKey, value: boolean): void {
+    const lock = this.envLocks.find((l) => l.key === key)
+    if (lock !== undefined) return this.toast('error', `Locked by ${lock.source}`)
+    this.updateSettings({ [key]: value })
+  }
+
+  /** What `/net` used to print, as data for the Settings tab. */
+  netInfo(): NetInfo {
+    const contacts: NetInfo['contacts'] = []
     for (const p of this.store.listPeers()) {
       if (p.state !== 'accepted' && p.state !== 'outgoing') continue
       const link = this.net.link(p.pk)
-      const state = link ? `online (caps ${link.hello.caps.join(',') || 'none'})` : 'offline'
-      lines.push(`  ${p.name || pk8(p.pk)}: ${p.state === 'outgoing' ? 'request pending, ' : ''}${state}`)
+      contacts.push({ name: p.name || pk8(p.pk), pending: p.state === 'outgoing', online: link !== undefined, caps: link ? link.hello.caps : [] })
     }
-    if (lines.length === 1) lines.push('  no contacts yet')
-    lines.push(`Network: ${this.net.stats() ?? 'not started'}`, `Listening: ${this.net.listening ? 'yes' : 'no'}`, `Log: ${this.netLog.file}`)
-    this.setHome(lines)
+    return { listening: this.net.listening, contacts, stats: this.net.stats() ?? 'not started', logPath: this.netLog.file }
   }
 
-  private cmdName(next: string): void {
+  setName(next: string): void {
     if (next === '' || next.length > MAX_NAME || hasControl(next)) {
       this.toast('error', `Name must be 1-${MAX_NAME} characters`)
       return
@@ -1248,6 +1260,36 @@ export class Engine extends EventEmitter {
     for (const link of this.net.links()) link.send({ t: 'hello', v: 1, name: next, caps: [...LOCAL_CAPS] })
     this.toast('success', `Name set to ${next}`)
     this.emit('change')
+  }
+
+  // ---------------------------------------------------------------- settings tab
+
+  /** Opens the Settings tab, optionally scrolled to a section. */
+  openSettings(section?: string): void {
+    if (section !== undefined && !SETTINGS_ARGUMENTS.some((a) => a.name === section)) {
+      return this.toast('error', `Unknown section. Try: ${SETTINGS_ARGUMENTS.map((a) => a.name).join(', ')}`)
+    }
+    this.settingsFocus = section
+    this.activate(SETTINGS_ID)
+  }
+
+  /** The section a pending `openSettings` asked for (consumed by the panel on render). */
+  takeSettingsFocus(): string | undefined {
+    const section = this.settingsFocus
+    this.settingsFocus = undefined
+    return section
+  }
+
+  settingsView(): SettingsView {
+    return {
+      settings: this.prefs,
+      name: this.me.name,
+      code: this.me.code,
+      version: VERSION,
+      update: this.update,
+      locks: Object.fromEntries(this.envLocks.map((l) => [l.key, l.source])),
+      themes: THEMES.map((t) => t.name),
+    }
   }
 
   private cmdAdd(code: string | undefined, noteRaw: string): void {
@@ -1335,6 +1377,7 @@ export class Engine extends EventEmitter {
     if (this.agents.names().includes(target)) return this.activate(agentTabId(target))
     if (target === 'terminal') return this.activate(TERM_ID)
     if (target === 'docs') return this.activate(DOCS_ID)
+    if (target === 'settings') return this.activate(SETTINGS_ID)
     const res = this.resolve(this.convs(), query, (c) => c.title, (c) => c.peer)
     if ('error' in res) {
       this.toast('error', res.error)
@@ -1860,6 +1903,7 @@ export class Engine extends EventEmitter {
     }
     if (this.activeId === ROOM_ID || parseAgentTab(this.activeId) !== undefined) return this.agents.say(text, parseAgentTab(this.activeId))
     if (this.activeId === TERM_ID) return this.term.run(text)
+    if (this.activeId === SETTINGS_ID) return this.toast('info', 'The Settings tab takes keys, not text (Up/Down, Enter)')
     const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
     if (!conv) {
       this.toast('warn', 'Open a conversation first (Ctrl+P) or /add a contact')
