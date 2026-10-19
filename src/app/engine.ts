@@ -17,6 +17,7 @@ import { COLOR_WORDS, parseColor } from '../ui/theme/colors.js'
 import { expandEmoji } from '../chat/emoji.js'
 import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from '../chat/events.js'
 import { loadOrCreateIdentity, saveName } from '../chat/identity.js'
+import type { Secrets } from '../chat/secrets.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from '../chat/ingest.js'
 import { LOCAL_CAPS, Net, type PeerLink } from '../net/net.js'
 import { NetLog } from '../net/netlog.js'
@@ -93,6 +94,8 @@ export interface EngineOptions {
   agentAdapters?: Record<string, AdapterSpec>
   /** Probe the installed agent CLIs in the background at startup (the app turns this on; tests call checkAgents themselves). */
   checkAgents?: boolean
+  /** Keys derived from the passphrase when identity.json is locked. */
+  secrets?: Secrets
 }
 
 interface PendingItem {
@@ -129,6 +132,8 @@ export class Engine extends EventEmitter {
   readonly me: { pk: string; code: string; name: string }
 
   private readonly dir: string
+  /** True when the identity and database are protected by a passphrase. */
+  readonly locked: boolean
   private readonly secretKey: Buffer
   private readonly store: Store
   private readonly net: Net
@@ -173,11 +178,12 @@ export class Engine extends EventEmitter {
   private constructor(opts: EngineOptions) {
     super()
     this.dir = opts.dir
+    this.locked = opts.secrets !== undefined
     this.prefs = loadSettings(opts.dir)
     this.input = loadHistory(opts.dir)
-    const identity = loadOrCreateIdentity(opts.dir)
+    const identity = loadOrCreateIdentity(opts.dir, opts.secrets)
     this.secretKey = identity.keyPair.secretKey
-    this.store = new Store(path.join(opts.dir, 'pager.db'))
+    this.store = new Store(path.join(opts.dir, 'pager.db'), opts.secrets?.dbKey)
     this.me = { pk: identity.pk, code: encodeContactCode(identity.keyPair.publicKey), name: identity.name }
     this.docs = new DocStore(identity.pk, (conv, body) => this.publishDoc(conv, body))
     for (const ev of this.store.docEvents()) this.docs.applyEvent(ev)

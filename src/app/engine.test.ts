@@ -16,6 +16,9 @@ import { dmConvId } from '../chat/events.js'
 import { resetDesktopState } from '../platform/desktop.js'
 import { DEFAULT_SETTINGS } from './settings.js'
 import { VERSION } from './version.js'
+import { DatabaseSync } from 'node:sqlite'
+import { Store } from '../chat/db.js'
+import { deriveSecrets } from '../chat/secrets.js'
 import { Net, type PeerLink } from '../net/net.js'
 import { removeTmpDirs, tmpDir, waitFor } from '../testing/testutil.js'
 
@@ -551,3 +554,26 @@ test('docs: a shared document syncs between peers and its operations never show 
 })
 
 after(removeTmpDirs)
+
+test('a locked engine keeps history sealed on disk, reads it back with the key, and refuses without it', async () => {
+  const salt = Buffer.alloc(16, 2)
+  const secrets = deriveSecrets('correct-horse', salt)
+  const dir = tmpDir('pager-lk-')
+  const a = await boot('alice', dir, { secrets })
+  const b = await boot('bob')
+  assert.equal(a.engine.locked, true)
+  assert.equal(b.engine.locked, false)
+  await befriend(a, b)
+  const conv = dmConvId(a.engine.me.pk, b.engine.me.pk)
+  a.engine.activate(conv)
+  await a.engine.submit('sealed hello')
+  await waitFor(() => texts(b, conv).includes('sealed hello'), 15_000, 'b gets it')
+  await a.engine.close()
+  const raw = new DatabaseSync(path.join(dir, 'pager.db'))
+  const bodies = raw.prepare("SELECT body FROM events WHERE op IS NULL").all().map((r) => String(r.body))
+  raw.close()
+  assert.ok(bodies.length > 0 && bodies.every((x) => x.startsWith('pgrenc1:')))
+  assert.throws(() => new Store(path.join(dir, 'pager.db')).listMessages(conv, 5), /passphrase is required/)
+  const again = await boot('alice', dir, { secrets })
+  assert.ok(texts(again, conv).includes('sealed hello'))
+})

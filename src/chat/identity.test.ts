@@ -3,7 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { after, test } from 'node:test'
-import { loadOrCreateIdentity, saveName } from './identity.js'
+import { identityLockState, loadOrCreateIdentity, LockedError, lockIdentity, saveName, unlockIdentity, WrongPassphraseError } from './identity.js'
+import { deriveSecrets } from './secrets.js'
 import { removeTmpDirs, tmpDir } from '../testing/testutil.js'
 
 const tmp = (): string => tmpDir('pager-id-')
@@ -41,3 +42,35 @@ test('a stored name that no hello frame would accept falls back to the default',
 })
 
 after(removeTmpDirs)
+
+test('lock seals the seed (v2), loads with the key only, and unlock restores plaintext', () => {
+  const dir = tmp()
+  const file = path.join(dir, 'identity.json')
+  const before = loadOrCreateIdentity(dir)
+  assert.deepEqual(identityLockState(dir), { exists: true, locked: false })
+  const salt = Buffer.alloc(16, 3)
+  const secrets = deriveSecrets('correct-horse', salt)
+  lockIdentity(dir, secrets, salt)
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.equal(raw.version, 2)
+  assert.equal(raw.seed.length, 64)
+  assert.doesNotMatch(fs.readFileSync(file, 'utf8'), new RegExp(Buffer.from(before.keyPair.secretKey.subarray(0, 32)).toString('hex')))
+  const state = identityLockState(dir)
+  assert.equal(state.locked, true)
+  assert.deepEqual(state.salt, salt)
+  assert.throws(() => loadOrCreateIdentity(dir), LockedError)
+  assert.throws(() => loadOrCreateIdentity(dir, deriveSecrets('wrong-pass-1', salt)), WrongPassphraseError)
+  assert.equal(loadOrCreateIdentity(dir, secrets).pk, before.pk)
+  saveName(dir, 'zed')
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, 2)
+  assert.equal(loadOrCreateIdentity(dir, secrets).name, 'zed')
+  // re-lock with a new passphrase
+  const salt2 = Buffer.alloc(16, 4)
+  const secrets2 = deriveSecrets('battery-staple', salt2)
+  lockIdentity(dir, secrets2, salt2, secrets)
+  assert.equal(loadOrCreateIdentity(dir, secrets2).pk, before.pk)
+  unlockIdentity(dir, secrets2)
+  assert.equal(JSON.parse(fs.readFileSync(file, 'utf8')).version, 1)
+  assert.equal(loadOrCreateIdentity(dir).pk, before.pk)
+  assert.equal(loadOrCreateIdentity(dir).name, 'zed')
+})

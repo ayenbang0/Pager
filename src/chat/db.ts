@@ -1,6 +1,7 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DOC_PREFIX } from '../docs/store.js'
 import type { PagerEvent } from './events.js'
+import { FieldCipher } from './cipher.js'
 import { opOf } from './ops.js'
 
 const SCHEMA_VERSION = 2
@@ -52,43 +53,6 @@ INSERT INTO meta(key, value) VALUES('schema_version', '2');
 
 type Row = Record<string, unknown>
 
-function toPeer(r: Row): Peer {
-  return {
-    pk: r.pk as string,
-    name: r.name as string,
-    state: r.state as PeerState | null,
-    note: r.note as string,
-    requestSent: r.request_sent === 1,
-    acceptSent: r.accept_sent === 1,
-    createdAt: r.created_at as number,
-  }
-}
-
-function toConv(r: Row): Conv {
-  return {
-    id: r.id as string,
-    kind: r.kind as Conv['kind'],
-    title: r.title as string,
-    creator: r.creator as string | null,
-    peer: r.peer as string | null,
-    state: r.state as Conv['state'],
-    readAt: r.read_at as number,
-    createdAt: r.created_at as number,
-  }
-}
-
-function toEvent(r: Row): PagerEvent {
-  return {
-    conv: r.conv as string,
-    author: r.author as string,
-    seq: r.seq as number,
-    ts: r.ts as number,
-    kind: r.kind as PagerEvent['kind'],
-    body: r.body as string,
-    sig: r.sig as string,
-  }
-}
-
 const PEER_COLUMNS: Record<string, string> = {
   name: 'name',
   state: 'state',
@@ -97,12 +61,21 @@ const PEER_COLUMNS: Record<string, string> = {
   acceptSent: 'accept_sent',
 }
 
+const evAad = (conv: string, author: string, seq: number): string => `ev:${conv}:${author}:${seq}`
+const convAad = (id: string): string => `conv:${id}`
+const peerNameAad = (pk: string): string => `peer.name:${pk}`
+const peerNoteAad = (pk: string): string => `peer.note:${pk}`
+
 export class Store {
   private db: DatabaseSync
+  private readonly cipher: FieldCipher
 
-  constructor(path: string) {
+  /** `dbKey` seals events.body, convs.title, peers.name and peers.note; without it those fields are plaintext (existing sealed values then refuse to read). */
+  constructor(path: string, dbKey?: Buffer) {
+    this.cipher = new FieldCipher(dbKey)
     this.db = new DatabaseSync(path)
     this.db.exec('PRAGMA journal_mode=WAL')
+    if (dbKey !== undefined) this.db.exec('PRAGMA secure_delete=ON')
     const hasMeta = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").get()
     if (!hasMeta) this.db.exec(SCHEMA)
     else this.migrate()
@@ -125,17 +98,59 @@ export class Store {
     }
   }
 
+  private toPeer(r: Row): Peer {
+    const pk = r.pk as string
+    return {
+      pk,
+      name: this.cipher.unseal(r.name as string, peerNameAad(pk)),
+      state: r.state as PeerState | null,
+      note: this.cipher.unseal(r.note as string, peerNoteAad(pk)),
+      requestSent: r.request_sent === 1,
+      acceptSent: r.accept_sent === 1,
+      createdAt: r.created_at as number,
+    }
+  }
+
+  private toConv(r: Row): Conv {
+    const id = r.id as string
+    return {
+      id,
+      kind: r.kind as Conv['kind'],
+      title: this.cipher.unseal(r.title as string, convAad(id)),
+      creator: r.creator as string | null,
+      peer: r.peer as string | null,
+      state: r.state as Conv['state'],
+      readAt: r.read_at as number,
+      createdAt: r.created_at as number,
+    }
+  }
+
+  private toEvent(r: Row): PagerEvent {
+    const conv = r.conv as string
+    const author = r.author as string
+    const seq = r.seq as number
+    return {
+      conv,
+      author,
+      seq,
+      ts: r.ts as number,
+      kind: r.kind as PagerEvent['kind'],
+      body: this.cipher.unseal(r.body as string, evAad(conv, author, seq)),
+      sig: r.sig as string,
+    }
+  }
+
   close(): void {
     this.db.close()
   }
 
   getPeer(pk: string): Peer | undefined {
     const r = this.db.prepare('SELECT * FROM peers WHERE pk = ?').get(pk)
-    return r ? toPeer(r) : undefined
+    return r ? this.toPeer(r) : undefined
   }
 
   listPeers(): Peer[] {
-    return this.db.prepare('SELECT * FROM peers ORDER BY created_at, pk').all().map(toPeer)
+    return this.db.prepare('SELECT * FROM peers ORDER BY created_at, pk').all().map((r) => this.toPeer(r))
   }
 
   /** Insert with defaults if missing, else update only the given fields. */
@@ -147,7 +162,9 @@ export class Store {
       const col = PEER_COLUMNS[key]
       if (col === undefined || value === undefined) continue
       sets.push(`${col} = ?`)
-      values.push(typeof value === 'boolean' ? (value ? 1 : 0) : (value as SQLInputValue))
+      if (key === 'name') values.push(this.cipher.seal(value as string, peerNameAad(pk)))
+      else if (key === 'note') values.push(this.cipher.seal(value as string, peerNoteAad(pk)))
+      else values.push(typeof value === 'boolean' ? (value ? 1 : 0) : (value as SQLInputValue))
     }
     if (sets.length === 0) return
     this.db.prepare(`UPDATE peers SET ${sets.join(', ')} WHERE pk = ?`).run(...values, pk)
@@ -159,11 +176,11 @@ export class Store {
 
   getConv(id: string): Conv | undefined {
     const r = this.db.prepare('SELECT * FROM convs WHERE id = ?').get(id)
-    return r ? toConv(r) : undefined
+    return r ? this.toConv(r) : undefined
   }
 
   listConvs(): Conv[] {
-    return this.db.prepare('SELECT * FROM convs ORDER BY created_at, id').all().map(toConv)
+    return this.db.prepare('SELECT * FROM convs ORDER BY created_at, id').all().map((r) => this.toConv(r))
   }
 
   upsertConv(c: Conv): void {
@@ -173,7 +190,7 @@ export class Store {
          ON CONFLICT(id) DO UPDATE SET kind=excluded.kind, title=excluded.title, creator=excluded.creator,
            peer=excluded.peer, state=excluded.state, read_at=excluded.read_at`,
       )
-      .run(c.id, c.kind, c.title, c.creator, c.peer, c.state, c.readAt, c.createdAt)
+      .run(c.id, c.kind, this.cipher.seal(c.title, convAad(c.id)), c.creator, c.peer, c.state, c.readAt, c.createdAt)
   }
 
   markRead(id: string, at: number): void {
@@ -184,7 +201,7 @@ export class Store {
   insertEvent(e: PagerEvent, recvAt: number): boolean {
     const res = this.db
       .prepare('INSERT OR IGNORE INTO events(conv, author, seq, ts, kind, body, sig, recv_at, op) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(e.conv, e.author, e.seq, e.ts, e.kind, e.body, e.sig, recvAt, opOf(e.body))
+      .run(e.conv, e.author, e.seq, e.ts, e.kind, this.cipher.seal(e.body, evAad(e.conv, e.author, e.seq)), e.sig, recvAt, opOf(e.body))
     return res.changes === 1
   }
 
@@ -205,7 +222,7 @@ export class Store {
     return this.db
       .prepare('SELECT * FROM events WHERE conv = ? AND author = ? AND seq > ? ORDER BY seq LIMIT ?')
       .all(conv, author, seq, limit)
-      .map(toEvent)
+      .map((r) => this.toEvent(r))
   }
 
   authorsOf(conv: string): string[] {
@@ -218,9 +235,9 @@ export class Store {
   /** The bodies of the last `limit` text messages `author` sent, oldest first. */
   sentTexts(author: string, limit: number): string[] {
     const rows = this.db
-      .prepare("SELECT body FROM events WHERE kind = 'text' AND author = ? AND op IS NULL ORDER BY ts DESC, seq DESC LIMIT ?")
+      .prepare("SELECT conv, author, seq, body FROM events WHERE kind = 'text' AND author = ? AND op IS NULL ORDER BY ts DESC, seq DESC LIMIT ?")
       .all(author, limit)
-    return rows.reverse().map((r) => r.body as string)
+    return rows.reverse().map((r) => this.toEvent(r).body)
   }
 
   /** Text message totals for `me`, plus the (ts, conv, mine) of every text since `since` for activity charts. */
@@ -243,33 +260,33 @@ export class Store {
     const rows = this.db
       .prepare("SELECT * FROM events WHERE conv = ? AND (op IS NULL OR op = 'rename') ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
       .all(conv, limit)
-    return rows.reverse().map((r) => ({ ...toEvent(r), recvAt: r.recv_at as number }))
+    return rows.reverse().map((r) => ({ ...this.toEvent(r), recvAt: r.recv_at as number }))
   }
 
   /** Every document operation event, in the order they were written. */
   docEvents(): PagerEvent[] {
-    return this.db.prepare("SELECT * FROM events WHERE op = 'doc' ORDER BY ts, author, seq").all().map(toEvent)
+    return this.db.prepare("SELECT * FROM events WHERE op = 'doc' ORDER BY ts, author, seq").all().map((r) => this.toEvent(r))
   }
 
   /** Every reaction event of a conversation, ordered by (author, seq). */
   reactionEvents(conv: string): { author: string; seq: number; body: string }[] {
     return this.db
-      .prepare("SELECT author, seq, body FROM events WHERE conv = ? AND op = 'react' ORDER BY author, seq")
+      .prepare("SELECT conv, author, seq, body FROM events WHERE conv = ? AND op = 'react' ORDER BY author, seq")
       .all(conv)
-      .map((r) => ({ author: r.author as string, seq: r.seq as number, body: r.body as string }))
+      .map((r) => ({ author: r.author as string, seq: r.seq as number, body: this.toEvent(r).body }))
   }
 
   getEvent(conv: string, author: string, seq: number): StoredEvent | undefined {
     const r = this.db.prepare('SELECT * FROM events WHERE conv = ? AND author = ? AND seq = ?').get(conv, author, seq)
-    return r ? { ...toEvent(r), recvAt: r.recv_at as number } : undefined
+    return r ? { ...this.toEvent(r), recvAt: r.recv_at as number } : undefined
   }
 
   /** The newest `limit` text messages (documents excluded) across all conversations, newest first; the search scan window. */
   recentTexts(limit: number): { conv: string; author: string; ts: number; body: string }[] {
     const rows = this.db
-      .prepare("SELECT conv, author, ts, body FROM events WHERE kind = 'text' AND op IS NULL ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
+      .prepare("SELECT conv, author, seq, ts, body FROM events WHERE kind = 'text' AND op IS NULL ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
       .all(limit)
-    return rows.map((r) => ({ conv: r.conv as string, author: r.author as string, ts: r.ts as number, body: r.body as string }))
+    return rows.map((r) => ({ conv: r.conv as string, author: r.author as string, ts: r.ts as number, body: this.toEvent(r).body }))
   }
 
   /** Per conversation, how many text messages from others arrived after `since` (receive time; documents excluded). */
@@ -297,8 +314,8 @@ export class Store {
     const ever = new Set<string>()
     if (c.creator) ever.add(c.creator)
     const left = new Set<string>()
-    for (const r of this.db.prepare("SELECT kind, author, body FROM events WHERE conv = ? AND kind <> 'text'").all(conv)) {
-      if (r.kind === 'member-add') ever.add(r.body as string)
+    for (const r of this.db.prepare("SELECT conv, kind, author, seq, body FROM events WHERE conv = ? AND kind <> 'text'").all(conv)) {
+      if (r.kind === 'member-add') ever.add(this.toEvent(r).body)
       else left.add(r.author as string)
     }
     const current = new Set([...ever].filter((pk) => !left.has(pk)))
@@ -326,5 +343,43 @@ export class Store {
 
   isJoined(conv: string, peer: string): boolean {
     return this.db.prepare('SELECT 1 FROM joined WHERE conv = ? AND peer = ?').get(conv, peer) !== undefined
+  }
+
+  /** Seals every plaintext field in one transaction; sealed fields are left alone, so an interrupted run can be repeated. */
+  encryptAll(): void {
+    if (!this.cipher.enabled) throw new Error('encryptAll needs a key')
+    this.convert((plain, aad, stored) => (this.cipher.isSealed(stored) ? stored : this.cipher.seal(plain(), aad)))
+  }
+
+  /** Writes every field back as plaintext. */
+  decryptAll(): void {
+    this.convert((plain, _aad, stored) => (this.cipher.isSealed(stored) ? plain() : stored))
+  }
+
+  private convert(next: (plain: () => string, aad: string, stored: string) => string): void {
+    this.db.exec('PRAGMA secure_delete=ON')
+    this.db.exec('BEGIN')
+    try {
+      const fix = (table: string, keyCols: string[], col: string, aadOf: (r: Row) => string): void => {
+        const where = keyCols.map((c) => `${c} = ?`).join(' AND ')
+        const upd = this.db.prepare(`UPDATE ${table} SET ${col} = ? WHERE ${where}`)
+        for (const r of this.db.prepare(`SELECT ${keyCols.join(', ')}, ${col} AS v FROM ${table}`).all()) {
+          const stored = r.v as string
+          const aad = aadOf(r)
+          const out = next(() => this.cipher.unseal(stored, aad), aad, stored)
+          if (out !== stored) upd.run(out, ...keyCols.map((c) => r[c] as SQLInputValue))
+        }
+      }
+      fix('events', ['conv', 'author', 'seq'], 'body', (r) => evAad(r.conv as string, r.author as string, r.seq as number))
+      fix('convs', ['id'], 'title', (r) => convAad(r.id as string))
+      fix('peers', ['pk'], 'name', (r) => peerNameAad(r.pk as string))
+      fix('peers', ['pk'], 'note', (r) => peerNoteAad(r.pk as string))
+      this.db.exec('COMMIT')
+    } catch (err) {
+      this.db.exec('ROLLBACK')
+      throw err
+    }
+    this.db.exec('PRAGMA wal_checkpoint(TRUNCATE)')
+    this.db.exec('VACUUM')
   }
 }
