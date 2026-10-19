@@ -101,7 +101,7 @@ export function ModelPicker({ engine, agent, height, onClose }: Props) {
           <>
             <Box flexDirection="column" flexGrow={1} overflow="hidden">
               {agents.length === 0 ? (
-                <SegLine segs={[{ text: ' ' }, pillSeg('no agents are ready', theme.pill.info), { text: ' run ', color: theme.dim }, ...keycap('/agent setup', theme)]} />
+                <SegLine segs={[{ text: ' ' }, pillSeg('no agents are ready', theme.pill.info), { text: ' run ', color: theme.dim }, ...keycap('Alt+S', theme), { text: ' Agents', color: theme.dim }]} />
               ) : null}
               {agents.slice(start, end).map((a, i) => (
                 <SegLine key={a.name} segs={chooserRowSegs(a, agentTint(theme, look, a.name), start + i === at, inner, theme)} />

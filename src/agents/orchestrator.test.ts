@@ -690,4 +690,26 @@ test('checkpoints survive a restart and dropping the workspace deletes their ref
   }
 })
 
+test('setBudget and budgetList round-trip through the same parser; off lifts a cap', () =>
+  withOrch(async ({ orch, toasts }) => {
+    assert.deepEqual(orch.budgetList(), [])
+    orch.setBudget('*', 'turns=20 minutes=60')
+    assert.deepEqual(orch.budgetList(), [{ key: '*', text: 'turns=20 minutes=60' }])
+    orch.setBudget('omp', 'turns=3')
+    assert.deepEqual(orch.budgetList().map((b) => b.key).sort(), ['*', 'omp'])
+    orch.setBudget('omp', 'banana')
+    assert.equal(toasts.at(-1)?.kind, 'error')
+    orch.setBudget('omp', 'off')
+    assert.deepEqual(orch.budgetList(), [{ key: '*', text: 'turns=20 minutes=60' }])
+  }))
+
+test('verifyCommand reads what setVerify stored, and is undefined once cleared', () =>
+  withOrch(async ({ orch }) => {
+    assert.equal(await orch.verifyCommand(), undefined)
+    await orch.setVerify('npm test')
+    assert.equal(await orch.verifyCommand(), 'npm test')
+    await orch.setVerify('off')
+    assert.equal(await orch.verifyCommand(), undefined)
+  }))
+
 after(removeTmpDirs)

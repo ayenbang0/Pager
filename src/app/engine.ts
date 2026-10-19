@@ -19,7 +19,7 @@ import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from
 import { loadOrCreateIdentity, saveName } from '../chat/identity.js'
 import type { Secrets } from '../chat/secrets.js'
 import type { EnvLock } from './envSettings.js'
-import { SETTINGS_ID, type SettingsView } from './settingsView.js'
+import { SETTINGS_ID, type AgentSettingsView, type SettingsView } from './settingsView.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from '../chat/ingest.js'
 import { LOCAL_CAPS, Net, type PeerLink } from '../net/net.js'
 import { NetLog } from '../net/netlog.js'
@@ -140,6 +140,12 @@ const EVENTS_BYTES_PER_FRAME = 200_000
 /** Home asks for the agent stats on every render; the log is only re-read after this long. */
 const AGENT_STATS_TTL_MS = 2000
 
+const AGENTS_OFF = 'Agents are off (Settings > Privacy and Network)'
+const SETTINGS_SUBCOMMANDS: ReadonlySet<string> = new Set(['new', 'add', 'remove', 'setup', 'color', 'model', 'effort', 'budget', 'review', 'risk', 'goal', 'verify', 'memory', 'check', 'guests', 'kick', 'leave'])
+const PALETTE_SUBCOMMANDS: ReadonlySet<string> = new Set(['compact', 'reset', 'usage', 'commands', 'checkpoints', 'cli'])
+
+const EMPTY_AGENT_SETTINGS: AgentSettingsView = { agents: [], review: false, risk: false, goal: '', verify: '', budgets: [], guests: [], sessions: [] }
+
 const hasControl = (s: string): boolean => /\p{Cc}/u.test(s)
 const pk8 = (pk: string): string => pk.slice(0, 8)
 
@@ -152,6 +158,8 @@ export class Engine extends EventEmitter {
   readonly locked: boolean
   private readonly envLocks: EnvLock[]
   private settingsFocus: string | undefined
+  private readonly agentsOn: boolean
+  private verifyCache: string | undefined
   private readonly secretKey: Buffer
   private readonly store: Store
   private readonly net: Net
@@ -198,6 +206,7 @@ export class Engine extends EventEmitter {
     this.dir = opts.dir
     this.locked = opts.secrets !== undefined
     this.envLocks = opts.envLocks ?? []
+    this.agentsOn = opts.agents !== false
     this.prefs = loadSettings(opts.dir)
     this.input = loadHistory(opts.dir)
     const identity = loadOrCreateIdentity(opts.dir, opts.secrets)
@@ -568,6 +577,14 @@ export class Engine extends EventEmitter {
     return undefined
   }
 
+  /** Registers a custom ACP agent from the setup screen's `<id> <command…>` line. */
+  async addCustomAgent(line: string): Promise<void> {
+    const [id = '', ...command] = splitArgs(line)
+    if (id === '' || command.length === 0) return this.toast('error', 'Type: <id> <command…>, e.g. mine node my-agent.js --acp')
+    const problem = await this.agents.addCustom(id.toLowerCase(), command)
+    this.toast(problem === undefined ? 'success' : 'error', problem ?? `${id.toLowerCase()} is ready: add it from the list above`)
+  }
+
   /** Re-checks one agent CLI (setup screen). */
   recheckAgent(cli: string): Promise<void> {
     return this.agents.refresh([cli])
@@ -868,10 +885,10 @@ export class Engine extends EventEmitter {
   }
 
   private async cmdAgent(rest: string, args: string[]): Promise<void> {
-    const usage =
-      '/agent <name> <task> | new <cli> [name] | add <id> <command…> | remove <name> | setup | chain a>b <task> | model|effort <name> [value] | usage [name] | budget [<name|all> turns=<N> minutes=<N>|off] | compact <name> | review on|off | goal <text> | memory [add <text>|clear] | commands <name> | cli <name> <args> | runs | stop [name|run] | merge <name|run> [--force] | verify [<command>|off] | log <run|name> | drop <run|all|name> | reset <name> | undo <name> [n] | checkpoints <name> | check [name] | invite <contact> [--view] | guests | kick <contact|all> | leave [host]'
+    const usage = 'Usage: /agent <name> <task> | chain a>b <task> | runs | stop | merge | drop | undo | log | invite'
     const sub = (args[0] ?? '').toLowerCase()
     if (sub === '') return this.toast('info', usage)
+    if (!this.agentsEnabled()) return this.toast('error', AGENTS_OFF)
     const names = this.agents.names()
     const target = args[1]
     const after = rest.slice(sub.length).trim()
@@ -882,31 +899,6 @@ export class Engine extends EventEmitter {
       return false
     }
     switch (sub) {
-      case 'new': {
-        if (target === undefined) return this.toast('error', 'Usage: /agent new <cli> [name]  (see /agent setup)')
-        const added = await this.agents.addAgent(nameArg, args[2]?.toLowerCase())
-        if (typeof added === 'string') return this.toast('error', added)
-        return this.activate(agentTabId(added.name))
-      }
-      case 'add': {
-        const [id = '', ...command] = splitArgs(after)
-        if (id === '' || command.length === 0) return this.toast('error', 'Usage: /agent add <id> <command> [args…]  (a custom agent that speaks ACP over stdio)')
-        const problem = await this.agents.addCustom(id.toLowerCase(), command)
-        return this.toast(problem === undefined ? 'success' : 'error', problem ?? `${id} is ready: /agent new ${id.toLowerCase()}`)
-      }
-      case 'remove':
-        return this.removeAgent(nameArg)
-      case 'setup':
-        this.emit('overlay', 'agents')
-        return
-      case 'cli': {
-        const [name = '', ...argv] = splitArgs(after)
-        const agent = name.toLowerCase()
-        if (!names.includes(agent) || argv.length === 0) return this.toast('error', `Usage: /agent cli <${names.join('|')}> <cli arguments>`)
-        this.activate(agentTabId(agent))
-        void this.agents.cli(agent, argv)
-        return
-      }
       case 'chain': {
         const spec = after.split(/\s/, 1)[0] ?? ''
         const task = after.slice(spec.length).trim()
@@ -914,64 +906,6 @@ export class Engine extends EventEmitter {
         if (steps === undefined || task === '') return this.toast('error', `Usage: /agent chain <a>><b>[><c>] <task>  (agents: ${names.join(', ')})`)
         this.activate(ROOM_ID)
         void this.agents.chain(steps, task)
-        return
-      }
-      case 'commands':
-        if (!needName('commands')) return
-        this.activate(agentTabId(nameArg))
-        void this.agents.commands(nameArg)
-        return
-      case 'model':
-      case 'effort': {
-        if (!needName(sub)) return
-        const value = after.slice((target ?? '').length).trim()
-        this.activate(agentTabId(nameArg))
-        if (value === '') return void this.emit('overlay', 'model', nameArg)
-        return this.setAgentSetting(nameArg, sub, value)
-      }
-      case 'color': {
-        if (!needName('color')) return
-        const wanted = after.slice((target ?? '').length).trim().toLowerCase()
-        if (wanted === '') return this.toast('info', `Usage: /agent color ${nameArg} <color|#hex|auto>. Colors: ${COLOR_WORDS.join(', ')}`)
-        const color = wanted === 'auto' ? undefined : parseColor(wanted)
-        if (wanted !== 'auto' && color === undefined) return this.toast('error', `"${wanted.slice(0, 20)}" is not a color. Use #rrggbb, auto or one of: ${COLOR_WORDS.join(', ')}`)
-        this.agents.setColor(nameArg, color)
-        return this.toast('success', color === undefined ? `${nameArg} color: auto` : `${nameArg} color: ${color}`)
-      }
-      case 'usage':
-        this.activate(target === undefined ? ROOM_ID : agentTabId(nameArg))
-        void this.agents.usage(target === undefined ? undefined : [nameArg])
-        return
-      case 'budget':
-        this.activate(ROOM_ID)
-        return this.agents.budget(args.slice(1))
-      case 'compact': {
-        if (!needName('compact')) return
-        const mode = (args[2] ?? 'compact').toLowerCase()
-        if (mode !== 'compact' && mode !== 'handoff' && mode !== 'shake') return this.toast('error', 'Usage: /agent compact <name> [handoff|shake]')
-        this.activate(agentTabId(nameArg))
-        return this.agents.compact(nameArg, mode)
-      }
-      case 'review': {
-        const on = (target ?? '').toLowerCase()
-        if (on !== 'on' && on !== 'off') return this.toast('info', `Peer review is ${this.agents.registry.review ? 'on' : 'off'}. /agent review on|off`)
-        this.agents.setReview(on === 'on')
-        return this.toast('success', `Peer review ${on}`)
-      }
-      case 'risk': {
-        const on = (target ?? '').toLowerCase()
-        if (on !== 'on' && on !== 'off') return this.toast('info', `Risky-action approval is ${this.agents.registry.riskApproval ? 'on' : 'off'}. /agent risk on|off`)
-        this.agents.setRiskApproval(on === 'on')
-        return this.toast('success', `Risky-action approval ${on}`)
-      }
-      case 'goal':
-        this.activate(ROOM_ID)
-        return this.agents.setGoal(after)
-      case 'memory': {
-        const action = (target ?? 'show').toLowerCase()
-        if (action !== 'show' && action !== 'add' && action !== 'clear') return this.toast('error', 'Usage: /agent memory [add <text>|clear]')
-        this.activate(ROOM_ID)
-        void this.agents.memory(action, after.slice((target ?? '').length).trim())
         return
       }
       case 'runs':
@@ -984,18 +918,12 @@ export class Engine extends EventEmitter {
         const which = args.slice(1).find((a) => a !== '--force')
         return which === undefined ? this.toast('error', 'Usage: /agent merge <name|run> [--force]') : this.agents.merge(which, force)
       }
-      case 'verify':
-        this.activate(ROOM_ID)
-        return void this.agents.setVerify(after)
       case 'log':
         if (target === undefined) return this.toast('error', 'Usage: /agent log <run|name>')
         this.activate(ROOM_ID)
         return this.agents.showLog(nameArg)
       case 'drop':
         return target === undefined ? this.toast('error', 'Usage: /agent drop <run|all|name>') : this.agents.drop(target)
-      case 'reset':
-        if (!needName('reset')) return
-        return void this.agents.reset(nameArg)
       case 'undo': {
         if (!needName('undo')) return
         const turns = args[2] === undefined ? 1 : Number(args[2])
@@ -1003,22 +931,8 @@ export class Engine extends EventEmitter {
         this.activate(agentTabId(nameArg))
         return void this.agents.undo(nameArg, turns)
       }
-      case 'checkpoints':
-        if (!needName('checkpoints')) return
-        this.activate(agentTabId(nameArg))
-        return void this.agents.listCheckpoints(nameArg)
-      case 'check':
-        this.activate(ROOM_ID)
-        void this.agents.check(target === undefined ? undefined : [nameArg])
-        return
       case 'invite':
         return this.agentInvite(args.slice(1))
-      case 'guests':
-        return this.agentGuests()
-      case 'kick':
-        return this.agentKick(after)
-      case 'leave':
-        return this.agentLeave(after)
       default:
         break
     }
@@ -1028,7 +942,130 @@ export class Engine extends EventEmitter {
       void this.agents.ask(sub, after)
       return
     }
-    this.toast('error', `Usage: ${usage}`)
+    if (SETTINGS_SUBCOMMANDS.has(sub)) return this.toast('info', 'Moved to Settings > Agents (Alt+S, or Ctrl+P → Settings)')
+    if (PALETTE_SUBCOMMANDS.has(sub)) return this.toast('info', `Moved to the palette (Ctrl+P → "Agent <name>: ${sub === 'reset' ? 'reset session' : sub === 'commands' ? 'slash commands' : sub === 'cli' ? 'CLI…' : sub}")`)
+    this.toast('error', usage)
+  }
+
+  // ---------------------------------------------------------------- agent settings (the Settings tab and the palette)
+
+  /** Whether the agents room, the AI tab and the agent tools are available in this run. */
+  agentsEnabled(): boolean {
+    return this.agentsOn
+  }
+
+  agentSettingsView(): AgentSettingsView {
+    const instances = this.agents.registry.instances()
+    const room = this.agents.room()
+    return {
+      agents: instances.map((c) => ({
+        name: c.name,
+        cli: c.cli,
+        model: c.model ?? 'default',
+        effort: c.effort ?? 'default',
+        color: c.color ?? 'auto',
+        ready: room.agents.some((a) => a.name === c.name),
+      })),
+      review: this.agents.registry.review,
+      risk: this.agents.registry.riskApproval,
+      goal: this.agents.goal(),
+      verify: this.verifyCache ?? '',
+      budgets: this.agents.budgetList(),
+      guests: this.share.guests().map((g) => ({ pk: g.pk, name: g.name, mode: g.access })),
+      sessions: this.share.sessions().map((s) => ({ pk: s.pk, name: s.name })),
+    }
+  }
+
+  /** Reads the verify command (it lives in the repository's store) and tells the Settings tab. */
+  async refreshAgentSettings(): Promise<void> {
+    if (!this.agentsOn) return
+    const verify = await this.agents.verifyCommand()
+    if (verify === this.verifyCache) return
+    this.verifyCache = verify
+    this.emit('change')
+  }
+
+  setAgentReview(on: boolean): void {
+    this.agents.setReview(on)
+    this.toast('success', `Peer review ${on ? 'on' : 'off'}`)
+  }
+
+  setAgentRisk(on: boolean): void {
+    this.agents.setRiskApproval(on)
+    this.toast('success', `Risky-action approval ${on ? 'on' : 'off'}`)
+  }
+
+  setAgentColor(name: string, raw: string): void {
+    const wanted = raw.trim().toLowerCase()
+    if (!this.agentTeam().includes(name)) return this.toast('error', `No agent named ${name}`)
+    const color = wanted === 'auto' ? undefined : parseColor(wanted)
+    if (wanted !== 'auto' && color === undefined) return this.toast('error', `"${wanted.slice(0, 20)}" is not a color. Use #rrggbb, auto or one of: ${COLOR_WORDS.join(', ')}`)
+    this.agents.setColor(name, color)
+    this.toast('success', color === undefined ? `${name} color: auto` : `${name} color: ${color}`)
+  }
+
+  /** `key` is an agent name or `*` for every agent; `text` is `turns=20 minutes=60` or `off`. */
+  setAgentBudget(key: string, text: string): void {
+    this.agents.setBudget(key, text.trim() === '' ? 'off' : text)
+    this.emit('change')
+  }
+
+  setAgentVerify(text: string): void {
+    this.activate(ROOM_ID)
+    const value = text.trim()
+    this.verifyCache = value === '' || value.toLowerCase() === 'off' ? undefined : value
+    void this.agents.setVerify(value === '' ? 'off' : value)
+  }
+
+  setAgentGoal(text: string): void {
+    this.activate(ROOM_ID)
+    this.agents.setGoal(text)
+  }
+
+  agentMemory(action: 'show' | 'add' | 'clear', text = ''): void {
+    this.activate(ROOM_ID)
+    void this.agents.memory(action, text)
+  }
+
+  openAgentSetup(): void {
+    this.emit('overlay', 'agents')
+  }
+
+  openModelPicker(name: string): void {
+    this.activate(agentTabId(name))
+    this.emit('overlay', 'model', name)
+  }
+
+  /** Palette actions on one agent (or all): the work the removed `/agent` subcommands did. */
+  agentAction(kind: 'compact' | 'reset' | 'commands' | 'checkpoints' | 'check' | 'usage', name?: string): void {
+    if (!this.agentsEnabled()) return this.toast('error', AGENTS_OFF)
+    const known = name !== undefined && this.agents.names().includes(name)
+    if (name !== undefined && !known) return this.toast('error', `No agent named ${name}`)
+    switch (kind) {
+      case 'compact':
+        this.activate(agentTabId(name ?? ''))
+        return this.agents.compact(name ?? '', 'handoff')
+      case 'reset':
+        return void this.agents.reset(name ?? '')
+      case 'commands':
+        this.activate(agentTabId(name ?? ''))
+        return void this.agents.commands(name ?? '')
+      case 'checkpoints':
+        this.activate(agentTabId(name ?? ''))
+        return void this.agents.listCheckpoints(name ?? '')
+      case 'check':
+        this.activate(ROOM_ID)
+        return void this.agents.check(name === undefined ? undefined : [name])
+      case 'usage':
+        this.activate(name === undefined ? ROOM_ID : agentTabId(name))
+        return void this.agents.usage(name === undefined ? undefined : [name])
+    }
+  }
+
+  agentCli(name: string, args: string[]): void {
+    if (!this.agents.names().includes(name) || args.length === 0) return this.toast('error', `Usage: <${this.agents.names().join('|')}> <cli arguments>`)
+    this.activate(agentTabId(name))
+    void this.agents.cli(name, args)
   }
 
   private agentInvite(args: string[]): void {
@@ -1041,7 +1078,7 @@ export class Engine extends EventEmitter {
     const who = res.item.name || pk8(res.item.pk)
     if (why !== undefined) return this.toast('error', why)
     this.toast('success', `Invited ${who} to your agent session (${access})`)
-    if (this.agents.names().length === 0) this.toast('warn', `No agent is ready yet (/agent setup): ${who} will see an empty room until one is`)
+    if (this.agents.names().length === 0) this.toast('warn', `No agent is ready yet (Settings > Agents): ${who} will see an empty room until one is`)
     void this.agents.hasRepo().then((ok) => {
       if (!ok) this.toast('warn', `pager is not inside a git repository, so your agents cannot run: ${who}'s requests will fail. Start pager inside one.`)
     })
@@ -1070,7 +1107,7 @@ export class Engine extends EventEmitter {
       this.agents.emit('change')
       return this.toast(why === null ? 'info' : 'error', why ?? `${nameArg} was removed`)
     }
-    this.toast('error', `Usage: /agent remove <${team.join('|') || 'name'}>`)
+    this.toast('error', `No teammate named ${nameArg}. Teammates: ${team.join(', ') || 'none'}`)
   }
 
   /** The setup screen's `x`: removes the newest teammate that runs `cli`; with none, forgets the custom agent definition `cli`. */
@@ -1086,7 +1123,7 @@ export class Engine extends EventEmitter {
     this.setHome(['Your agent session:', ...(guests.length === 0 ? ['  nobody invited: /agent invite <contact> [--view]'] : guests.map((g) => `  ${g.name}  ${g.access}  ${g.state === 'invited' ? 'invited' : g.online ? 'online' : 'offline'}`))])
   }
 
-  private agentKick(query: string): void {
+  agentKick(query: string): void {
     if (query.trim().toLowerCase() === 'all') return this.reportKick(this.share.kick('all'), 'everyone')
     const res = this.resolve(this.share.guests(), query, (g) => g.name, (g) => g.pk)
     if ('error' in res) return this.toast('error', res.error)
@@ -1097,12 +1134,12 @@ export class Engine extends EventEmitter {
     this.toast(why === undefined ? 'info' : 'error', why ?? `Removed ${who} from your agent session`)
   }
 
-  private agentLeave(query: string): void {
+  agentLeave(query: string): void {
     const sessions = this.share.sessions()
     const open = parseSharedTab(this.activeId)
     const res = query === '' && open !== undefined ? { item: sessions.find((s) => s.pk === open) } : this.resolve(sessions, query, (s) => s.name, (s) => s.pk)
     if ('error' in res) return this.toast('error', res.error)
-    if (res.item === undefined) return this.toast('error', 'Usage: /agent leave <host>')
+    if (res.item === undefined) return this.toast('error', 'Name the host to leave')
     this.share.decline(res.item.pk)
     this.toast('info', `Left ${res.item.name}'s agent session`)
   }
@@ -1289,6 +1326,8 @@ export class Engine extends EventEmitter {
       update: this.update,
       locks: Object.fromEntries(this.envLocks.map((l) => [l.key, l.source])),
       themes: THEMES.map((t) => t.name),
+      agentsOn: this.agentsOn,
+      agents: this.agentsOn ? this.agentSettingsView() : EMPTY_AGENT_SETTINGS,
     }
   }
 

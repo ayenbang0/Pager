@@ -58,7 +58,7 @@ const agents = (over: Partial<HomeAgents> = {}): HomeAgents => ({
   changes: 1,
   usage: { agent: 'omp', line: 'Plan: 41% used, resets in 2h', age: '5m ago' },
   unadded: 0,
-  hint: '/agent usage · /agent review on|off · Alt+M model',
+  hint: 'Ctrl+P usage · Alt+M model',
   ...over,
 })
 const input = (over: Partial<HomeInput> = {}): HomeInput => ({
@@ -225,11 +225,11 @@ test('AGENTS: rows in the agent color, state words, pills by context pressure, s
   assert.ok(new Set(spark?.map((s) => s.color)).size > 3, 'sparkline is a gradient')
 })
 
-test('AGENTS: with none ready the hint points at /agent setup, in a bright color', () => {
-  const card = agentsCard(50, stats(), agents({ rows: [], hint: 'no agents ready — /agent setup · 2 installed, not added' }), DEFAULT_LOOK, theme)
+test('AGENTS: with none ready the hint points at Alt+S › Agents, in a bright color', () => {
+  const card = agentsCard(50, stats(), agents({ rows: [], hint: 'no agents ready — Alt+S › Agents · 2 installed, not added' }), DEFAULT_LOOK, theme)
   assert.match(lines(card.lines).join(' '), /coding agents you @mention/)
   const tail = card.tail ?? []
-  assert.match(lines(tail).join(' ').replace(/\s+/g, ' '), /no agents ready — \/agent setup · 2 installed, not added/)
+  assert.match(lines(tail).join(' ').replace(/\s+/g, ' '), /no agents ready — Alt\+S › Agents · 2 installed, not added/)
   assert.ok(tail.flat().some((s) => s.color === theme.glow))
   assert.match(text(tail[0] ?? []), /^▸ /)
 })

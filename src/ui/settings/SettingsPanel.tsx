@@ -57,6 +57,8 @@ export function SettingsPanel({ engine, width, height, top, active, ctl, onField
     const at = rowsRef.current.findIndex((r) => r.kind === 'section' && r.section === wanted)
     if (at >= 0) setState({ cursor: firstCursor(rowsRef.current, at), confirming: null })
   })
+  // The agent rows include the verify command, which is read from the repository.
+  useEffect(() => void engine.refreshAgentSettings(), [engine])
   // The first selectable row on entry (the list starts with a section header).
   useEffect(() => {
     if (stateRef.current.cursor === 0) setState({ cursor: firstCursor(rowsRef.current, 0), confirming: null })
@@ -81,7 +83,7 @@ export function SettingsPanel({ engine, width, height, top, active, ctl, onField
           const masked = row.kind === 'text' && row.masked === true
           return onField({
             label: row.label,
-            initial: masked ? '' : row.value,
+            initial: masked ? '' : row.kind === 'text' ? (row.initial ?? row.value) : row.value,
             masked,
             onSubmit: (text) => applySettingEdit(engine, effect.id, text),
           })

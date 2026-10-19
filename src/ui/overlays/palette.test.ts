@@ -22,8 +22,9 @@ test('section names complete after "/settings "', () => {
 })
 
 test('agent names and subcommands complete after "/agent "', () => {
-  assert.deepEqual(matchCommands('/agent cl', ['omp', 'claude']).map((c) => c.name), ['claude', 'cli'])
-  assert.deepEqual(matchCommands('/agent cl').map((c) => c.name), ['cli'])
+  assert.deepEqual(matchCommands('/agent c', ['omp', 'claude']).map((c) => c.name), ['claude', 'chain'])
+  assert.deepEqual(matchCommands('/agent c').map((c) => c.name), ['chain'])
+  assert.deepEqual(matchCommands('/agent cl'), [])
   assert.equal(matchCommands('/agent ', ['omp', 'claude']).length, 6)
   assert.deepEqual(matchCommands('/agent claude fix', ['claude']).length, 0)
 })

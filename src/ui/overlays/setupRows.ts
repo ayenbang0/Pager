@@ -70,8 +70,8 @@ export type SetupEffect =
   | { kind: 'install'; text: string }
   | { kind: 'recheck'; cli: string }
   | { kind: 'remove'; cli: string }
-  /** The `custom:` line was submitted: the `/agent add` command to run, or the usage problem. */
-  | { kind: 'custom'; command: string }
+  /** The `custom:` line was submitted: `<id> <command…>` to register. */
+  | { kind: 'custom'; line: string }
   | { kind: 'usage' }
 
 /** Rule: printable keys act only when no text field is focused. On the `custom:` row every printable key types, `r` and `x` included. `r` rechecks, `x` (or Delete) removes. */
@@ -87,7 +87,7 @@ export function setupKey(state: SetupState, rows: readonly SetupRow[], p: Press)
       const line = state.text.trim()
       const words = line.split(/\s+/)
       if (line === '' || words.length < 2) return { state, effect: { kind: 'usage' } }
-      return { state: { ...state, text: '' }, effect: { kind: 'custom', command: `/agent add ${line}` } }
+      return { state: { ...state, text: '' }, effect: { kind: 'custom', line } }
     }
     const target = rows[row]
     if (target === undefined) return { state }

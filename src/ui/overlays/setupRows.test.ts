@@ -74,9 +74,9 @@ test('printable keys never act on an agent row other than r and x', () => {
   assert.equal(setupKey(at(0), rows, { input: 'a' }).state.text, '')
 })
 
-test('the custom row submits /agent add <id> <command…>, and refuses an incomplete line', () => {
+test('the custom row submits <id> <command…>, and refuses an incomplete line', () => {
   const filled = setupKey(at(rows.length, 'mine node agent.js --acp'), rows, { input: '', return: true })
-  assert.deepEqual(filled.effect, { kind: 'custom', command: '/agent add mine node agent.js --acp' })
+  assert.deepEqual(filled.effect, { kind: 'custom', line: 'mine node agent.js --acp' })
   assert.equal(filled.state.text, '')
   assert.deepEqual(setupKey(at(rows.length, 'mine'), rows, { input: '', return: true }).effect, { kind: 'usage' })
   assert.deepEqual(setupKey(at(rows.length), rows, { input: '', return: true }).effect, { kind: 'usage' })

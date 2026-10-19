@@ -57,7 +57,7 @@ export function AgentSetup({ engine, height, onClose }: Props) {
       case 'remove':
         return void engine.removeAgentOf(effect.cli)
       case 'custom':
-        return void engine.submit(effect.command)
+        return void engine.addCustomAgent(effect.line)
       case 'usage':
         return toast('error', 'Type: custom: <id> <command…>, e.g. mine node my-agent.js --acp')
     }

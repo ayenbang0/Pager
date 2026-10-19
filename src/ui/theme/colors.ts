@@ -23,7 +23,7 @@ const ANSI_RGB: Record<string, Rgb> = {
   whiteBright: [255, 255, 255],
 }
 
-/** Friendly names for `/accent` and `/agent color`; they resolve to a hex value. */
+/** Friendly names for the accent and agent colors; they resolve to a hex value. */
 const FRIENDLY: Record<string, string> = {
   orange: '#ff8a00',
   pink: '#ff4fa3',
@@ -46,7 +46,7 @@ const FRIENDLY: Record<string, string> = {
 const SIXTEEN = Object.keys(ANSI_RGB).filter((n) => n !== 'grey')
 const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i
 
-/** Every name `/accent` and `/agent color` understand, for menus and error messages. */
+/** Every name the accent and agent colors understand, for menus and error messages. */
 export const COLOR_WORDS: readonly string[] = [...Object.keys(FRIENDLY), 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white']
 
 /** A user-supplied color to its stored form (`#rrggbb` or an Ink name), or undefined when it is not a color. */

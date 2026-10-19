@@ -376,7 +376,7 @@ export class Orchestrator extends EventEmitter {
     const to = targets.length > 0 ? targets : own === undefined ? [] : [own]
     this.append(who, 'text', text, to.length > 0 ? to : undefined, actor?.pk)
     if (to.length === 0) {
-      const hint = names.length === 0 ? 'No agents are ready: /agent setup' : `Name an agent: ${names.map((n) => `@${n}`).join(', ')} or @all`
+      const hint = names.length === 0 ? 'No agents are ready: Settings > Agents' : `Name an agent: ${names.map((n) => `@${n}`).join(', ')} or @all`
       if (actor === undefined) this.toast('warn', hint)
       else this.post(hint)
       return
@@ -580,7 +580,7 @@ export class Orchestrator extends EventEmitter {
     }
   }
 
-  /** `/agent checkpoints <name>`: lists the turns that `undo` can take back, newest first (1 = the last turn). */
+  /** `Agent <name>: checkpoints`: lists the turns that `undo` can take back, newest first (1 = the last turn). */
   async listCheckpoints(target: string): Promise<void> {
     const root = await this.rootDir()
     if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
@@ -674,14 +674,14 @@ export class Orchestrator extends EventEmitter {
     }
   }
 
-  /** `/agent verify`: shows, sets (a command line) or clears (`off`) the check run in each worktree after a turn and before a merge. */
+  /** Settings > Agents verify: shows, sets (a command line) or clears (`off`) the check run in each worktree after a turn and before a merge. */
   async setVerify(text: string): Promise<void> {
     const root = await this.rootDir()
     if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
     const command = text.trim()
     if (command === '') {
       const current = this.verifyStore.get(root)
-      return this.post(current === undefined ? 'verify is off: /agent verify <command> runs it in each worktree after a turn and before a merge' : `verify: ${current}`)
+      return this.post(current === undefined ? 'verify is off: set a command in Settings > Agents to run it in each worktree after a turn and before a merge' : `verify: ${current}`)
     }
     const why = this.verifyStore.set(root, command.toLowerCase() === 'off' ? undefined : command)
     if (why !== undefined) return this.toast('error', `Could not save the verify command: ${why}`)
@@ -694,7 +694,7 @@ export class Orchestrator extends EventEmitter {
     const w = this.workers.get(target) ?? this.find(target)?.worker
     if (w === undefined) return this.toast('error', `No agent or run "${target}"`)
     const last = this.verifyResults.get(w.name)
-    if (last === undefined) return this.toast('info', `No verify output for ${w.name} yet (/agent verify <command>)`)
+    if (last === undefined) return this.toast('info', `No verify output for ${w.name} yet (set one in Settings > Agents)`)
     const age = Math.max(0, Math.round((Date.now() - last.at) / 1000))
     this.post(`${w.name} ${verifyHeadline(last)} on ${last.sha.slice(0, 7)}, ${age}s ago: ${last.command}${last.truncated ? '\n(earlier output dropped)' : ''}\n${last.output.trimEnd() || '(no output)'}`, [w.name])
   }
@@ -795,7 +795,7 @@ export class Orchestrator extends EventEmitter {
     return hint !== undefined && hint !== '' && AUTH_HINT.test(reason) ? `${reason} (${hint})` : reason
   }
 
-  /** `/agent check`: re-checks every agent and posts what it found, including a real prompt round trip for one-shot capable agents. */
+  /** `Agents: check installs`: re-checks every agent and posts what it found, including a real prompt round trip for one-shot capable agents. */
   async check(names?: string[]): Promise<void> {
     const clis = names === undefined ? [...new Set([...SEED_CLIS, ...this.registry.instances().map((i) => i.cli)])] : names.map((n) => this.registry.instances().find((i) => i.name === n)?.cli ?? n)
     await this.refresh(clis)
@@ -828,7 +828,7 @@ export class Orchestrator extends EventEmitter {
 
   /** Adds a named teammate, checking its CLI first when needed. */
   async addAgent(cli: string, name?: string): Promise<AgentConfig | string> {
-    if (!this.registry.isKnownCli(cli)) return `Unknown agent "${cli}". See /agent setup`
+    if (!this.registry.isKnownCli(cli)) return `Unknown agent "${cli}". See Settings > Agents`
     if (this.registry.readiness(cli).state !== 'ready') await this.refresh([cli])
     const state = this.registry.readiness(cli)
     if (state.state !== 'ready') return `${cli} is not ready: ${state.state === 'missing' || state.state === 'failed' ? state.reason : state.state}`
@@ -896,7 +896,23 @@ export class Orchestrator extends EventEmitter {
     this.emit('change')
   }
 
-  /** `/agent budget`: show the daily caps and today's use, or set or lift a cap. `args` follow the word `budget`. */
+  /** Every stored daily cap as Settings rows: the default for all agents (key `*`) and one per agent that has its own. */
+  budgetList(): { key: string; text: string }[] {
+    return this.budgets.entries().map(([key, cap]) => ({ key, text: describeCap(cap) }))
+  }
+
+  /** Sets (`turns=20 minutes=60`) or lifts (`off`) one cap through the same parser and toasts as `budget`. */
+  setBudget(key: string, text: string): void {
+    this.budget([key === ALL_KEY ? 'all' : key, ...text.trim().split(/\s+/).filter(Boolean)])
+  }
+
+  /** The command run after each turn and before a merge, if one is set (undefined without a repository). */
+  async verifyCommand(): Promise<string | undefined> {
+    const root = await this.rootDir()
+    return root === undefined ? undefined : this.verifyStore.get(root)
+  }
+
+  /** Daily budgets: show the daily caps and today's use, or set or lift a cap. `args` follow the word `budget`. */
   budget(args: string[]): void {
     const cmd = parseBudget(args, this.names())
     if (cmd.kind === 'error') return this.toast('error', cmd.message)
@@ -925,7 +941,7 @@ export class Orchestrator extends EventEmitter {
     const root = await this.rootDir()
     if (root === undefined) return this.toast('error', 'Agents need a git repository. Start pager inside one.')
     if (action === 'add') {
-      if (text.trim() === '') return this.toast('error', 'Usage: /agent memory add <text>')
+      if (text.trim() === '') return this.toast('error', 'Write the note in Settings > Agents > Add a note to memory')
       this.addMemory(root, 'you', text.replace(/\s+/g, ' ').trim().slice(0, NOTE_MAX_CHARS))
       return this.toast('success', 'Remembered')
     }
@@ -942,7 +958,7 @@ export class Orchestrator extends EventEmitter {
     const cfg = this.registry.instances().find((c) => c.name === name)
     const spec = cfg === undefined ? undefined : this.specFor(cfg.cli)
     if (cfg === undefined || spec === undefined || !this.acpPossible(spec)) {
-      return this.toast('error', `${name} has no ACP mode here; try /agent cli ${name} --help`)
+      return this.toast('error', `${name} has no ACP mode here; try the palette: Agent ${name}: CLI… (--help)`)
     }
     let list = this.commandStore.get(cfg.cli)
     if (list.length === 0) {

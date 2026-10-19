@@ -67,12 +67,44 @@ function advanced(view: SettingsView): SettingsRow[] {
   ]
 }
 
+function agents(view: SettingsView): SettingsRow[] {
+  if (!view.agentsOn) return []
+  const a = view.agents
+  const rows: SettingsRow[] = [{ kind: 'action', id: 'agents.setup', label: 'Teammates and installs…' }]
+  for (const t of a.agents) {
+    rows.push({ kind: 'action', id: `agent.model:${t.name}`, label: `${t.name}: model and effort`, value: `${t.model} · ${t.effort}` })
+    rows.push({ kind: 'choice', id: `agent.color:${t.name}`, label: `${t.name}: color`, options: ['auto', ...COLOR_WORDS], value: t.color, custom: true })
+  }
+  rows.push({ kind: 'toggle', id: 'agents.review', label: 'Peer review after file changes', value: a.review })
+  rows.push({ kind: 'toggle', id: 'agents.risk', label: 'Ask before risky actions', value: a.risk })
+  const budgetOf = (key: string): string => a.budgets.find((b) => b.key === key)?.text ?? ''
+  for (const key of ['*', ...a.agents.map((t) => t.name)]) {
+    rows.push({
+      kind: 'text',
+      id: `agents.budget:${key}`,
+      label: `Daily cap · ${key === '*' ? 'all agents' : key} (e.g. turns=20 minutes=60, or off)`,
+      value: budgetOf(key) === '' ? 'no cap' : budgetOf(key),
+      initial: budgetOf(key),
+    })
+  }
+  rows.push({ kind: 'text', id: 'agents.verify', label: 'Verify command (off clears)', value: a.verify === '' ? 'off' : a.verify, initial: a.verify })
+  rows.push({ kind: 'text', id: 'agents.goal', label: 'Shared goal', value: a.goal })
+  rows.push({ kind: 'action', id: 'agents.memory.show', label: 'Show shared memory' })
+  rows.push({ kind: 'text', id: 'agents.memory.add', label: 'Add a note to memory', value: '' })
+  rows.push({ kind: 'action', id: 'agents.memory.clear', label: 'Clear shared memory', confirm: true })
+  if (a.guests.length > 0 || a.sessions.length > 0) rows.push({ kind: 'info', label: 'Shared sessions', value: '' })
+  for (const g of a.guests) rows.push({ kind: 'action', id: `guest.kick:${g.pk}`, label: `Remove ${g.name}`, value: g.mode, confirm: true })
+  if (a.guests.length > 0) rows.push({ kind: 'action', id: 'guest.kickall', label: 'Remove everyone from my session', confirm: true })
+  for (const s of a.sessions) rows.push({ kind: 'action', id: `session.leave:${s.pk}`, label: `Leave ${s.name}'s session`, confirm: true })
+  return rows
+}
+
 const BUILDERS: Record<SettingsSection, (view: SettingsView) => SettingsRow[]> = {
   profile,
   appearance,
   notifications,
   folders: () => [],
-  agents: () => [],
+  agents,
   ai: () => [],
   privacy: () => [],
   updates,

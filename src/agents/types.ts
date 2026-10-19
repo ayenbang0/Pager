@@ -12,6 +12,6 @@ export interface AgentView {
   unread: number
   /** Share of the context window in use, 0..1, when the agent reports it. */
   contextPct?: number
-  /** The agent's personal color from `/agent color`; absent when the theme picks one. */
+  /** The agent's personal color from Settings > Agents; absent when the theme picks one. */
   color?: string
 }

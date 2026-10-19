@@ -97,7 +97,7 @@ test('files changed come from the latest run of that agent', () => {
 })
 
 test('the hub header says who works on what', () => {
-  assert.equal(whoDoesWhat([]), 'no agents ready — /agent setup')
+  assert.equal(whoDoesWhat([]), 'no agents ready — Alt+S › Agents')
   assert.equal(
     whoDoesWhat([agent({ state: 'working', task: 'fix parser' }), agent({ name: 'claude', cli: 'claude' }), agent({ name: 'oc', state: 'asking' }), agent({ name: 'h', state: 'reviewing' })]),
     'omp ▸ fix parser · claude idle · oc asks · h reviews',

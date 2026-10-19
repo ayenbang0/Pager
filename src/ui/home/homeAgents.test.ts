@@ -37,9 +37,9 @@ test('an agent with no recorded turns has zero totals, and a name like a prototy
   assert.equal(home.rows[0]?.turns, 0)
 })
 
-test('the hint with no agent ready says /agent setup, and mentions installed agents not yet added', () => {
-  assert.equal(homeAgents(input({ agents: [] })).hint, 'no agents ready — /agent setup')
-  assert.equal(homeAgents(input({ agents: [], unadded: 2 })).hint, 'no agents ready — /agent setup · 2 installed, not added')
+test('the hint with no agent ready says Alt+S › Agents, and mentions installed agents not yet added', () => {
+  assert.equal(homeAgents(input({ agents: [] })).hint, 'no agents ready — Alt+S › Agents')
+  assert.equal(homeAgents(input({ agents: [], unadded: 2 })).hint, 'no agents ready — Alt+S › Agents · 2 installed, not added')
 })
 
 test('the hint follows what needs attention: questions, then reviews, then a first task, then more agents', () => {
@@ -47,7 +47,7 @@ test('the hint follows what needs attention: questions, then reviews, then a fir
   assert.equal(homeAgents(input({ questions: q })).hint, '1 question waiting — Alt+Q')
   assert.equal(homeAgents(input({ reviewsPending: 2 })).hint, '2 reviews running')
   assert.equal(homeAgents(input({ stats: stats({ perAgent: {} }) })).hint, 'try @omp <task> in any chat')
-  assert.equal(homeAgents(input({ unadded: 1 })).hint, '1 more installed — /agent setup')
+  assert.equal(homeAgents(input({ unadded: 1 })).hint, '1 more installed — Alt+S › Agents')
   assert.match(homeAgents(input()).hint, /Alt\+M/)
   assert.match(homeAgents(input()).hint, /Alt\+I invite a contact/)
 })
@@ -84,8 +84,8 @@ test('help gets one section per agent: how to talk to it, model and effort, usag
   const omp = sections[0]!.rows
   assert.deepEqual(omp[0], ['@omp <message>', 'Talk to it from any chat, or open its tab (omp)'])
   assert.match(omp[1]?.[1] ?? '', /Model gpt-5 · effort default · context 50%/)
-  assert.deepEqual(omp[2], ['/agent usage omp', 'Plan 41% (1m ago)'])
-  assert.ok(omp.some(([k]) => k === '/agent compact omp'))
+  assert.deepEqual(omp[2], ['Ctrl+P · Agent omp: usage', 'Plan 41% (1m ago)'])
+  assert.ok(omp.some(([k]) => k === 'Ctrl+P · Agent omp: compact'))
   assert.ok(omp.some(([k, v]) => k === '/usage <show|reset>' && v === 'Limits'))
   assert.ok(sections[1]!.rows.some(([k]) => k === 'commands'))
 })

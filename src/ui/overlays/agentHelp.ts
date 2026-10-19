@@ -24,10 +24,10 @@ export function agentHelpSections(input: AgentHelpInput): KeySection[] {
     const pct = a.contextPct === undefined ? undefined : Math.round(a.contextPct * 100)
     const rows: [string, string][] = [
       [`@${a.name} <message>`, `Talk to it from any chat, or open its tab (${a.cli})`],
-      ['Alt+M', `Model ${a.model ?? 'default'} · effort ${a.effort ?? 'default'}${pct === undefined ? '' : ` · context ${pct}%`}; /agent model ${a.name} <value> sets it directly`],
-      [`/agent usage ${a.name}`, usage === undefined || usageLine === undefined ? 'Provider limits and context use' : `${usageLine} (${ageText(input.now - usage.at)})`],
+      ['Alt+M', `Model ${a.model ?? 'default'} · effort ${a.effort ?? 'default'}${pct === undefined ? '' : ` · context ${pct}%`}; Settings > Agents sets it directly`],
+      [`Ctrl+P · Agent ${a.name}: usage`, usage === undefined || usageLine === undefined ? 'Provider limits and context use' : `${usageLine} (${ageText(input.now - usage.at)})`],
     ]
-    if (commands.some((c) => c.name === 'compact')) rows.push([`/agent compact ${a.name}`, 'Shrink its context'])
+    if (commands.some((c) => c.name === 'compact')) rows.push([`Ctrl+P · Agent ${a.name}: compact`, 'Shrink its context'])
     if (commands.length === 0) rows.push(['commands', 'None advertised yet: they appear after its first message'])
     else {
       rows.push([`/agent ${a.name} /<cmd>`, 'Run any of these from any tab; inside its tab just type /<cmd>'])

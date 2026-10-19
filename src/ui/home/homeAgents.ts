@@ -54,12 +54,12 @@ export function ageText(ms: number): string {
 
 function hintFor(i: HomeAgentsInput, rows: readonly HomeAgentRow[]): string {
   const more = i.unadded > 0 ? ` · ${i.unadded} installed, not added` : ''
-  if (rows.length === 0) return `no agents ready — /agent setup${more}`
+  if (rows.length === 0) return `no agents ready — Alt+S › Agents${more}`
   if (i.questions.length > 0) return `${i.questions.length} question${i.questions.length === 1 ? '' : 's'} waiting — Alt+Q`
   if (i.reviewsPending > 0) return `${i.reviewsPending} review${i.reviewsPending === 1 ? '' : 's'} running`
   if (rows.every((r) => r.turns === 0)) return `try @${rows[0]?.name ?? 'omp'} <task> in any chat`
-  if (i.unadded > 0) return `${i.unadded} more installed — /agent setup`
-  return 'Alt+I invite a contact · /agent usage · Alt+M model'
+  if (i.unadded > 0) return `${i.unadded} more installed — Alt+S › Agents`
+  return 'Alt+I invite a contact · Ctrl+P usage · Alt+M model'
 }
 
 /** Everything the Home AGENTS card shows, from live state and the recorded stats. */

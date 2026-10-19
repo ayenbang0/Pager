@@ -6,6 +6,7 @@ import type { AgentView } from '../agents/types.js'
 import { TERM_ID } from '../tools/terminal/terminal.js'
 import { DOCS_ID } from '../docs/store.js'
 import { copyText } from '../platform/clipboard.js'
+import { splitArgs } from '../agents/run/protocol.js'
 import { AgentHeader, HubHeader } from './chrome/AgentHeader.js'
 import { AgentSetup } from './overlays/AgentSetup.js'
 import { watchCtrlH } from './input/ctrlH.js'
@@ -302,7 +303,7 @@ export function App({ engine, onExit }: Props) {
   })
   const openModel = (name?: string): void => {
     const names = room.agents.map((a) => a.name)
-    if (names.length === 0) return void engine.emit('toast', { kind: 'warn', text: 'No agents are ready: /agent setup' } satisfies Toast)
+    if (names.length === 0) return void engine.emit('toast', { kind: 'warn', text: 'No agents are ready: Alt+S › Agents' } satisfies Toast)
     setModelAgent(name ?? (agentTab !== undefined && names.includes(agentTab) ? agentTab : names.length === 1 ? (names[0] ?? null) : null))
     setOverlay('model')
   }
@@ -414,7 +415,7 @@ export function App({ engine, onExit }: Props) {
         : `Ask ${sharedRoom.agents.slice(0, 3).map((a) => `@${a.name}`).join(', ') || '@agent'} or @all in ${sharedRoom.host}'s session`
       : inRoom
       ? room.agents.length === 0
-        ? 'No agents are ready: /agent setup'
+        ? 'No agents are ready: Alt+S › Agents'
         : `Ask ${room.agents.slice(0, 3).map((a) => `@${a.name}`).join(', ')} or @all (@a>b chains) · Alt+I invites a contact`
       : agentView !== undefined
         ? `message ${agentView.name} (@mention others, /command)`
@@ -431,6 +432,10 @@ export function App({ engine, onExit }: Props) {
   const openThemePicker = (): void => {
     setPreviewTheme(settings.theme)
     setOverlay('theme')
+  }
+  const askField = (f: FieldRequest): void => {
+    setInput(setText(f.initial))
+    setField(f)
   }
   const paletteItems: PaletteItem[] = [
     { label: '⌂ Home', run: () => engine.activate(null) },
@@ -471,27 +476,23 @@ export function App({ engine, onExit }: Props) {
     ...(room.agents.length >= 2
       ? [{ label: 'Chain agents…', hint: '/agent chain', run: () => fillPrompt(`/agent chain ${room.agents[0]?.name}>${room.agents[1]?.name} `) }]
       : []),
-    { label: 'Check agents', hint: '/agent check', run: () => void engine.submit('/agent check') },
-    { label: 'Agents: setup', hint: '/agent setup', run: () => setOverlay('agents') },
-    ...engine.agentTeam().map((n): PaletteItem => ({ label: `Delete agent: ${n}`, hint: '/agent remove', run: () => void engine.submit(`/agent remove ${n}`) })),
-    { label: `Agents: turn review ${review ? 'off' : 'on'}`, hint: `/agent review ${review ? 'off' : 'on'}`, run: () => void engine.submit(`/agent review ${review ? 'off' : 'on'}`) },
-    { label: 'Agents: usage', hint: '/agent usage', run: () => void engine.submit('/agent usage') },
+    { label: 'Agents: check installs', hint: 'check', run: () => engine.agentAction('check') },
+    { label: 'Agents: setup', hint: 'Settings > Agents', run: () => setOverlay('agents') },
+    { label: 'Agents: usage', hint: 'usage', run: () => engine.agentAction('usage') },
     { label: 'Agent: model…', hint: 'Alt+M', run: () => openModel() },
     { label: 'Agent: effort…', hint: 'Alt+M', run: () => openModel() },
-    { label: 'Agents: set the goal…', hint: '/agent goal', run: () => fillPrompt('/agent goal ') },
     { label: 'Agents: invite a contact…', hint: 'Alt+I', run: inviteToAgents },
-    { label: 'Agents: who is in my session', hint: '/agent guests', run: () => void engine.submit('/agent guests') },
-    { label: 'Agents: show shared memory', hint: '/agent memory', run: () => void engine.submit('/agent memory') },
-    { label: 'Agents: add a note to memory…', hint: '/agent memory add', run: () => fillPrompt('/agent memory add ') },
     ...room.agents.flatMap((a): PaletteItem[] => {
       const commands = engine.agentCommands(a.name)
       return [
         { label: `· ${a.name}`, hint: `${a.cli} · ${stateWord(a.state)}`, run: () => engine.activate(agentTabId(a.name)) },
         { label: `Model & effort: ${a.name}`, hint: [a.model ?? 'default', a.effort ?? 'default'].join(' · '), run: () => openModel(a.name) },
-        { label: `Usage: ${a.name}`, hint: `/agent usage ${a.name}`, run: () => void engine.submit(`/agent usage ${a.name}`) },
-        ...(commands.some((c) => c.name === 'compact')
-          ? [{ label: `Compact: ${a.name}`, hint: `/agent compact ${a.name}`, run: () => void engine.submit(`/agent compact ${a.name}`) }]
-          : []),
+        { label: `Agent ${a.name}: usage`, hint: 'usage', run: () => engine.agentAction('usage', a.name) },
+        { label: `Agent ${a.name}: compact`, hint: 'handoff', run: () => engine.agentAction('compact', a.name) },
+        { label: `Agent ${a.name}: reset session`, hint: 'forget its saved session', run: () => engine.agentAction('reset', a.name) },
+        { label: `Agent ${a.name}: slash commands`, hint: 'list what it advertises', run: () => engine.agentAction('commands', a.name) },
+        { label: `Agent ${a.name}: checkpoints`, hint: 'turns you can undo', run: () => engine.agentAction('checkpoints', a.name) },
+        { label: `Agent ${a.name}: CLI…`, hint: 'its own CLI arguments', run: () => askField({ label: `CLI arguments for ${a.name}`, initial: '', masked: false, onSubmit: (text) => engine.agentCli(a.name, splitArgs(text)) }) },
         ...commands.map(
           (c): PaletteItem => ({
             label: `${a.name}: /${c.name} — ${c.description}`,
@@ -595,10 +596,7 @@ export function App({ engine, onExit }: Props) {
                     top={PANE_TOP_ROW}
                     active={overlay === null && field === null}
                     ctl={settingsCtl}
-                    onField={(f) => {
-                      setInput(setText(f.initial))
-                      setField(f)
-                    }}
+                    onField={askField}
                     onInterrupt={onInterrupt}
                     onPalette={() => setOverlay('palette')}
                     onSidebar={() => engine.toggleSidebar()}

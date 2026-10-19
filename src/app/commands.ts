@@ -47,39 +47,16 @@ export const MOVED: Readonly<Record<string, string>> = {
   net: 'Privacy and Network',
 }
 
-/** Subcommands of `/agent` that do not depend on which agents exist. */
+/** Subcommands of `/agent` that do not depend on which agents exist. The rest moved to Settings > Agents and the palette. */
 const AGENT_SUBCOMMANDS: readonly CommandSpec[] = [
-  { name: 'new', usage: '/agent new <cli> [name]', summary: 'Add a teammate (omp-2, or a name you pick)' },
-  { name: 'color', usage: '/agent color <name> <color|auto>', summary: "Give an agent its own color (sidebar, messages, tabs)" },
-  { name: 'setup', usage: '/agent setup', summary: 'See which agents are installed and add them' },
-  { name: 'add', usage: '/agent add <id> <command…>', summary: 'Register a custom agent that speaks ACP over stdio' },
-  { name: 'remove', usage: '/agent remove <name>', summary: 'Remove a teammate' },
   { name: 'chain', usage: '/agent chain a>b <task>', summary: 'Run agents in turn; each reviews the previous work' },
-  { name: 'model', usage: '/agent model <name> [model]', summary: "Pick an agent's model (no value opens the picker)" },
-  { name: 'effort', usage: '/agent effort <name> [level]', summary: "Pick an agent's thinking effort" },
-  { name: 'usage', usage: '/agent usage [name]', summary: 'Show provider limits and context use' },
-  { name: 'budget', usage: '/agent budget [<name|all> turns=<N> minutes=<N>|off]', summary: 'Show or set daily turn/minute caps per agent' },
-  { name: 'compact', usage: '/agent compact <name> [handoff|shake]', summary: "Shrink an agent's context" },
-  { name: 'review', usage: '/agent review on|off', summary: 'Automatic peer review after file changes' },
-  { name: 'risk', usage: '/agent risk on|off', summary: 'Ask before risky agent actions (push, rm -rf, publish…)' },
-  { name: 'goal', usage: '/agent goal <text>', summary: 'Set the shared goal every agent sees' },
   { name: 'runs', usage: '/agent runs', summary: 'List agent runs' },
   { name: 'stop', usage: '/agent stop [name|run]', summary: 'Stop running agents' },
   { name: 'merge', usage: '/agent merge <name|run> [--force]', summary: "Merge an agent's branch into this one (--force skips the verify check)" },
-  { name: 'verify', usage: '/agent verify [<command>|off]', summary: 'Show or set the check run in each worktree after a turn and before a merge' },
-  { name: 'log', usage: '/agent log <run|name>', summary: "Show the last verify output for an agent's branch" },
   { name: 'drop', usage: '/agent drop <run|all|name>', summary: 'Discard run records, or an agent workspace' },
-  { name: 'reset', usage: '/agent reset <name>', summary: "Forget an agent's saved session" },
   { name: 'undo', usage: '/agent undo <name> [n]', summary: "Put an agent's worktree back to before its last turn(s)" },
-  { name: 'checkpoints', usage: '/agent checkpoints <name>', summary: "List the turns of an agent that /agent undo can take back" },
-  { name: 'cli', usage: '/agent cli <name> <args>', summary: "Run an agent's own CLI command (mcp list, models, ...)" },
-  { name: 'commands', usage: '/agent commands <name>', summary: "List an agent's slash commands" },
-  { name: 'memory', usage: '/agent memory [add <text>|clear]', summary: "Show or edit this repository's shared agent notes" },
-  { name: 'check', usage: '/agent check [name]', summary: 'Test that each agent CLI responds' },
+  { name: 'log', usage: '/agent log <run|name>', summary: "Show the last verify output for an agent's branch" },
   { name: 'invite', usage: '/agent invite <contact> [--view]', summary: 'Let a contact into your agent room (they can control it, or only watch with --view)' },
-  { name: 'guests', usage: '/agent guests', summary: 'List who is in your shared agent session' },
-  { name: 'kick', usage: '/agent kick <contact|all>', summary: 'Remove a guest from your shared agent session' },
-  { name: 'leave', usage: '/agent leave [host]', summary: "Leave someone else's shared agent session" },
 ]
 
 /** The `/agent` argument menu: the ready agents first, then the fixed subcommands. */

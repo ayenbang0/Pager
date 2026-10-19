@@ -16,9 +16,12 @@ export function applySettingSet(engine: Engine, id: string, value: boolean | str
   if (typeof value === 'boolean') {
     if (id === 'notify') return engine.setNotify(value)
     if (id === 'sound') return engine.setSound(value)
+    if (id === 'agents.review') return engine.setAgentReview(value)
+    if (id === 'agents.risk') return engine.setAgentRisk(value)
     if (TOGGLES.includes(id)) return engine.setSetting(id as ToggleKey, value)
     throw new Error(`unknown setting ${id}`)
   }
+  if (id.startsWith('agent.color:')) return engine.setAgentColor(id.slice('agent.color:'.length), value)
   switch (id) {
     case 'theme':
       return engine.setTheme(value)
@@ -42,7 +45,15 @@ export function applySettingEdit(engine: Engine, id: string, text: string): void
       return engine.setBadge(text)
     case 'accent':
       return engine.setAccent(text)
+    case 'agents.verify':
+      return engine.setAgentVerify(text)
+    case 'agents.goal':
+      return engine.setAgentGoal(text)
+    case 'agents.memory.add':
+      return engine.agentMemory('add', text)
     default:
+      if (id.startsWith('agent.color:')) return engine.setAgentColor(id.slice('agent.color:'.length), text)
+      if (id.startsWith('agents.budget:')) return engine.setAgentBudget(id.slice('agents.budget:'.length), text)
       throw new Error(`unknown setting ${id}`)
   }
 }
@@ -61,7 +72,18 @@ export function runSettingAction(engine: Engine, id: string, _ask: (field: Field
       engine.showChangelog()
       engine.activate(null)
       return
+    case 'agents.setup':
+      return engine.openAgentSetup()
+    case 'agents.memory.show':
+      return engine.agentMemory('show')
+    case 'agents.memory.clear':
+      return engine.agentMemory('clear')
+    case 'guest.kickall':
+      return engine.agentKick('all')
     default:
+      if (id.startsWith('agent.model:')) return engine.openModelPicker(id.slice('agent.model:'.length))
+      if (id.startsWith('guest.kick:')) return engine.agentKick(id.slice('guest.kick:'.length))
+      if (id.startsWith('session.leave:')) return engine.agentLeave(id.slice('session.leave:'.length))
       throw new Error(`unknown action ${id}`)
   }
 }

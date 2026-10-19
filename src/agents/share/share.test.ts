@@ -152,7 +152,7 @@ test('a guest named like an agent is labelled apart and shown as a person', asyn
 test('kicking removes the guest; later frames from them create nothing', async () => {
   const { host, guest, hostTab } = await session()
   await join(host, guest)
-  await host.engine.submit('/agent kick bob')
+  await host.engine.agentKick('bob')
   await waitFor(() => guest.engine.sharedSessions().length === 0, 20_000, 'guest session gone')
   assert.notEqual(guest.engine.active(), hostTab)
   assert.equal(host.engine.sessionGuests().length, 0)
@@ -203,7 +203,7 @@ test('inviting an offline contact says so once, and a second invite while one is
   assert.equal(host.engine.sessionGuests()[0]?.access, 'view')
   await guest.engine.close()
   await waitFor(() => host.engine.convs().every((c) => c.online === false), 20_000, 'host sees bob offline')
-  await host.engine.submit('/agent kick bob')
+  await host.engine.agentKick('bob')
   await host.engine.submit('/agent invite bob')
   const text = host.toasts.at(-1)?.text ?? ''
   assert.match(text, /is offline/)

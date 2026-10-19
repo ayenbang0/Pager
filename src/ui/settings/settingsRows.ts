@@ -24,7 +24,8 @@ export type SettingsRow =
   | { kind: 'section'; section: SettingsSection; title: string }
   | { kind: 'toggle'; id: string; label: string; value: boolean; note?: string; locked?: string }
   | { kind: 'choice'; id: string; label: string; options: readonly string[]; value: string; custom?: boolean; locked?: string }
-  | { kind: 'text'; id: string; label: string; value: string; masked?: boolean; locked?: string }
+  /** `initial` is what the edit field starts with when it differs from the shown value. */
+  | { kind: 'text'; id: string; label: string; value: string; initial?: string; masked?: boolean; locked?: string }
   | { kind: 'action'; id: string; label: string; value?: string; confirm?: boolean }
   | { kind: 'info'; label: string; value: string }
 

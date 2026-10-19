@@ -467,19 +467,19 @@ test('agent tabs: /agent and @name drive agents, plain text is refused in the hu
   assert.equal(a.toasts.at(-1)?.kind, 'warn')
   assert.equal(a.engine.agentRoom().runs.length, before)
   assert.ok(a.engine.convs().every((c) => c.id !== ROOM_ID))
-  await a.engine.submit('/agent color omp #ff8800')
+  a.engine.setAgentColor('omp', '#ff8800')
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, '#ff8800')
-  await a.engine.submit('/agent color omp teal')
+  a.engine.setAgentColor('omp', 'teal')
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, '#14d8c4')
-  await a.engine.submit('/agent color omp blorple')
+  a.engine.setAgentColor('omp', 'blorple')
   assert.equal(a.toasts.at(-1)?.kind, 'error')
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, '#14d8c4')
-  await a.engine.submit('/agent color omp auto')
+  a.engine.setAgentColor('omp', 'auto')
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, undefined)
   fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5 })
 })
 
-test('/agent remove deletes a teammate, and names the choices when the name is wrong', async () => {
+test('removeAgent deletes a teammate, and names the choices when the name is wrong', async () => {
   const repo = tmpDir('pager-r-')
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })
   git('init', '-q', '-b', 'main')
@@ -496,13 +496,50 @@ test('/agent remove deletes a teammate, and names the choices when the name is w
   }
   const a = await boot('alice', undefined, { workdir: repo, agentAdapters: { omp: fake, claude: fake, opencode: fake, hermes: fake } })
   await a.engine.checkAgents()
-  await a.engine.submit('/agent remove nobody')
-  assert.match(a.toasts.at(-1)?.text ?? '', /^Usage: \/agent remove </)
-  await a.engine.submit('/agent new omp ui')
+  await a.engine.removeAgent('nobody')
+  assert.match(a.toasts.at(-1)?.text ?? '', /^No teammate named nobody\. Teammates: /)
+  assert.equal(await a.engine.addAgent('omp', 'ui'), undefined)
   assert.ok(a.engine.agentTeam().includes('ui'))
-  await a.engine.submit('/agent remove ui')
+  await a.engine.removeAgent('ui')
   assert.equal(a.toasts.at(-1)?.text, 'ui was deleted')
   assert.ok(!a.engine.agentTeam().includes('ui'))
+})
+
+test('removed /agent subcommands point at Settings or the palette; /agent <name> <task> still runs', async () => {
+  const repo = tmpDir('pager-r-')
+  const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })
+  git('init', '-q', '-b', 'main')
+  git('config', 'user.name', 'tester')
+  git('config', 'user.email', 't@example.invalid')
+  git('config', 'commit.gpgsign', 'false')
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'base')
+  git('add', '-A')
+  git('commit', '-q', '-m', 'base')
+  const fake: AdapterSpec = {
+    bin: process.execPath,
+    args: (p) => [fileURLToPath(new URL('../agents/testing/testAgent.js', import.meta.url)), p],
+    extract: (s) => s.trim(),
+  }
+  const a = await boot('alice', undefined, { workdir: repo, agentAdapters: { omp: fake, claude: fake, opencode: fake, hermes: fake } })
+  await a.engine.checkAgents()
+  await a.engine.submit('/agent model omp')
+  assert.equal(a.toasts.at(-1)?.text, 'Moved to Settings > Agents (Alt+S, or Ctrl+P → Settings)')
+  await a.engine.submit('/agent compact omp')
+  assert.match(a.toasts.at(-1)?.text ?? '', /^Moved to the palette \(Ctrl\+P → "Agent <name>: compact"\)$/)
+  await a.engine.submit('/agent whatever')
+  assert.match(a.toasts.at(-1)?.text ?? '', /^Usage: \/agent <name> <task> \| chain a>b <task> \| runs \| stop \| merge \| drop \| undo \| log \| invite$/)
+  await a.engine.submit('/agent claude ECHO still works')
+  await waitFor(() => a.engine.messages(agentTabId('claude'), 50).some((m) => m.text === 'still works'), 20_000, 'claude reply')
+  // agentAction('reset') forgets the saved session and says so.
+  a.engine.agentAction('reset', 'claude')
+  await waitFor(() => /fresh session/.test(a.toasts.at(-1)?.text ?? ''), 10_000, 'reset toast')
+  const view = a.engine.agentSettingsView()
+  assert.deepEqual(view.agents.map((t) => t.name), ['omp', 'claude', 'opencode', 'hermes'])
+  a.engine.setAgentBudget('claude', 'turns=4')
+  assert.deepEqual(a.engine.agentSettingsView().budgets, [{ key: 'claude', text: 'turns=4' }])
+  a.engine.setAgentReview(true)
+  assert.equal(a.engine.agentSettingsView().review, true)
+  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5 })
 })
 
 test("a command an agent advertises runs verbatim in that agent's tab; pager commands win; elsewhere it is unknown", async () => {

@@ -83,7 +83,7 @@ export function filesChanged(runs: readonly RunView[], agent: string): number {
 
 /** Hub header: who is doing what, as one line. */
 export function whoDoesWhat(agents: readonly AgentView[]): string {
-  if (agents.length === 0) return 'no agents ready — /agent setup'
+  if (agents.length === 0) return 'no agents ready — Alt+S › Agents'
   return agents
     .map((a) => {
       if (a.state === 'asking') return `${a.name} asks`

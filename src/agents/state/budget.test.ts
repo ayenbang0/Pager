@@ -56,9 +56,9 @@ test('check: the minutes cap and the closest of two caps decide', () => {
 test('messages name the agent and the cap that was hit', () => {
   const cap = { turns: 5, minutes: 30 }
   const over = check(cap, { turns: 5, ms: 0 })
-  assert.equal(refusal('omp', cap, over), 'omp hit its daily budget (5 turns); /agent budget omp off to lift')
+  assert.equal(refusal('omp', cap, over), 'omp hit its daily budget (5 turns); Settings > Agents to lift')
   const mins = check(cap, { turns: 1, ms: 30 * MIN })
-  assert.equal(refusal('omp', cap, mins), 'omp hit its daily budget (30 min); /agent budget omp off to lift')
+  assert.equal(refusal('omp', cap, mins), 'omp hit its daily budget (30 min); Settings > Agents to lift')
   const near = check(cap, { turns: 4, ms: 0 })
   assert.match(warning('omp', cap, { turns: 4, ms: 0 }, near), /omp used 80% of its daily budget \(4\/5 turns, 0\/30 min\)/)
   assert.match(warning('omp', cap, { turns: 5, ms: 0 }, over), /hit its daily budget.*used 5\/5 turns/)

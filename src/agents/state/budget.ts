@@ -6,7 +6,7 @@ import type { StatRecord } from './stats.js'
 /** Share of a cap at which the one daily warning is given. */
 export const WARN_AT = 0.8
 
-/** The key of the cap every agent without a cap of its own falls under (`/agent budget all ...`). */
+/** The key of the cap every agent without a cap of its own falls under (Settings > Agents). */
 export const ALL_KEY = '*'
 
 const MINUTE_MS = 60_000
@@ -81,7 +81,7 @@ function capText(cap: Cap, limit: BudgetCheck['limit']): string {
   return `${cap.turns ?? 0} turns`
 }
 
-/** The cap in `/agent budget` syntax: `turns=20 minutes=60`. */
+/** The cap in the Settings > Agents syntax: `turns=20 minutes=60`. */
 export function describeCap(cap: Cap): string {
   return [cap.turns === undefined ? '' : `turns=${cap.turns}`, cap.minutes === undefined ? '' : `minutes=${cap.minutes}`].filter(Boolean).join(' ')
 }
@@ -96,13 +96,13 @@ export function describeUse(cap: Cap, used: Used): string {
 
 /** Why a turn was refused. */
 export function refusal(name: string, cap: Cap, c: BudgetCheck): string {
-  return `${name} hit its daily budget (${capText(cap, c.limit)}); /agent budget ${name} off to lift`
+  return `${name} hit its daily budget (${capText(cap, c.limit)}); Settings > Agents to lift`
 }
 
 /** The once-a-day note when use reaches 80% (or 100%) of a cap. */
 export function warning(name: string, cap: Cap, used: Used, c: BudgetCheck): string {
   if (c.status === 'over') return `${refusal(name, cap, c)} (used ${describeUse(cap, used)} today)`
-  return `${name} used ${Math.round(c.pct * 100)}% of its daily budget (${describeUse(cap, used)}); /agent budget ${name} to review`
+  return `${name} used ${Math.round(c.pct * 100)}% of its daily budget (${describeUse(cap, used)}); Settings > Agents to review`
 }
 
 /** Remembers which keys were already told about today, so each warning comes once per local day. */
@@ -120,7 +120,7 @@ export class DailyOnce {
 
 export type BudgetCommand = { kind: 'show' } | { kind: 'set'; key: string; cap: Cap } | { kind: 'off'; key: string } | { kind: 'error'; message: string }
 
-export const BUDGET_USAGE = '/agent budget [<name|all> turns=<N> minutes=<N> | <name|all> off]'
+export const BUDGET_USAGE = '<name|all> turns=<N> minutes=<N> | <name|all> off'
 
 function wholeNumber(raw: string): number | undefined {
   const m = /^(\d{1,7})(?:\/day)?$/i.exec(raw)
@@ -128,7 +128,7 @@ function wholeNumber(raw: string): number | undefined {
   return Number.isSafeInteger(n) && n > 0 ? n : undefined
 }
 
-/** `args` is what follows `/agent budget`. `names` are the configured agents. */
+/** `args` is the agent (or `all`) then the cap words. `names` are the configured agents. */
 export function parseBudget(args: readonly string[], names: readonly string[]): BudgetCommand {
   if (args.length === 0) return { kind: 'show' }
   const who = (args[0] ?? '').toLowerCase()
