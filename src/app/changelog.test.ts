@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { CHANGELOG_KINDS, compareVersions, formatChangelog, getChangesSince, isNewer, latestVersion, parseChangelog } from './changelog.js'
+import { CHANGELOG_KINDS, compareVersions, formatChangelog, getChangesSince, isNewer, latestVersion, loadChangelog, parseChangelog } from './changelog.js'
+import { VERSION } from './version.js'
 
 const SAMPLE = `# Changelog
 
@@ -125,4 +126,12 @@ test('parseChangelog tolerates malformed input', () => {
   const noEntries = parseChangelog('## [1.0.0]\n\nSome text without sections\n')
   assert.equal(noEntries.length, 1)
   assert.deepEqual(noEntries[0]?.entries, [])
+})
+
+test('the real CHANGELOG.md is found from the compiled tree and its newest section is the running version', () => {
+  const sections = loadChangelog()
+  assert.ok(sections.length >= 4, 'the file was found')
+  assert.equal(sections[0]?.version, VERSION)
+  assert.ok((sections[0]?.entries.length ?? 0) > 5)
+  assert.ok(sections.some((s) => s.version === '1.2.1'))
 })

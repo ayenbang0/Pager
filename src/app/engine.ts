@@ -1281,8 +1281,14 @@ export class Engine extends EventEmitter {
     this.toast('success', `pager ${VERSION} is up to date`)
   }
 
+  /** No argument: what changed since you last looked. A version (`1.5.1` or `v1.5.1`): exactly that section. */
   showChangelog(version?: string): void {
-    this.setHome(this.changelogText(version))
+    if (version === undefined) return this.setHome(this.changelogText())
+    const m = /^v?(\d+\.\d+\.\d+)$/.exec(version.trim())
+    if (m === null) return this.toast('error', 'Usage: /changelog [version]')
+    const section = loadChangelog().find((s) => s.version === m[1])
+    if (section === undefined) return this.toast('error', `No changelog entry for ${m[1]}`)
+    this.setHome(formatChangelog([section], 72))
   }
 
   openThemePicker(): void {

@@ -1,7 +1,4 @@
 import fs from 'node:fs'
-import { createRequire } from 'node:module'
-
-const require = createRequire(import.meta.url)
 
 export interface ChangelogSection {
   version: string
@@ -133,7 +130,7 @@ export function formatChangelog(sections: readonly ChangelogSection[], width: nu
 
 export function loadChangelog(): ChangelogSection[] {
   try {
-    return parseChangelog(fs.readFileSync(require.resolve('../../CHANGELOG.md'), 'utf8'))
+    return parseChangelog(fs.readFileSync(new URL('../../CHANGELOG.md', import.meta.url), 'utf8'))
   } catch {
     return []
   }

@@ -530,6 +530,34 @@ test('LAN mode shows on Home and in the privacy view', async () => {
   await a.engine.close()
 })
 
+test('/changelog shows what is new, one exact version, or explains itself', async () => {
+  const a = await boot('alice')
+  await a.engine.submit('/changelog 1.5.1')
+  const lines = a.engine.home()
+  assert.ok(lines[0]?.startsWith('1.5.1'), lines[0])
+  assert.ok(lines.includes('Added:') && lines.includes('Fixed:'))
+  assert.ok(!lines.some((l) => l.startsWith('1.2.1')), 'only that version')
+  await a.engine.submit('/changelog v1.2.1')
+  assert.ok(a.engine.home()[0]?.startsWith('1.2.1'))
+  await a.engine.submit('/changelog 9.9.9')
+  assert.equal(a.toasts.at(-1)?.text, 'No changelog entry for 9.9.9')
+  await a.engine.submit('/changelog banana')
+  assert.equal(a.toasts.at(-1)?.text, 'Usage: /changelog [version]')
+  await a.engine.submit('/changelog')
+  assert.ok(a.engine.home().length > 0)
+})
+
+test('a user upgrading from 1.4.1 sees "What\'s new" for this version on the first start only', async () => {
+  const dir = tmpDir('pager-e-')
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ lastSeenVersion: '1.4.1' }))
+  const first = await boot('alice', dir)
+  assert.equal(first.engine.home()[0], `What's new in pager ${VERSION}`)
+  assert.equal(first.engine.settings().lastSeenVersion, VERSION)
+  await first.engine.close()
+  const second = await boot('alice', dir)
+  assert.notEqual(second.engine.home()[0], `What's new in pager ${VERSION}`)
+})
+
 test('name change propagates to contacts', async () => {
   const a = await boot('alice')
   const b = await boot('bob')
