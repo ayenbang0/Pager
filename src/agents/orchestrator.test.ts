@@ -6,12 +6,12 @@ import os from 'node:os'
 import path from 'node:path'
 import { after, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import type { Toast } from '../engine.js'
-import { removeTmpDirs, tmpDir, waitFor } from '../testutil.js'
-import type { AdapterSpec } from './adapters.js'
+import type { Toast } from '../app/engine.js'
+import { removeTmpDirs, tmpDir, waitFor } from '../testing/testutil.js'
+import type { AdapterSpec } from './run/adapters.js'
 import { Orchestrator, type OrchestratorOptions } from './orchestrator.js'
 
-const fixture = fileURLToPath(new URL('./testAgent.js', import.meta.url))
+const fixture = fileURLToPath(new URL('./testing/testAgent.js', import.meta.url))
 const fake: AdapterSpec = { bin: process.execPath, args: (p) => [fixture, p], extract: (s) => s.trim() }
 const fakes: Record<string, AdapterSpec> = { omp: fake, claude: fake, opencode: fake, hermes: fake }
 
@@ -689,5 +689,27 @@ test('checkpoints survive a restart and dropping the workspace deletes their ref
     for (const d of [repo, dataDir]) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5 })
   }
 })
+
+test('setBudget and budgetList round-trip through the same parser; off lifts a cap', () =>
+  withOrch(async ({ orch, toasts }) => {
+    assert.deepEqual(orch.budgetList(), [])
+    orch.setBudget('*', 'turns=20 minutes=60')
+    assert.deepEqual(orch.budgetList(), [{ key: '*', text: 'turns=20 minutes=60' }])
+    orch.setBudget('omp', 'turns=3')
+    assert.deepEqual(orch.budgetList().map((b) => b.key).sort(), ['*', 'omp'])
+    orch.setBudget('omp', 'banana')
+    assert.equal(toasts.at(-1)?.kind, 'error')
+    orch.setBudget('omp', 'off')
+    assert.deepEqual(orch.budgetList(), [{ key: '*', text: 'turns=20 minutes=60' }])
+  }))
+
+test('verifyCommand reads what setVerify stored, and is undefined once cleared', () =>
+  withOrch(async ({ orch }) => {
+    assert.equal(await orch.verifyCommand(), undefined)
+    await orch.setVerify('npm test')
+    assert.equal(await orch.verifyCommand(), 'npm test')
+    await orch.setVerify('off')
+    assert.equal(await orch.verifyCommand(), undefined)
+  }))
 
 after(removeTmpDirs)
