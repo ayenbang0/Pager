@@ -1,6 +1,6 @@
 {
   "name": "pager-cli",
-  "version": "1.5.1",
+  "version": "1.6.0",
   "description": "A simpler way to chat: peer-to-peer terminal chat for developers",
   "license": "Apache-2.0",
   "type": "module",
