@@ -17,6 +17,8 @@ interface Props {
   stats: HomeStats
   /** The AGENTS card: ready agents with their numbers, activity, reviews, usage and the next step. */
   agents: HomeAgents
+  /** False in a run without agents. */
+  agentsOn?: boolean
   /** Detail lines after the title (name, contact code, getting started); shown as the YOU code and the START steps. */
   info: string[]
 }
@@ -44,13 +46,13 @@ function useBannerFrame(active: boolean): number {
  * contact code, then banded cards START, PEOPLE, AGENTS and ACTIVITY. Rows are built in `homeRows.ts`; cards drop from the bottom
  * when the pane is short.
  */
-export function HomeBanner({ width, height, stats, agents, info }: Props) {
+export function HomeBanner({ width, height, stats, agents, agentsOn = true, info }: Props) {
   const theme = useTheme()
   const look = useLook()
   const animate = !REDUCED_MOTION
   const frame = useBannerFrame(animate)
   const hour = new Date().getHours()
-  const rows = homeRows({ width, height, frame, animate, hour, theme, look, stats, agents, info })
+  const rows = homeRows({ width, height, frame, animate, hour, theme, look, stats, agents, agentsOn, info })
   return (
     <Box height={height} width={width} flexDirection="column" overflow="hidden">
       {rows.map((segs, r) => (

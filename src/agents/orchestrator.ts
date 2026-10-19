@@ -1043,6 +1043,11 @@ export class Orchestrator extends EventEmitter {
   }
 
   /** A pager line in the hub, and in the tabs of the agents it is about. */
+  /** A pager note in the room (shown to the user, never sent to an agent). */
+  notice(text: string): void {
+    this.post(text)
+  }
+
   private post(text: string, to?: string[]): void {
     this.append('pager', 'system', text, to)
   }

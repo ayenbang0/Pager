@@ -126,6 +126,8 @@ export interface EngineOptions {
   agents?: boolean
   /** Test seam: replaces `fetch` for the web tab and the agents' web tools. */
   fetch?: typeof fetch
+  /** LAN-only mode: whether this run hosts the local network's DHT, and the address it uses. */
+  lan?: { hosting: boolean; address: string }
 }
 
 interface PendingItem {
@@ -170,6 +172,9 @@ export class Engine extends EventEmitter {
   private readonly dir: string
   /** True when the identity and database are protected by a passphrase. */
   readonly locked: boolean
+  /** Encryption or LAN mode: shared documents are kept out of agent prompts and tools. */
+  readonly secure: boolean
+  private readonly lanInfo: { hosting: boolean; address: string } | undefined
   private readonly envLocks: EnvLock[]
   private settingsFocus: string | undefined
   private readonly agentsOn: boolean
@@ -223,6 +228,8 @@ export class Engine extends EventEmitter {
     super()
     this.dir = opts.dir
     this.locked = opts.secrets !== undefined
+    this.lanInfo = opts.lan
+    this.secure = this.locked || opts.lan !== undefined
     this.envLocks = opts.envLocks ?? []
     this.agentsOn = opts.agents !== false
     this.prefs = loadSettings(opts.dir)
@@ -265,10 +272,14 @@ export class Engine extends EventEmitter {
       workdir: opts.workdir ?? process.cwd(),
       adapters: opts.agentAdapters,
       web: { search: (q) => this.webSearchText(q), read: (url) => this.webReadText(url) },
-      docs: {
-        list: (task) => this.docsNamedIn(task),
-        write: (name, text, append, base) => this.agentDocWrite(name, text, append, base),
-      },
+      ...(this.secure
+        ? {}
+        : {
+            docs: {
+              list: (task: string) => this.docsNamedIn(task),
+              write: (name: string, text: string, append: boolean, base: string) => this.agentDocWrite(name, text, append, base),
+            },
+          }),
     })
     this.agents.on('change', () => {
       const scope = parseAgentTab(this.activeId) ?? (this.activeId === ROOM_ID ? ROOM_ID : undefined)
@@ -473,6 +484,7 @@ export class Engine extends EventEmitter {
         '  1. Send your contact code to a friend',
         '  2. They run /add <your code>; you run /accept 1',
         '  3. Ctrl+P opens the command palette, Ctrl+G shows shortcuts',
+        ...(this.lanInfo === undefined ? [] : ['', `LAN mode: ${this.lanInfo.hosting ? 'hosting on' : 'joined'} ${this.lanInfo.address}`]),
       ]
     )
   }
@@ -574,7 +586,7 @@ export class Engine extends EventEmitter {
 
   /** Probes the installed agent CLIs; resolves when every check is done. */
   checkAgents(): Promise<void> {
-    return this.agents.refresh()
+    return this.agentsOn ? this.agents.refresh() : Promise.resolve()
   }
 
   /** Every agent pager knows with its readiness, for the setup screen. */
@@ -635,7 +647,7 @@ export class Engine extends EventEmitter {
 
   /** Re-checks one agent CLI (setup screen). */
   recheckAgent(cli: string): Promise<void> {
-    return this.agents.refresh([cli])
+    return this.agentsOn ? this.agents.refresh([cli]) : Promise.resolve()
   }
 
   /** Per-agent totals, the 14-day activity strip and review verdicts. Cached briefly: Home asks on every render and the log is a file. */
@@ -811,6 +823,7 @@ export class Engine extends EventEmitter {
 
   activate(convId: string | null): void {
     const shared = parseSharedTab(convId)
+    if (!this.agentsOn && (shared !== undefined || convId === ROOM_ID || convId === AI_ID || parseAgentTab(convId) !== undefined)) return this.toast('error', AGENTS_OFF)
     if (shared !== undefined) {
       if (this.share.room(shared) === undefined) return
       this.share.markRead(shared)
@@ -818,7 +831,6 @@ export class Engine extends EventEmitter {
       this.emit('change')
       return
     }
-    if (convId === AI_ID && this.ai === undefined) return this.toast('error', AGENTS_OFF)
     const agent = parseAgentTab(convId)
     if (convId === AI_ID || convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID || convId === SETTINGS_ID || convId === WEB_ID || agent !== undefined) {
       if (convId === ROOM_ID) this.agents.markRead()
@@ -938,9 +950,9 @@ export class Engine extends EventEmitter {
 
   private async cmdAgent(rest: string, args: string[]): Promise<void> {
     const usage = 'Usage: /agent <name> <task> | chain a>b <task> | runs | stop | merge | drop | undo | log | invite'
+    if (!this.agentsEnabled()) return this.toast('error', AGENTS_OFF)
     const sub = (args[0] ?? '').toLowerCase()
     if (sub === '') return this.toast('info', usage)
-    if (!this.agentsEnabled()) return this.toast('error', AGENTS_OFF)
     const names = this.agents.names()
     const target = args[1]
     const after = rest.slice(sub.length).trim()
@@ -991,6 +1003,7 @@ export class Engine extends EventEmitter {
     if (names.includes(sub)) {
       if (after === '') return this.toast('error', `Usage: /agent ${sub} <task>`)
       this.activate(agentTabId(sub))
+      this.warnSecureDocs(after)
       void this.agents.ask(sub, after)
       return
     }
@@ -1000,6 +1013,11 @@ export class Engine extends EventEmitter {
   }
 
   // ---------------------------------------------------------------- agent settings (the Settings tab and the palette)
+
+  /** In a secure session `#name` document references are not expanded; say so once per message. */
+  private warnSecureDocs(text: string): void {
+    if (this.secure && /(^|\s)#\w/.test(text)) this.agents.notice('#name references are off in a secure session (encryption or LAN mode)')
+  }
 
   /** Whether the agents room, the AI tab and the agent tools are available in this run. */
   agentsEnabled(): boolean {
@@ -1509,6 +1527,7 @@ export class Engine extends EventEmitter {
       agentsOn: this.agentsOn,
       agents: this.agentsOn ? this.agentSettingsView() : EMPTY_AGENT_SETTINGS,
       ...(this.aiView() === undefined ? {} : { ai: this.aiView() }),
+      privacy: { encrypted: this.locked, ...(this.lanInfo === undefined ? {} : { lan: this.lanInfo }), net: this.netInfo() },
     }
   }
 
@@ -1938,6 +1957,8 @@ export class Engine extends EventEmitter {
       case 'collab-say':
       case 'collab-answer':
       case 'collab-sync':
+        // A run without agents never serves or joins an agent session.
+        if (!this.agentsOn) return
         return this.share.onFrame(link, frame)
       default:
     }
@@ -2148,7 +2169,11 @@ export class Engine extends EventEmitter {
       if (why !== undefined) this.toast('warn', why)
       return
     }
-    if (this.activeId === ROOM_ID || parseAgentTab(this.activeId) !== undefined) return this.agents.say(text, parseAgentTab(this.activeId))
+    if (this.activeId === ROOM_ID || parseAgentTab(this.activeId) !== undefined) {
+      if (!this.agentsOn) return this.toast('error', AGENTS_OFF)
+      this.warnSecureDocs(text)
+      return this.agents.say(text, parseAgentTab(this.activeId))
+    }
     if (this.activeId === TERM_ID) return this.term.run(text)
     if (this.activeId === WEB_ID) return void this.web.run(text)
     if (this.activeId === AI_ID) return void this.ai?.say(text)

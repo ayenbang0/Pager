@@ -127,6 +127,24 @@ function ai(view: SettingsView): SettingsRow[] {
   return rows
 }
 
+function privacy(view: SettingsView): SettingsRow[] {
+  const p = view.privacy
+  const run = p.lan === undefined ? 'Internet' : `LAN: ${p.lan.hosting ? 'hosting' : 'joined'} ${p.lan.address}`
+  const rows: SettingsRow[] = [
+    { kind: 'info', label: 'Encryption', value: p.encrypted ? 'on (passphrase)' : 'off (run: pager lock)' },
+    toggle(view, 'lan', 'LAN-only mode', 'restart to apply'),
+    toggle(view, 'agents', 'Agents (room, AI chat, agent tools)', 'restart to apply'),
+    { kind: 'info', label: 'This run', value: `${run} · Agents: ${view.agentsOn ? 'on' : 'off'}` },
+    { kind: 'info', label: 'Listening', value: p.net.listening ? 'yes' : 'no' },
+    { kind: 'info', label: 'Contacts online', value: String(p.net.contacts.filter((c) => c.online).length) },
+  ]
+  for (const c of p.net.contacts) {
+    rows.push({ kind: 'info', label: `${c.online ? '●' : '○'} ${c.name}`, value: c.pending ? 'request pending' : c.online ? c.caps.join(', ') || 'no extras' : 'offline' })
+  }
+  rows.push({ kind: 'action', id: 'net.log', label: 'net.log', value: p.net.logPath })
+  return rows
+}
+
 const BUILDERS: Record<SettingsSection, (view: SettingsView) => SettingsRow[]> = {
   profile,
   appearance,
@@ -134,7 +152,7 @@ const BUILDERS: Record<SettingsSection, (view: SettingsView) => SettingsRow[]> =
   folders,
   agents,
   ai,
-  privacy: () => [],
+  privacy,
   updates,
   advanced,
 }

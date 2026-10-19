@@ -42,6 +42,8 @@ export interface HomeInput {
   look: Look
   stats: HomeStats
   agents: HomeAgents
+  /** False in a run without agents: the AGENTS card is left out. Default true. */
+  agentsOn?: boolean
   /** The engine's welcome lines after the title: name, contact code, getting-started steps. */
   info: readonly string[]
 }
@@ -493,13 +495,14 @@ export function bodyRows(i: HomeInput, info: HomeInfo, room: number): Seg[][] {
   const inner = Math.max(1, Math.min(i.width - 2, MAX_INNER))
   const offset = Math.max(0, Math.floor((i.width - inner) / 2))
   if (i.width < TWO_COLUMN_MIN_WIDTH) {
-    const cards = stackedOrder(i.stats, i.agents).map((id) => buildCard(id, inner, i, info))
+    const cards = stackedOrder(i.stats, i.agents).filter((id) => id !== 'agents' || i.agentsOn !== false).map((id) => buildCard(id, inner, i, info))
     return stackCards(cards, inner, room, i.theme).map((r) => indent(r, offset))
   }
   const leftW = Math.max(LEFT_MIN, Math.min(LEFT_MAX, Math.floor(inner * 0.34)))
   const rightW = inner - leftW - COLUMN_GAP
   const left = stackCards((['start', 'people'] as const).map((id) => buildCard(id, leftW, i, info)), leftW, room, i.theme)
-  const right = stackCards((['agents', 'activity'] as const).map((id) => buildCard(id, rightW, i, info)), rightW, room, i.theme)
+  const rightIds: readonly CardId[] = i.agentsOn === false ? ['activity'] : ['agents', 'activity']
+  const right = stackCards(rightIds.map((id) => buildCard(id, rightW, i, info)), rightW, room, i.theme)
   const count = Math.max(left.length, right.length)
   return Array.from({ length: count }, (_, r) => indent([...fitSegs(left[r] ?? [], leftW), { text: ' '.repeat(COLUMN_GAP) }, ...fitSegs(right[r] ?? [], rightW)], offset))
 }

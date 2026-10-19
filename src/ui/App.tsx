@@ -519,42 +519,7 @@ export function App({ engine, onExit }: Props) {
           ...settings.folders.filter((f) => f.name !== inFolder?.name).map((f): PaletteItem => ({ label: `Move "${activeLabel}" to folder ${f.name}`, hint: 'folder', run: () => engine.folderFile(activeFile, f.name) })),
           ...(inFolder === undefined ? [] : [{ label: `Take "${activeLabel}" out of folder ${inFolder.name}`, hint: 'folder', run: () => engine.folderFile(activeFile, null) }]),
         ]
-  const paletteItems: PaletteItem[] = [
-    { label: '⌂ Home', run: () => engine.activate(null) },
-    ...convs.map(
-      (c): PaletteItem => ({
-        label: c.kind === 'group' ? `# ${c.title}` : c.title,
-        hint: [c.kind === 'group' ? 'group' : c.online ? 'online' : 'offline', c.unread > 0 ? `${c.unread} unread` : '']
-          .filter(Boolean)
-          .join(' · '),
-        run: () => engine.activate(c.id),
-      }),
-    ),
-    ...pending.flatMap((p): PaletteItem[] => [
-      { label: `Accept ${p.label}`, hint: p.type, run: () => void engine.submit(`/accept ${p.n}`) },
-      { label: `Decline ${p.label}`, hint: p.type, run: () => void engine.submit(`/decline ${p.n}`) },
-    ]),
-    { label: 'Show my contact code', hint: '/code', run: () => void engine.submit('/code') },
-    { label: 'Add a contact…', hint: '/add', run: () => fillPrompt('/add ') },
-    { label: 'New group…', hint: '/group new', run: () => fillPrompt('/group new ') },
-    ...(activeConv?.kind === 'group'
-      ? [
-          { label: 'Invite to this group…', hint: '/group invite', run: () => fillPrompt('/group invite ') },
-          { label: 'Leave this group…', hint: '/group leave', run: () => fillPrompt('/group leave') },
-        ]
-      : []),
-    { label: '⚙ Settings', hint: 'Alt+S', run: () => engine.openSettings() },
-    { label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: 'Ctrl+B', run: () => engine.toggleSidebar() },
-    { label: 'Keyboard shortcuts', hint: 'Ctrl+G', run: () => setOverlay('help') },
-    { label: foldsOn ? 'Show long messages in full' : 'Fold long messages', hint: 'Ctrl+T', run: () => setFoldsOn((v) => !v) },
-    ...folderItems,
-    { label: 'New folder…', hint: 'sidebar', run: () => askField({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) }) },
-    { label: '▸ Terminal', hint: engine.terminal().running ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
-    { label: '⌕ Web', hint: 'search the web', run: () => engine.activate(WEB_ID) },
-    ...(engine.agentsEnabled() ? [{ label: '✦ AI', hint: 'chat without a repository', run: () => engine.activate(AI_ID) }, { label: 'Clear AI chat', hint: 'history and scratch files', run: () => engine.clearAi() }] : []),
-    { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
-    ...engine.docList().map((d): PaletteItem => ({ label: `Doc: ${d.name}`, hint: d.where, run: () => engine.openDoc(d.id) })),
-    { label: 'New document…', hint: '/doc new', run: () => fillPrompt('/doc new ') },
+  const agentItems: PaletteItem[] = [
     { label: '⌁ Agents room', hint: agentsActive > 0 ? `${agentsActive} running` : '/open agents', run: () => engine.activate(ROOM_ID) },
     ...engine.agentNames().map(
       (n): PaletteItem => ({ label: `Ask ${n}…`, hint: `/agent ${n}`, run: () => fillPrompt(`/agent ${n} `) }),
@@ -597,6 +562,44 @@ export function App({ engine, onExit }: Props) {
           run: () => void engine.submit(`/agent merge ${r.id}`),
         }),
       ),
+  ]
+  const paletteItems: PaletteItem[] = [
+    { label: '⌂ Home', run: () => engine.activate(null) },
+    ...convs.map(
+      (c): PaletteItem => ({
+        label: c.kind === 'group' ? `# ${c.title}` : c.title,
+        hint: [c.kind === 'group' ? 'group' : c.online ? 'online' : 'offline', c.unread > 0 ? `${c.unread} unread` : '']
+          .filter(Boolean)
+          .join(' · '),
+        run: () => engine.activate(c.id),
+      }),
+    ),
+    ...pending.flatMap((p): PaletteItem[] => [
+      { label: `Accept ${p.label}`, hint: p.type, run: () => void engine.submit(`/accept ${p.n}`) },
+      { label: `Decline ${p.label}`, hint: p.type, run: () => void engine.submit(`/decline ${p.n}`) },
+    ]),
+    { label: 'Show my contact code', hint: '/code', run: () => void engine.submit('/code') },
+    { label: 'Add a contact…', hint: '/add', run: () => fillPrompt('/add ') },
+    { label: 'New group…', hint: '/group new', run: () => fillPrompt('/group new ') },
+    ...(activeConv?.kind === 'group'
+      ? [
+          { label: 'Invite to this group…', hint: '/group invite', run: () => fillPrompt('/group invite ') },
+          { label: 'Leave this group…', hint: '/group leave', run: () => fillPrompt('/group leave') },
+        ]
+      : []),
+    { label: '⚙ Settings', hint: 'Alt+S', run: () => engine.openSettings() },
+    { label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: 'Ctrl+B', run: () => engine.toggleSidebar() },
+    { label: 'Keyboard shortcuts', hint: 'Ctrl+G', run: () => setOverlay('help') },
+    { label: foldsOn ? 'Show long messages in full' : 'Fold long messages', hint: 'Ctrl+T', run: () => setFoldsOn((v) => !v) },
+    ...folderItems,
+    { label: 'New folder…', hint: 'sidebar', run: () => askField({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) }) },
+    { label: '▸ Terminal', hint: engine.terminal().running ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
+    { label: '⌕ Web', hint: 'search the web', run: () => engine.activate(WEB_ID) },
+    ...(engine.agentsEnabled() ? [{ label: '✦ AI', hint: 'chat without a repository', run: () => engine.activate(AI_ID) }, { label: 'Clear AI chat', hint: 'history and scratch files', run: () => engine.clearAi() }] : []),
+    { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
+    ...engine.docList().map((d): PaletteItem => ({ label: `Doc: ${d.name}`, hint: d.where, run: () => engine.openDoc(d.id) })),
+    { label: 'New document…', hint: '/doc new', run: () => fillPrompt('/doc new ') },
+    ...(engine.agentsEnabled() ? agentItems : []),
     { label: 'Quit', hint: '/quit · /exit', run: onExit },
   ]
 
@@ -722,7 +725,7 @@ export function App({ engine, onExit }: Props) {
                     onQuit={onExit}
                   />
                 ) : showBanner ? (
-                  <HomeBanner width={mainWidth - 2} height={paneRows} stats={engine.stats()} agents={homeData(engine, room.agents)} info={engine.home().slice(2)} />
+                  <HomeBanner width={mainWidth - 2} height={paneRows} stats={engine.stats()} agents={homeData(engine, room.agents)} agentsOn={engine.agentsEnabled()} info={engine.home().slice(2)} />
                 ) : (
                   <Box height={paneRows} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
                     {visible.map((line, row) => (

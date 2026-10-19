@@ -19,6 +19,7 @@ import { VERSION } from './version.js'
 import { SETTINGS_ID } from './settingsView.js'
 import { WEB_ID } from '../tools/web/tool.js'
 import { AI_ID } from '../ai/chat.js'
+import { sharedTabId } from '../agents/ids.js'
 import { DatabaseSync } from 'node:sqlite'
 import { Store } from '../chat/db.js'
 import { deriveSecrets } from '../chat/secrets.js'
@@ -442,6 +443,91 @@ test('the AI tab: /open ai, text reaches a ready agent headless, settings round-
   assert.deepEqual(fs.readdirSync(path.join(a.dir, 'ai', 'work')), [])
   await a.engine.close()
   fs.rmSync(repo, { recursive: true, force: true })
+})
+
+function gitRepo(): string {
+  const repo = tmpDir('pager-r-')
+  const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })
+  git('init', '-q', '-b', 'main')
+  git('config', 'user.name', 'tester')
+  git('config', 'user.email', 't@example.invalid')
+  git('config', 'commit.gpgsign', 'false')
+  fs.writeFileSync(path.join(repo, 'base.txt'), 'base')
+  git('add', '-A')
+  git('commit', '-q', '-m', 'base')
+  return repo
+}
+
+const fakeAgent: AdapterSpec = {
+  bin: process.execPath,
+  args: (p) => [fileURLToPath(new URL('../agents/testing/testAgent.js', import.meta.url)), p],
+  extract: (s) => s.trim(),
+}
+
+test('no-agents mode: no agent process starts, agent commands and tabs refuse, the AI tab is unavailable, and agent frames are ignored', async () => {
+  const repo = gitRepo()
+  const marker = path.join(repo, 'ran.txt')
+  const spy: AdapterSpec = { ...fakeAgent, args: (p) => [fileURLToPath(new URL('../agents/testing/testAgent.js', import.meta.url)), `WRITE ${marker}=1\n${p}`] }
+  const a = await boot('alice', undefined, { workdir: repo, agentAdapters: { claude: spy }, agents: false })
+  await a.engine.checkAgents()
+  assert.equal(a.engine.agentsEnabled(), false)
+  assert.deepEqual(a.engine.agentNames(), [])
+  assert.equal(a.engine.ai, undefined)
+  await a.engine.submit('/agent claude hi')
+  assert.equal(a.toasts.at(-1)?.text, 'Agents are off (Settings > Privacy and Network)')
+  await a.engine.submit('/agent')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  for (const tab of [AI_ID, ROOM_ID, agentTabId('claude'), sharedTabId('ab'.repeat(32))]) {
+    a.engine.activate(tab)
+    assert.equal(a.toasts.at(-1)?.text, 'Agents are off (Settings > Privacy and Network)', tab)
+    assert.notEqual(a.engine.active(), tab)
+  }
+  assert.equal(a.engine.settingsView().agentsOn, false)
+  assert.equal(a.engine.settingsView().ai, undefined)
+  await sleep(300)
+  assert.equal(fs.existsSync(marker), false, 'no agent ran')
+  await a.engine.close()
+  fs.rmSync(repo, { recursive: true, force: true })
+})
+
+test('secure sessions (encryption or LAN) keep documents out of agent turns; an ordinary session shows them', async () => {
+  const salt = Buffer.alloc(16, 8)
+  const secrets = deriveSecrets('correct-horse', salt)
+  const cases: [string, Partial<EngineOptions>, string][] = [
+    ['open', {}, 'docs: plan.md'],
+    ['encrypted', { secrets }, 'docs: none'],
+    ['lan', { lan: { hosting: true, address: '127.0.0.1' } }, 'docs: none'],
+  ]
+  for (const [name, extra, expected] of cases) {
+    const repo = gitRepo()
+    const a = await boot('alice', undefined, { workdir: repo, agentAdapters: { omp: fakeAgent }, ...extra })
+    await a.engine.checkAgents()
+    const doc = a.engine.newDoc('plan')
+    assert.ok('id' in doc, name)
+    if ('id' in doc) a.engine.docs.insert(doc.id, 0, 'the plan')
+    await a.engine.submit('/agent omp see #plan.md\nDOCSEEN\nTOOL doc_write {"name":"plan.md","text":"hacked"}')
+    await waitFor(() => a.engine.messages(agentTabId('omp'), 50).some((m) => m.text.startsWith('docs:')), 20_000, `${name} turn`)
+    const said = a.engine.messages(agentTabId('omp'), 50).map((m) => m.text)
+    assert.ok(said.some((t) => t.includes(expected)), `${name}: ${said.join(' | ')}`)
+    if (expected === 'docs: none') {
+      assert.ok(said.some((t) => /not shown to the agent|documents are unavailable/.test(t)), `${name}: the doc tool is refused: ${said.join(" | ")}`)
+      assert.equal(a.engine.docs.text(doc.id as string), 'the plan')
+      assert.ok(a.engine.messages(ROOM_ID, 50).some((m) => m.text === '#name references are off in a secure session (encryption or LAN mode)'), `${name}: told once`)
+      assert.equal(a.engine.secure, true)
+    } else assert.equal(a.engine.secure, false)
+    await a.engine.close()
+    fs.rmSync(repo, { recursive: true, force: true })
+  }
+})
+
+test('LAN mode shows on Home and in the privacy view', async () => {
+  const dir = tmpDir('pager-e-')
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ lastSeenVersion: VERSION })) // no "what's new" screen in the way
+  const a = await boot('alice', dir, { lan: { hosting: false, address: '192.168.1.9' } })
+  assert.ok(a.engine.home().includes('LAN mode: joined 192.168.1.9'))
+  assert.deepEqual(a.engine.settingsView().privacy.lan, { hosting: false, address: '192.168.1.9' })
+  assert.equal(a.engine.settingsView().privacy.encrypted, false)
+  await a.engine.close()
 })
 
 test('name change propagates to contacts', async () => {

@@ -13,6 +13,7 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   locks: {},
   themes: ['omp', 'mono'],
   folders: [],
+  privacy: { encrypted: false, net: { listening: true, contacts: [], stats: '', logPath: '/x/net.log' } },
   agentsOn: true,
   agents: { agents: [], review: false, risk: false, goal: '', verify: '', budgets: [], guests: [], sessions: [] },
   ...over,
@@ -37,7 +38,8 @@ test('values come from the view', () => {
   assert.equal((byId('density') as { value: string }).value, 'roomy')
   assert.equal((byId('mouse') as { value: boolean }).value, false)
   assert.equal((byId('accent') as { value: string }).value, 'orange')
-  assert.match(rows.find((r) => r.kind === 'info')?.value ?? '', /update available 9\.9\.9/)
+  const version = rows.find((r) => r.kind === 'info' && r.label === 'Version')
+  assert.match(version?.kind === 'info' ? version.value : '', /update available 9\.9\.9/)
 })
 
 test('locked settings carry their source on the row', () => {
@@ -50,4 +52,32 @@ test('accentChoice maps a stored color back to its word', () => {
   assert.equal(accentChoice(''), 'auto')
   assert.equal(accentChoice('#ff8a00'), 'orange')
   assert.equal(accentChoice('#123456'), '#123456')
+})
+
+test('agents, AI and privacy rows follow the view; no-agents hides the first two', () => {
+  const on = buildSettingsRows(
+    view({
+      agents: { agents: [{ name: 'omp', cli: 'omp', model: 'm', effort: 'high', color: 'auto', ready: true }], review: true, risk: false, goal: 'ship', verify: 'npm test', budgets: [{ key: '*', text: 'turns=5' }], guests: [{ pk: 'ab'.repeat(32), name: 'bob', mode: 'view' }], sessions: [{ pk: 'cd'.repeat(32), name: 'ann' }] },
+      ai: { default: 'auto', backends: ['omp', 'ollama', 'openai'], ollama: { url: 'http://x', model: '' }, openai: { url: 'https://y', model: 'gpt', keyHint: '••••1234' }, locks: { 'ai.openai.key': 'PAGER_AI_KEY' } },
+      folders: [{ name: 'work', count: 2 }],
+      privacy: { encrypted: true, lan: { hosting: true, address: '10.0.0.2' }, net: { listening: true, contacts: [{ name: 'bob', pending: false, online: true, caps: ['read'] }], stats: 's', logPath: '/p/net.log' } },
+    }),
+  )
+  const ids = on.flatMap((r) => ('id' in r ? [r.id] : []))
+  for (const id of ['agents.setup', 'agent.model:omp', 'agent.color:omp', 'agents.review', 'agents.risk', 'agents.budget:*', 'agents.budget:omp', 'agents.verify', 'agents.goal', 'agents.memory.show', 'agents.memory.add', 'agents.memory.clear', `guest.kick:${'ab'.repeat(32)}`, 'guest.kickall', `session.leave:${'cd'.repeat(32)}`, 'ai.default', 'ai.ollama.url', 'ai.openai.key', 'ai.clear', 'folder.new', 'folder:work', 'folder.delete:work', 'lan', 'agents', 'net.log', 'web']) {
+    assert.ok(ids.includes(id), id)
+  }
+  assert.equal(new Set(ids).size, ids.length)
+  const key = on.find((r) => r.kind === 'text' && r.id === 'ai.openai.key')
+  assert.deepEqual(key && key.kind === 'text' && [key.value, key.masked, key.locked, key.initial], ['••••1234', true, 'PAGER_AI_KEY', ''])
+  const verify = on.find((r) => r.kind === 'text' && r.id === 'agents.verify')
+  assert.deepEqual(verify && verify.kind === 'text' && [verify.value, verify.initial], ['npm test', 'npm test'])
+  assert.ok(on.some((r) => r.kind === 'info' && r.label === 'Encryption' && r.value === 'on (passphrase)'))
+  assert.ok(on.some((r) => r.kind === 'info' && r.label === 'This run' && r.value === 'LAN: hosting 10.0.0.2 · Agents: on'))
+
+  const off = buildSettingsRows(view({ agentsOn: false }))
+  const offIds = off.flatMap((r) => ('id' in r ? [r.id] : []))
+  assert.ok(!offIds.some((id) => id.startsWith('agent') && id !== 'agents') && !offIds.some((id) => id.startsWith('ai.')))
+  assert.ok(offIds.includes('agents') && offIds.includes('web'), 'the switches that turn them back on stay')
+  assert.ok(!off.some((r) => r.kind === 'section' && r.section === 'agents'))
 })

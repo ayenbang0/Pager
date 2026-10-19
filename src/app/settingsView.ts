@@ -1,6 +1,15 @@
+import type { NetInfo } from './engine.js'
 import type { Settings } from './settings.js'
 
 export const SETTINGS_ID = 'settings'
+
+export interface PrivacyView {
+  /** Identity and history are protected by a passphrase. */
+  encrypted: boolean
+  /** Set in LAN-only mode. */
+  lan?: { hosting: boolean; address: string }
+  net: NetInfo
+}
 
 export interface AiSettingsView {
   default: string
@@ -42,4 +51,5 @@ export interface SettingsView {
   agents: AgentSettingsView
   /** Absent in a run without agents. */
   ai?: AiSettingsView
+  privacy: PrivacyView
 }

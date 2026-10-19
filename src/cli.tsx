@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import './platform/env.js'
 import type { Engine } from './app/engine.js'
+import type { LanHandle } from './net/lan.js'
 import { acquireLock, AlreadyRunningError } from './platform/lock.js'
 import { dataDir } from './platform/paths.js'
 import { MOUSE_OFF } from './ui/input/mouse.js'
@@ -16,7 +17,10 @@ import { type Secrets } from './chat/secrets.js'
 
 const USAGE = `pager: a simpler way to chat
 
-Usage: pager [update | lock | unlock | -h | --help | -v | --version]
+Usage: pager [--lan [host:port]] [--no-agents] [update | lock | unlock | -h | --help | -v | --version]
+
+  --lan [host:port]  chat over the local network only: find (or start) the network's DHT, or join the one at host:port
+  --no-agents        turn off the agents room, the AI tab and the agent tool server
 
   update           install the latest release (npm install -g pager-cli@latest)
   lock             protect your identity key and encrypt history, group titles and contact names with a passphrase
@@ -80,15 +84,39 @@ if (lockState.locked) {
 // Settings that modules read from the environment at load time must be projected before the dynamic imports below.
 const envLocks = applyEnvFromSettings(loadSettings(dir), process.env, { lan: parsed.lan, noAgents: parsed.noAgents })
 
+// LAN-only mode (the flag, or the setting plus a restart) keeps everything on the local network: no web, no update check.
+const lanOn = process.env.PAGER_LAN === '1'
+if (lanOn) {
+  const source = parsed.lan ? '--lan' : 'PAGER_LAN'
+  process.env.PAGER_NO_WEB = '1'
+  process.env.PAGER_NO_UPDATE_CHECK = '1'
+  for (const key of ['web', 'updateCheck'] as const) if (!envLocks.some((l) => l.key === key)) envLocks.push({ key, source })
+}
+
 const bootstrap = process.env.PAGER_BOOTSTRAP?.split(',')
   .map((s) => s.trim())
   .filter(Boolean)
+
+let lan: LanHandle | undefined
+if (lanOn) {
+  try {
+    const { startLan } = await import('./net/lan.js')
+    lan = await startLan({ target: parsed.lanTarget })
+  } catch (err) {
+    release()
+    process.stderr.write(`pager failed to start: ${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(1)
+  }
+}
 
 let engine: Engine
 try {
   // Dynamic for the same reason as above: keep native addons out of `pager update` / --help / --version.
   const { Engine } = await import('./app/engine.js')
-  engine = await Engine.open({ dir, bootstrap: bootstrap && bootstrap.length > 0 ? bootstrap : undefined, checkAgents: process.env.PAGER_NO_AGENTS !== '1', secrets, envLocks, agents: process.env.PAGER_NO_AGENTS !== '1' })
+  const agents = process.env.PAGER_NO_AGENTS !== '1'
+  // LAN mode ignores PAGER_BOOTSTRAP: it talks to the DHT found (or started) on the local network.
+  const nodes = lan !== undefined ? lan.bootstrap : bootstrap && bootstrap.length > 0 ? bootstrap : undefined
+  engine = await Engine.open({ dir, bootstrap: nodes, checkAgents: agents, secrets, envLocks, agents, ...(lan === undefined ? {} : { lan: { hosting: lan.hosting, address: lan.address } }) })
 } catch (err) {
   release()
   process.stderr.write(`pager failed to start: ${err instanceof Error ? err.message : String(err)}\n`)
@@ -109,6 +137,7 @@ async function shutdown(code: number, error?: unknown): Promise<void> {
   await app.waitUntilExit().catch(() => {})
   process.stdout.write(MOUSE_OFF) // the terminal outlives us; never leave mouse reporting on
   await engine.close().catch(() => {})
+  await lan?.stop().catch(() => {})
   release()
   if (error !== undefined) process.stderr.write(`${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`)
   process.exit(code)

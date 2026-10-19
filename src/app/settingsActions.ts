@@ -82,6 +82,10 @@ export function runSettingAction(engine: Engine, id: string, ask: (field: FieldR
       return
     case 'ai.clear':
       return engine.clearAi()
+    case 'net.log':
+      copyText(engine.netInfo().logPath)
+      engine.emit('toast', { kind: 'success', text: 'Path of net.log copied' } satisfies Toast)
+      return
     case 'folder.new':
       return ask({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) })
     case 'agents.setup':
