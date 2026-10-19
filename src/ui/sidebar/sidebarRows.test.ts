@@ -90,3 +90,10 @@ test('agent state dots: spinner, blinking ?, info diamond, tinted dot', () => {
   const idle = agentRowSpec(agent('idle'), tint, theme, true)
   assert.deepEqual([idle.glyph, idle.glyphColor, idle.labelColor], ['●', tint, tint])
 })
+
+test('foldable headers show the fold glyph and the item count, and still fill the width', () => {
+  assert.match(text(groupHeader('work', 25, theme, 'open', 3)), /^▌ ▾ work \(3\) /)
+  assert.match(text(groupHeader('work', 25, theme, 'closed', 0)), /^▌ ▸ work \(0\) /)
+  assert.match(text(groupHeader('DIRECT', 25, theme, 'open')), /^▌ ▾ DIRECT /)
+  for (const width of [25, 12, 6]) assert.equal(segsWidth(groupHeader('漢字漢字', width, theme, 'closed', 12)), width)
+})

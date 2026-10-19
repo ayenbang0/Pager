@@ -3,16 +3,16 @@ import { test } from 'node:test'
 import { MOUSE_OFF, MOUSE_ON, mouseEvents, wheelEvents } from './mouse.js'
 
 test('wheel up and down map to older and newer', () => {
-  assert.deepEqual(wheelEvents('\x1b[<64;10;5M'), [1])
-  assert.deepEqual(wheelEvents('\x1b[<65;10;5M'), [-1])
+  assert.deepEqual(wheelEvents('\x1b[<64;10;5M'), [{ dir: 1, at: { x: 10, y: 5 } }])
+  assert.deepEqual(wheelEvents('\x1b[<65;10;5M'), [{ dir: -1, at: { x: 10, y: 5 } }])
 })
 
 test('a burst of events in one chunk yields one entry each, in order', () => {
-  assert.deepEqual(wheelEvents('\x1b[<64;1;1M\x1b[<64;1;1M\x1b[<65;1;1M'), [1, 1, -1])
+  assert.deepEqual(wheelEvents('\x1b[<64;1;1M\x1b[<64;1;1M\x1b[<65;1;1M').map((w) => w.dir), [1, 1, -1])
 })
 
 test('modifier bits do not hide the wheel; clicks, drags, releases and horizontal wheels are not wheel events', () => {
-  assert.deepEqual(wheelEvents('\x1b[<68;3;3M'), [1]) // shift+wheel up
+  assert.deepEqual(wheelEvents('\x1b[<68;3;3M'), [{ dir: 1, at: { x: 3, y: 3 } }]) // shift+wheel up
   assert.deepEqual(wheelEvents('\x1b[<0;3;3M\x1b[<32;3;4M\x1b[<0;3;3m'), [])
   assert.deepEqual(wheelEvents('\x1b[<64;3;3m'), [])
   assert.deepEqual(wheelEvents('\x1b[<66;3;3M\x1b[<67;3;3M'), [])

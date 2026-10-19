@@ -26,6 +26,8 @@ export interface SettingsView {
   locks: Record<string, string>
   themes: readonly string[]
   /** False in a run without agents (--no-agents): the Agents section and the AI rows are hidden. */
+  /** Sidebar folders with how many tabs are filed in each. */
+  folders: { name: string; count: number }[]
   agentsOn: boolean
   agents: AgentSettingsView
 }

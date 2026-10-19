@@ -5,22 +5,28 @@ export const MOUSE_OFF = '\x1b[?1006l\x1b[?1002l'
 // ESC [ < button ; column ; row (M = press or motion, m = release)
 const SGR_EVENT = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g
 
-/** Wheel events in a chunk of terminal input: +1 = wheel up (toward older), -1 = wheel down. */
-export function wheelEvents(chunk: string): (1 | -1)[] {
-  const out: (1 | -1)[] = []
-  for (const m of chunk.matchAll(SGR_EVENT)) {
-    const button = Number(m[1])
-    // Wheel buttons set bit 6 (64 up, 65 down); 66/67 are horizontal. Modifier bits (4, 8, 16) are ignored.
-    if (m[4] !== 'M' || (button & 64) === 0 || (button & 2) !== 0) continue
-    out.push((button & 1) === 0 ? 1 : -1)
-  }
-  return out
-}
-
 /** A 1-based terminal cell. */
 export interface Point {
   x: number
   y: number
+}
+
+/** A wheel notch and where the pointer was. */
+export interface WheelEvent {
+  dir: 1 | -1
+  at: Point
+}
+
+/** Wheel events in a chunk of terminal input: dir +1 = wheel up (toward older), -1 = wheel down. */
+export function wheelEvents(chunk: string): WheelEvent[] {
+  const out: WheelEvent[] = []
+  for (const m of chunk.matchAll(SGR_EVENT)) {
+    const button = Number(m[1])
+    // Wheel buttons set bit 6 (64 up, 65 down); 66/67 are horizontal. Modifier bits (4, 8, 16) are ignored.
+    if (m[4] !== 'M' || (button & 64) === 0 || (button & 2) !== 0) continue
+    out.push({ dir: (button & 1) === 0 ? 1 : -1, at: { x: Number(m[2]), y: Number(m[3]) } })
+  }
+  return out
 }
 
 /** A left-button transition at a cell: pressed, moved while held, or released. */

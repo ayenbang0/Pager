@@ -3,7 +3,7 @@ import { MOUSE_OFF, MOUSE_ON, mouseEvents, wheelEvents, type Point } from './mou
 
 export interface MouseHandlers {
   /** +1 = wheel up (toward older), -1 = wheel down. */
-  onWheel(direction: 1 | -1): void
+  onWheel(direction: 1 | -1, at: Point): void
   /** Left button went down at this cell. */
   onPress(at: Point): void
   /** The pointer moved to this cell with the left button held. */
@@ -25,7 +25,7 @@ export function useMouse(handlers: MouseHandlers): void {
     if (process.env.PAGER_NO_MOUSE === '1') return
     const onData = (chunk: Buffer | string): void => {
       const text = String(chunk)
-      for (const direction of wheelEvents(text)) latest.current.onWheel(direction)
+      for (const w of wheelEvents(text)) latest.current.onWheel(w.dir, w.at)
       for (const action of mouseEvents(text)) {
         if (action.kind === 'down') latest.current.onPress(action)
         else if (action.kind === 'drag') latest.current.onDrag(action)

@@ -99,11 +99,20 @@ function agents(view: SettingsView): SettingsRow[] {
   return rows
 }
 
+function folders(view: SettingsView): SettingsRow[] {
+  const rows: SettingsRow[] = [{ kind: 'action', id: 'folder.new', label: 'New folder…' }]
+  for (const f of view.folders) {
+    rows.push({ kind: 'text', id: `folder:${f.name}`, label: f.name, value: `${f.count} ${f.count === 1 ? 'chat' : 'chats'}`, initial: f.name })
+    rows.push({ kind: 'action', id: `folder.delete:${f.name}`, label: `Delete "${f.name}"`, confirm: true })
+  }
+  return rows
+}
+
 const BUILDERS: Record<SettingsSection, (view: SettingsView) => SettingsRow[]> = {
   profile,
   appearance,
   notifications,
-  folders: () => [],
+  folders,
   agents,
   ai: () => [],
   privacy: () => [],

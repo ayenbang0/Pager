@@ -18,9 +18,10 @@ export interface RowSpec {
   badge?: Seg[]
 }
 
-/** `▌ TITLE ` then a thin gradient rule across the rest of `width`. */
-export function groupHeader(title: string, width: number, theme: Theme): Seg[] {
-  const label = bandLabel(title, theme)
+/** `▌ TITLE ` then a thin gradient rule across the rest of `width`. `fold` prefixes `▾ ` (open) or `▸ ` (closed); `count` appends ` (n)`. */
+export function groupHeader(title: string, width: number, theme: Theme, fold?: 'open' | 'closed', count?: number): Seg[] {
+  const shown = `${fold === undefined ? '' : fold === 'open' ? '▾ ' : '▸ '}${title}${count === undefined ? '' : ` (${count})`}`
+  const label = bandLabel(shown, theme)
   const rule = Math.max(0, width - segsWidth(label) - 1)
   return fitSegs([...label, { text: ' ' }, ...gradientRule(rule, theme.gradient, '─')], width)
 }

@@ -40,7 +40,9 @@ import { pickerHeight } from './overlays/questionState.js'
 import { QuestionPicker } from './overlays/QuestionPicker.js'
 import { selectedText, withSelection, type Cell, type Sel } from './chat/selection.js'
 import { Sidebar, SIDEBAR_WIDTH } from './sidebar/Sidebar.js'
-import { tabGroups, tabOrder } from './sidebar/tabs.js'
+import { entryIndexOf, fileable, sidebarEntries, sidebarHit, visibleTabIds } from './sidebar/tabs.js'
+import { AI_ID } from '../ai/chat.js'
+import { folderOf } from '../app/folders.js'
 import { StatusBar } from './chrome/StatusBar.js'
 import { frameRows } from './kit/frame.js'
 import { LookContext, ThemeContext } from './theme/theme.js'
@@ -66,6 +68,8 @@ const FIXED_ROWS = 1 + 1 + 3 + 1
 const PANE_TOP_ROW = 3
 /** Terminal row (1-based) of the title row, where an agent tab's model chip sits. */
 const TITLE_ROW = 2
+/** Terminal row (1-based) of the sidebar's first entry: below the header. */
+const SIDEBAR_TOP_ROW = 2
 const MIN_PANE_ROWS = 3
 /** A second Ctrl+C within this window quits. */
 const QUIT_WINDOW_MS = 2000
@@ -111,6 +115,7 @@ export function App({ engine, onExit }: Props) {
   const [sel, setSel] = useState<Sel | null>(null)
   /** A one-shot text field that takes the prompt's place (renaming, a new folder, an API key). */
   const [field, setField] = useState<FieldRequest | null>(null)
+  const [sbScroll, setSbScroll] = useState(0)
   /** The left-button gesture in progress: where it started and, once the pointer moved, where it is now. */
   const gesture = useRef<{ anchor: Cell; head: Cell | null } | null>(null)
   const helpCtl = useRef<HelpCtl | null>(null)
@@ -166,6 +171,28 @@ export function App({ engine, onExit }: Props) {
   const agentTab = parseAgentTab(activeId)
   const agentView = room.agents.find((a) => a.name === agentTab)
   const shared = engine.sharedSessions()
+  const entries = sidebarEntries({
+    convs,
+    pendingCount: pending.length,
+    agentNames: room.agents.map((a) => a.name),
+    shared: shared.map((s) => s.pk),
+    agentsOn: engine.agentsEnabled(),
+    folders: settings.folders,
+    collapsed: new Set(settings.collapsed),
+    activeId,
+  })
+  /** Rows the sidebar has: the screen less the header and the status bar. */
+  const sbRows = Math.max(1, frame - 2)
+  const maxScroll = Math.max(0, entries.length - sbRows)
+  const activeAt = entryIndexOf(entries, activeId)
+  useEffect(() => {
+    setSbScroll((cur) => {
+      let next = Math.min(cur, maxScroll)
+      if (activeAt >= 0 && activeAt < next) next = activeAt
+      else if (activeAt >= next + sbRows) next = activeAt - sbRows + 1
+      return Math.max(0, Math.min(next, maxScroll))
+    })
+  }, [activeId, activeAt, sbRows, maxScroll])
   const sharedPk = parseSharedTab(activeId)
   const sharedRoom = sharedPk === undefined ? undefined : engine.sharedRoom(sharedPk)
   const review = engine.agentReview()
@@ -264,9 +291,10 @@ export function App({ engine, onExit }: Props) {
   // Rows shift when messages arrive or the view scrolls or resizes, so a highlight would land on the wrong text.
   useEffect(() => setSel(null), [activeId, lines.length, offset, paneRows, mainWidth, overlay])
   useMouse({
-    onWheel: (dir) => {
+    onWheel: (dir, at) => {
       gesture.current = null
       setSel(null)
+      if (overlay === null && sidebarShown && at.x <= sidebarCols) return setSbScroll((cur) => Math.max(0, Math.min(maxScroll, cur - dir * WHEEL_LINES)))
       if (overlay === 'help') return helpCtl.current?.wheel(dir)
       if (overlay !== null) return
       if (inDocs) docsCtl.current?.wheel(dir)
@@ -278,6 +306,12 @@ export function App({ engine, onExit }: Props) {
       setSel(null)
       if (overlay === null && agentView !== undefined && at.y === TITLE_ROW && at.x >= columns - chipWidth(agentChip(agentView), engine.agentReview()) - 1) return openModel(agentView.name)
       if (overlay === null && inRoom && at.y === TITLE_ROW && at.x >= columns - inviteChipWidth(guestCount) - 1) return inviteToAgents()
+      if (overlay === null && sidebarShown && at.x <= sidebarCols) {
+        const hit = sidebarHit(entries, sbScroll, at.y - SIDEBAR_TOP_ROW + 1)
+        if (hit?.kind === 'header') engine.toggleSection(hit.key)
+        else if (hit?.kind === 'tab') engine.activate(hit.id)
+        return
+      }
       if (overlay !== null || at.x <= sidebarCols) return
       if (inDocs) return docsCtl.current?.click(at.x, at.y)
       if (inSettings) return settingsCtl.current?.click(at.x, at.y)
@@ -330,13 +364,7 @@ export function App({ engine, onExit }: Props) {
     { isActive: overlay === null && !inEditor && field === null },
   )
   const onSwitch = (dir: 1 | -1): void => {
-    const ids = tabOrder(
-      tabGroups(
-        convs,
-        room.agents.map((a) => a.name),
-        shared.map((s) => s.pk),
-      ),
-    )
+    const ids = visibleTabIds(entries)
     const at = Math.max(0, ids.indexOf(activeId))
     engine.activate(ids[(at + dir + ids.length) % ids.length] ?? null)
   }
@@ -437,6 +465,17 @@ export function App({ engine, onExit }: Props) {
     setInput(setText(f.initial))
     setField(f)
   }
+  // Filing: the active tab can be moved into a folder, or taken out of the one it is in.
+  const activeFile = fileable(activeId, convs, engine.agentsEnabled()) && activeId !== null ? activeId : undefined
+  const activeLabel = activeConv ? (activeConv.kind === 'group' ? `# ${activeConv.title}` : activeConv.title) : activeId === ROOM_ID ? 'agents' : activeId === AI_ID ? 'ai' : inDocs ? 'docs' : ''
+  const inFolder = activeFile === undefined ? undefined : folderOf(settings.folders, activeFile)
+  const folderItems: PaletteItem[] =
+    activeFile === undefined
+      ? []
+      : [
+          ...settings.folders.filter((f) => f.name !== inFolder?.name).map((f): PaletteItem => ({ label: `Move "${activeLabel}" to folder ${f.name}`, hint: 'folder', run: () => engine.folderFile(activeFile, f.name) })),
+          ...(inFolder === undefined ? [] : [{ label: `Take "${activeLabel}" out of folder ${inFolder.name}`, hint: 'folder', run: () => engine.folderFile(activeFile, null) }]),
+        ]
   const paletteItems: PaletteItem[] = [
     { label: '⌂ Home', run: () => engine.activate(null) },
     ...convs.map(
@@ -465,6 +504,8 @@ export function App({ engine, onExit }: Props) {
     { label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: 'Ctrl+B', run: () => engine.toggleSidebar() },
     { label: 'Keyboard shortcuts', hint: 'Ctrl+G', run: () => setOverlay('help') },
     { label: foldsOn ? 'Show long messages in full' : 'Fold long messages', hint: 'Ctrl+T', run: () => setFoldsOn((v) => !v) },
+    ...folderItems,
+    { label: 'New folder…', hint: 'sidebar', run: () => askField({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) }) },
     { label: '▸ Terminal', hint: engine.terminal().running ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
     { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
     ...engine.docList().map((d): PaletteItem => ({ label: `Doc: ${d.name}`, hint: d.where, run: () => engine.openDoc(d.id) })),
@@ -545,7 +586,21 @@ export function App({ engine, onExit }: Props) {
           badge={look.badge}
         />
         <Box flexGrow={1}>
-          {sidebarShown ? <Sidebar convs={convs} pending={pending} room={room} shared={shared} activeId={activeId} terminalRunning={term.running} /> : null}
+          {sidebarShown ? (
+            <Sidebar
+              entries={entries}
+              scroll={sbScroll}
+              rows={sbRows}
+              convs={convs}
+              pending={pending}
+              room={room}
+              shared={shared}
+              activeId={activeId}
+              terminalRunning={term.running}
+              webBusy={engine.webBusy()}
+              aiBusy={engine.aiBusy()}
+            />
+          ) : null}
           <Box flexDirection="column" flexGrow={1}>
             {overlay === 'palette' ? (
               <CommandPalette items={paletteItems} height={paneRows + 1} onClose={closeOverlay} />

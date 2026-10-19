@@ -12,6 +12,7 @@ const view = (over: Partial<SettingsView> = {}): SettingsView => ({
   update: null,
   locks: {},
   themes: ['omp', 'mono'],
+  folders: [],
   agentsOn: true,
   agents: { agents: [], review: false, risk: false, goal: '', verify: '', budgets: [], guests: [], sessions: [] },
   ...over,

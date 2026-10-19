@@ -20,6 +20,7 @@ import { loadOrCreateIdentity, saveName } from '../chat/identity.js'
 import type { Secrets } from '../chat/secrets.js'
 import type { EnvLock } from './envSettings.js'
 import { SETTINGS_ID, type AgentSettingsView, type SettingsView } from './settingsView.js'
+import { fileable, filed } from './folders.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from '../chat/ingest.js'
 import { LOCAL_CAPS, Net, type PeerLink } from '../net/net.js'
 import { NetLog } from '../net/netlog.js'
@@ -27,7 +28,7 @@ import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
 import { Suggester } from './suggest.js'
 import { buildRecap } from './recap.js'
 import { formatSearch, readRoomLines, searchDocs, SEARCH_SCAN_LIMIT, type SearchDoc } from './search.js'
-import { DENSITIES, isDensity, loadLastSeen, loadSettings, parseBadge, saveLastSeen, saveSettings, type Settings } from './settings.js'
+import { DENSITIES, isDensity, MAX_FOLDERS, validFolderName, loadLastSeen, loadSettings, parseBadge, saveLastSeen, saveSettings, type Settings } from './settings.js'
 import { findTheme, THEMES } from '../ui/theme/themes.js'
 import { isNewer, latestVersion } from './update.js'
 import { VERSION } from './version.js'
@@ -1299,6 +1300,70 @@ export class Engine extends EventEmitter {
     this.emit('change')
   }
 
+  // ---------------------------------------------------------------- sidebar folders
+
+  folderNew(name: string): void {
+    const trimmed = name.trim()
+    if (!validFolderName(trimmed)) return this.toast('error', 'A folder needs a name (1-24 characters)')
+    const folders = this.prefs.folders
+    if (folders.some((f) => f.name.toLowerCase() === trimmed.toLowerCase())) return this.toast('error', `Folder "${trimmed}" already exists`)
+    if (folders.length >= MAX_FOLDERS) return this.toast('error', `Folders are limited to ${MAX_FOLDERS}`)
+    this.updateSettings({ folders: [...folders, { name: trimmed, ids: [] }] })
+    this.toast('success', `Folder "${trimmed}" created`)
+  }
+
+  folderRename(from: string, to: string): void {
+    const folders = this.prefs.folders
+    const at = folders.findIndex((f) => f.name === from)
+    if (at < 0) return this.toast('error', `No folder named "${from}"`)
+    const next = to.trim()
+    if (!validFolderName(next)) return this.toast('error', 'A folder needs a name (1-24 characters)')
+    if (folders.some((f, i) => i !== at && f.name.toLowerCase() === next.toLowerCase())) return this.toast('error', `Folder "${next}" already exists`)
+    const renamed = folders.map((f, i) => (i === at ? { ...f, name: next } : f))
+    const collapsed = this.prefs.collapsed.map((k) => (k === `folder:${from}` ? `folder:${next}` : k))
+    this.updateSettings({ folders: renamed, collapsed })
+    this.toast('success', `Folder renamed to "${next}"`)
+  }
+
+  folderRemove(name: string): void {
+    const folders = this.prefs.folders
+    if (!folders.some((f) => f.name === name)) return this.toast('error', `No folder named "${name}"`)
+    this.updateSettings({ folders: folders.filter((f) => f.name !== name), collapsed: this.prefs.collapsed.filter((k) => k !== `folder:${name}`) })
+    this.toast('info', `Folder "${name}" deleted; its chats are back in their sections`)
+  }
+
+  folderMove(name: string, delta: -1 | 1): void {
+    const folders = [...this.prefs.folders]
+    const at = folders.findIndex((f) => f.name === name)
+    if (at < 0) return this.toast('error', `No folder named "${name}"`)
+    const to = at + delta
+    if (to < 0 || to >= folders.length) return
+    const [moved] = folders.splice(at, 1)
+    if (moved !== undefined) folders.splice(to, 0, moved)
+    this.updateSettings({ folders })
+  }
+
+  /** Files a tab in a folder (moving it out of any other); `null` takes it out of its folder. */
+  folderFile(id: string, folder: string | null): void {
+    if (folder !== null && !this.prefs.folders.some((f) => f.name === folder)) return this.toast('error', `No folder named "${folder}"`)
+    if (!fileable(id, this.convs(), this.agentsOn)) return this.toast('error', 'Only chats, docs, the AI tab and the agents room can be filed')
+    this.updateSettings({ folders: filed(this.prefs.folders, id, folder) })
+  }
+
+  /** Folds or unfolds a sidebar section (`direct`, `groups`, `agents`, `tools`, `folder:<name>`). */
+  toggleSection(key: string): void {
+    const collapsed = this.prefs.collapsed
+    this.updateSettings({ collapsed: collapsed.includes(key) ? collapsed.filter((k) => k !== key) : [...collapsed, key].slice(-40) })
+  }
+
+  webBusy(): boolean {
+    return false
+  }
+
+  aiBusy(): boolean {
+    return false
+  }
+
   // ---------------------------------------------------------------- settings tab
 
   /** Opens the Settings tab, optionally scrolled to a section. */
@@ -1326,6 +1391,7 @@ export class Engine extends EventEmitter {
       update: this.update,
       locks: Object.fromEntries(this.envLocks.map((l) => [l.key, l.source])),
       themes: THEMES.map((t) => t.name),
+      folders: this.prefs.folders.map((f) => ({ name: f.name, count: f.ids.filter((id) => fileable(id, this.convs(), this.agentsOn)).length })),
       agentsOn: this.agentsOn,
       agents: this.agentsOn ? this.agentSettingsView() : EMPTY_AGENT_SETTINGS,
     }

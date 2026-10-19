@@ -52,6 +52,7 @@ export function applySettingEdit(engine: Engine, id: string, text: string): void
     case 'agents.memory.add':
       return engine.agentMemory('add', text)
     default:
+      if (id.startsWith('folder:')) return engine.folderRename(id.slice('folder:'.length), text)
       if (id.startsWith('agent.color:')) return engine.setAgentColor(id.slice('agent.color:'.length), text)
       if (id.startsWith('agents.budget:')) return engine.setAgentBudget(id.slice('agents.budget:'.length), text)
       throw new Error(`unknown setting ${id}`)
@@ -59,7 +60,7 @@ export function applySettingEdit(engine: Engine, id: string, text: string): void
 }
 
 /** An action row, after any confirmation. */
-export function runSettingAction(engine: Engine, id: string, _ask: (field: FieldRequest) => void): void {
+export function runSettingAction(engine: Engine, id: string, ask: (field: FieldRequest) => void): void {
   switch (id) {
     case 'code':
       copyText(engine.me.code)
@@ -72,6 +73,8 @@ export function runSettingAction(engine: Engine, id: string, _ask: (field: Field
       engine.showChangelog()
       engine.activate(null)
       return
+    case 'folder.new':
+      return ask({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) })
     case 'agents.setup':
       return engine.openAgentSetup()
     case 'agents.memory.show':
@@ -81,6 +84,9 @@ export function runSettingAction(engine: Engine, id: string, _ask: (field: Field
     case 'guest.kickall':
       return engine.agentKick('all')
     default:
+      if (id.startsWith('folder-up:')) return engine.folderMove(id.slice('folder-up:'.length), -1)
+      if (id.startsWith('folder-down:')) return engine.folderMove(id.slice('folder-down:'.length), 1)
+      if (id.startsWith('folder.delete:')) return engine.folderRemove(id.slice('folder.delete:'.length))
       if (id.startsWith('agent.model:')) return engine.openModelPicker(id.slice('agent.model:'.length))
       if (id.startsWith('guest.kick:')) return engine.agentKick(id.slice('guest.kick:'.length))
       if (id.startsWith('session.leave:')) return engine.agentLeave(id.slice('session.leave:'.length))
