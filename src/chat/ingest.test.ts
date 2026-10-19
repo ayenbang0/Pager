@@ -4,6 +4,7 @@ import DHT, { type KeyPair } from 'hyperdht'
 import { Store } from './db.js'
 import { dmConvId, signEvent, type EventKind, type PagerEvent } from './events.js'
 import { checkEvent, MAX_GROUP_MEMBERS, type IngestVerdict } from './ingest.js'
+import { RENAME_PREFIX } from './ops.js'
 
 const hex = (kp: KeyPair): string => kp.publicKey.toString('hex')
 const me = DHT.keyPair()
@@ -87,4 +88,22 @@ test('group-full at 16', () => {
   assert.equal(s.members(G).ever.size, MAX_GROUP_MEMBERS)
   assert.equal(reason(checkEvent(s, ME, ME, mk(me, G, MAX_GROUP_MEMBERS, 'member-add', 'f'.repeat(64)))), 'group-full')
   assert.equal(reason(checkEvent(s, ME, ME, mk(me, G, MAX_GROUP_MEMBERS, 'member-add', '1'.padStart(64, '0')))), 'ok')
+})
+
+test('rename events: only the creator, only in a group, with a valid title', () => {
+  const s = setup()
+  const title = (t: string): string => RENAME_PREFIX + t
+  // bob is a member but not the creator
+  assert.equal(reason(checkEvent(s, ME, BOB, mk(bob, G, 1, 'text', title('crew')))), 'not-creator')
+  // the creator's rename: me is the receiver, so use bob as the receiver with the creator as sender
+  const asBob = new Store(':memory:')
+  asBob.upsertPeer(ME, { state: 'accepted' }, 1)
+  asBob.upsertConv({ id: G, kind: 'group', title: 'g', creator: ME, peer: null, state: 'active', readAt: 0, createdAt: 1 })
+  asBob.insertEvent(mk(me, G, 1, 'member-add', BOB), 1)
+  assert.equal(reason(checkEvent(asBob, BOB, ME, mk(me, G, 2, 'text', title('crew')))), 'ok')
+  assert.equal(reason(checkEvent(asBob, BOB, ME, mk(me, G, 2, 'text', title('')))), 'bad-kind')
+  assert.equal(reason(checkEvent(asBob, BOB, ME, mk(me, G, 2, 'text', title('x'.repeat(65))))), 'bad-kind')
+  assert.equal(reason(checkEvent(asBob, BOB, ME, mk(me, G, 2, 'text', title('bell\x07')))), 'bad-kind')
+  // a DM has no creator
+  assert.equal(reason(checkEvent(s, ME, BOB, mk(bob, DM, 1, 'text', title('crew')))), 'bad-kind')
 })

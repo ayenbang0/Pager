@@ -299,6 +299,39 @@ test('group: invite, chat across members, leave is permanent', async () => {
   assert.doesNotMatch(members(a), /carol/)
 })
 
+test('group rename: the creator renames, members follow, others are refused, and it never counts as unread', async () => {
+  const a = await boot('alice')
+  const b = await boot('bob')
+  await befriend(a, b)
+  await a.engine.submit('/group new team')
+  const group = a.engine.active()
+  assert.ok(group)
+  await a.engine.submit('/group invite bob')
+  await waitFor(() => b.engine.pending().some((p) => p.type === 'group'), 20_000, 'invite')
+  await b.engine.submit('/accept 1')
+  b.engine.activate(group)
+  const title = (p: Peer): string | undefined => p.engine.convs().find((c) => c.id === group)?.title
+  await a.engine.submit('/group rename crew')
+  assert.equal(a.toasts.at(-1)?.text, 'Group renamed to "crew"')
+  assert.equal(title(a), 'crew')
+  await waitFor(() => title(b) === 'crew', 20_000, 'bob sees the new name')
+  assert.ok(b.engine.messages(group, 50).some((m) => m.kind === 'system' && m.text === 'alice renamed the group to "crew"'))
+  assert.equal(b.engine.convs().find((c) => c.id === group)?.unread, 0)
+  // a member cannot rename
+  await b.engine.submit('/group rename hax')
+  assert.equal(b.toasts.at(-1)?.text, 'Only the group creator can rename it')
+  assert.equal(title(b), 'crew')
+  await a.engine.submit('/group rename crew')
+  assert.equal(a.toasts.at(-1)?.text, 'Already named that')
+  await a.engine.submit('/group rename ')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  // an offline member catches up on reconnect
+  await b.engine.close()
+  await a.engine.submit('/group rename crew2')
+  const again = await boot('bob', b.dir)
+  await waitFor(() => title(again) === 'crew2', 25_000, 'bob catches up')
+})
+
 test('name change propagates to contacts', async () => {
   const a = await boot('alice')
   const b = await boot('bob')

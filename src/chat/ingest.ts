@@ -1,7 +1,10 @@
 import type { Store } from './db.js'
 import { verifyEvent, type PagerEvent } from './events.js'
+import { RENAME_PREFIX } from './ops.js'
 
 export const MAX_GROUP_MEMBERS = 16
+/** Longest group title a rename may carry. */
+export const MAX_TITLE = 64
 
 export type IngestVerdict =
   | { ok: true }
@@ -35,6 +38,8 @@ export function checkEvent(store: Store, me: string, sender: string, ev: PagerEv
     if (sender !== conv.peer || store.getPeer(sender)?.state !== 'accepted') return fail('not-entitled')
     if (ev.author !== sender && ev.author !== me) return fail('author-not-member')
     if (ev.kind !== 'text') return fail('bad-kind')
+    // Only a group has a creator to rename it.
+    if (ev.body.startsWith(RENAME_PREFIX)) return fail('bad-kind')
   } else {
     ever = store.members(conv.id).ever
     if (!ever.has(sender)) return fail('not-entitled')
@@ -48,7 +53,11 @@ export function checkEvent(store: Store, me: string, sender: string, ev: PagerEv
   if (ev.seq > last + 1) return fail('seq-gap')
 
   if (ever) {
-    if (ev.kind === 'member-add') {
+    if (ev.kind === 'text' && ev.body.startsWith(RENAME_PREFIX)) {
+      if (ev.author !== conv.creator) return fail('not-creator')
+      const title = ev.body.slice(RENAME_PREFIX.length)
+      if (title.length < 1 || title.length > MAX_TITLE || /\p{Cc}/u.test(title)) return fail('bad-kind')
+    } else if (ev.kind === 'member-add') {
       if (ev.author !== conv.creator) return fail('not-creator')
       if (!/^[0-9a-f]{64}$/.test(ev.body)) return fail('bad-kind')
       if (!ever.has(ev.body) && ever.size >= MAX_GROUP_MEMBERS) return fail('group-full')

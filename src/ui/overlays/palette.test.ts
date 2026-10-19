@@ -11,7 +11,7 @@ test('prefix matching on commands', () => {
 
 test('group subcommands after "/group "', () => {
   assert.deepEqual(matchCommands('/group i').map((c) => c.name), ['invite'])
-  assert.equal(matchCommands('/group ').length, 4)
+  assert.equal(matchCommands('/group ').length, 5)
   assert.deepEqual(matchCommands('/group invite bo'), [])
 })
 
@@ -67,7 +67,7 @@ test('emoji suggestions need two characters after a colon at a word start and ne
 
 test('menuItems prefers the slash menu, honours the emoji switch and the cursor, and Tab-style replacement keeps the rest', () => {
   const commands = menuItems('/gr', 3, true)
-  assert.equal(commands[0]?.label, '/group new|invite|members|leave')
+  assert.equal(commands[0]?.label, '/group new|invite|rename|members|leave')
   assert.equal(commands[0]?.insert, '/group ')
   assert.deepEqual(menuItems('hi :fi', 6, false), [])
   const [fire] = menuItems('hi :fi there', 6, true)

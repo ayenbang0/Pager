@@ -21,6 +21,7 @@ import type { Secrets } from '../chat/secrets.js'
 import type { EnvLock } from './envSettings.js'
 import { SETTINGS_ID, type AgentSettingsView, type SettingsView } from './settingsView.js'
 import { fileable, filed } from './folders.js'
+import { opOf, RENAME_PREFIX } from '../chat/ops.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from '../chat/ingest.js'
 import { LOCAL_CAPS, Net, type PeerLink } from '../net/net.js'
 import { NetLog } from '../net/netlog.js'
@@ -481,6 +482,7 @@ export class Engine extends EventEmitter {
         return { ...base, kind: 'system', text: `${authorName} added ${this.nameOf(e.body)}`, status: null }
       }
       if (e.kind === 'member-leave') return { ...base, kind: 'system', text: `${authorName} left`, status: null }
+      if (opOf(e.body) === 'rename') return { ...base, kind: 'system', text: `${authorName} renamed the group to "${e.body.slice(RENAME_PREFIX.length)}"`, status: null }
       let status: MessageView['status'] = null
       if (mine) {
         const sent = others.length > 0 && others.every((pk) => (this.sentTo.get(`${convId}:${pk}`) ?? 0) >= e.seq)
@@ -1516,13 +1518,15 @@ export class Engine extends EventEmitter {
         return this.groupInvite(arg)
       case 'members':
         return this.groupMembers()
+      case 'rename':
+        return this.groupRename(arg)
       case 'leave': {
         const conv = this.activeGroup()
         if (conv) this.leaveGroup(conv.id)
         return
       }
       default:
-        this.toast('error', 'Usage: /group new <name> | invite <name> | members | leave')
+        this.toast('error', 'Usage: /group new <name> | invite <name> | rename <name> | members | leave')
     }
   }
 
@@ -1545,6 +1549,20 @@ export class Engine extends EventEmitter {
     this.store.upsertConv({ id, kind: 'group', title, creator: this.me.pk, peer: null, state: 'active', readAt: now, createdAt: now })
     this.toast('success', `Created #${title}`)
     this.activate(id)
+  }
+
+  private groupRename(raw: string): void {
+    const conv = this.activeGroup()
+    if (!conv) return
+    if (conv.creator !== this.me.pk) return this.toast('error', 'Only the group creator can rename it')
+    const title = raw.trim()
+    if (title === '' || title.length > MAX_NAME || hasControl(title)) return this.toast('error', `Group name must be 1-${MAX_NAME} characters`)
+    if (title === conv.title) return this.toast('info', 'Already named that')
+    const event = this.appendEvent(conv.id, 'text', RENAME_PREFIX + title)
+    this.store.upsertConv({ ...conv, title })
+    this.deliver(conv, event)
+    this.emit('change')
+    this.toast('success', `Group renamed to "${title}"`)
   }
 
   private groupInvite(query: string): void {
@@ -1898,9 +1916,11 @@ export class Engine extends EventEmitter {
       if (!this.store.insertEvent(ev, Date.now())) continue
       touched.add(ev.author)
       if (ev.kind === 'text') {
-        // Document operations share the chat log but are never chat messages.
-        if (ev.body.startsWith(DOC_PREFIX)) this.docs.applyEvent(ev)
-        else this.onIncomingText(ev)
+        // Documents, renames and reactions share the chat log but are never chat messages.
+        const op = opOf(ev.body)
+        if (op === 'doc') this.docs.applyEvent(ev)
+        else if (op === 'rename') this.applyRename(ev)
+        else if (op === null) this.onIncomingText(ev)
       } else membership = true
     }
     for (const author of touched) link.send({ t: 'ack', conv: convId, author, seq: this.store.lastSeq(convId, author) })
@@ -1909,6 +1929,13 @@ export class Engine extends EventEmitter {
       this.sendSyncAll()
     }
     if (touched.size > 0) this.emit('change')
+  }
+
+  /** The creator's events arrive in strict seq order, so each accepted rename is newer than the last. */
+  private applyRename(ev: PagerEvent): void {
+    const conv = this.store.getConv(ev.conv)
+    if (!conv || conv.kind !== 'group') return
+    this.store.upsertConv({ ...conv, title: ev.body.slice(RENAME_PREFIX.length) })
   }
 
   private onIncomingText(ev: PagerEvent): void {
@@ -2022,6 +2049,11 @@ export class Engine extends EventEmitter {
     this.store.markRead(conv.id, event.ts)
     this.sendRead(conv.id)
     this.emit('change')
+    this.deliver(conv, event)
+  }
+
+  /** Sends one new event to every other member who is online (the rest catch up through sync). */
+  private deliver(conv: Conv, event: PagerEvent): void {
     for (const pk of this.otherMembers(conv)) this.sendEvents(this.net.link(pk), conv.id, [event])
   }
 

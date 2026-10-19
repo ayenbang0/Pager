@@ -12,7 +12,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'decline', usage: '/decline [n]', summary: 'Decline a pending request or invite' },
   { name: 'open', usage: '/open <name>', summary: 'Open a conversation' },
   { name: 'remove', usage: '/remove <name>', summary: 'Remove a contact' },
-  { name: 'group', usage: '/group new|invite|members|leave', summary: 'Manage groups' },
+  { name: 'group', usage: '/group new|invite|rename|members|leave', summary: 'Manage groups' },
   { name: 'terminal', usage: '/terminal', summary: 'Open the built-in terminal tab' },
   { name: 'doc', usage: '/doc new <name> [in <chat>]', summary: 'Shared Markdown documents (Docs tab)' },
   { name: 'agent', usage: '/agent <name> <task>', summary: 'Run coding agents in isolated worktrees' },
@@ -27,6 +27,7 @@ export const COMMANDS: readonly CommandSpec[] = [
 export const GROUP_SUBCOMMANDS: readonly CommandSpec[] = [
   { name: 'new', usage: '/group new <name>', summary: 'Create a group' },
   { name: 'invite', usage: '/group invite <name>', summary: 'Invite a contact (creator only)' },
+  { name: 'rename', usage: '/group rename <new name>', summary: 'Rename this group (creator only)' },
   { name: 'members', usage: '/group members', summary: 'List members' },
   { name: 'leave', usage: '/group leave', summary: 'Leave this group for good' },
 ]
