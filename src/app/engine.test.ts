@@ -583,6 +583,7 @@ test('agent tabs: /agent and @name drive agents, plain text is refused in the hu
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, '#14d8c4')
   a.engine.setAgentColor('omp', 'auto')
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, undefined)
+  await a.engine.close()
   fs.rmSync(repo, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
@@ -686,6 +687,7 @@ test('removed /agent subcommands point at Settings or the palette; /agent <name>
   assert.deepEqual(a.engine.agentSettingsView().budgets, [{ key: 'claude', text: 'turns=4' }])
   a.engine.setAgentReview(true)
   assert.equal(a.engine.agentSettingsView().review, true)
+  await a.engine.close()
   fs.rmSync(repo, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
@@ -725,6 +727,7 @@ test("a command an agent advertises runs verbatim in that agent's tab; pager com
   assert.equal(a.engine.agentRoom().runs.length, 1)
   assert.equal(typeof a.engine.agentReview(), 'boolean')
   assert.equal(a.engine.agentStats().week.length, 14)
+  await a.engine.close()
   fs.rmSync(repo, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
