@@ -21,6 +21,7 @@ export function applySettingSet(engine: Engine, id: string, value: boolean | str
     if (TOGGLES.includes(id)) return engine.setSetting(id as ToggleKey, value)
     throw new Error(`unknown setting ${id}`)
   }
+  if (id === 'ai.default') return engine.setAi('default', value)
   if (id.startsWith('agent.color:')) return engine.setAgentColor(id.slice('agent.color:'.length), value)
   switch (id) {
     case 'theme':
@@ -45,6 +46,12 @@ export function applySettingEdit(engine: Engine, id: string, text: string): void
       return engine.setBadge(text)
     case 'accent':
       return engine.setAccent(text)
+    case 'ai.ollama.url':
+    case 'ai.ollama.model':
+    case 'ai.openai.url':
+    case 'ai.openai.model':
+    case 'ai.openai.key':
+      return engine.setAi(id.slice('ai.'.length), text)
     case 'agents.verify':
       return engine.setAgentVerify(text)
     case 'agents.goal':
@@ -73,6 +80,8 @@ export function runSettingAction(engine: Engine, id: string, ask: (field: FieldR
       engine.showChangelog()
       engine.activate(null)
       return
+    case 'ai.clear':
+      return engine.clearAi()
     case 'folder.new':
       return ask({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) })
     case 'agents.setup':

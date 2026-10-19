@@ -204,6 +204,7 @@ export function App({ engine, onExit }: Props) {
   const review = engine.agentReview()
   const inTermTab = activeId === TERM_ID
   const inWeb = activeId === WEB_ID
+  const inAi = activeId === AI_ID
   // Short panes fall back to compact rows, and the terminal tab is always compact: its rows are commands and output, not speakers.
   const look: Look = {
     density: inTermTab || inWeb ? 'compact' : effectiveDensity(settings.density, frame),
@@ -443,6 +444,8 @@ export function App({ engine, onExit }: Props) {
       ? { kind: 'settings', title: '' }
       : inWeb
       ? { kind: 'web', title: '' }
+      : inAi
+      ? { kind: 'ai', title: '' }
       : inTerm
       ? { kind: 'terminal', title: '' }
       : inRoom
@@ -465,11 +468,13 @@ export function App({ engine, onExit }: Props) {
   const sharedHere = sharedRoom?.guests.filter((g) => g.online).map((g) => g.name) ?? []
   const sharedNote =
     sharedRoom === undefined ? undefined : [sharedRoom.access, sharedRoom.connected ? undefined : 'host offline', sharedHere.length === 0 ? undefined : `with ${sharedHere.join(', ')}`].filter(Boolean).join(' · ')
-  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inWeb ? '⌕ web' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
+  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inWeb ? '⌕ web' : inAi ? '✦ ai' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
   const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : undefined
   const placeholder = field !== null
     ? field.label
-    : inWeb
+    : inAi
+      ? 'Ask anything. @claude, @ollama or @openai picks who answers'
+      : inWeb
       ? 'Search the web, or: open <n> · read <n> · clear'
       : inTerm
     ? term.running
@@ -546,6 +551,7 @@ export function App({ engine, onExit }: Props) {
     { label: 'New folder…', hint: 'sidebar', run: () => askField({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) }) },
     { label: '▸ Terminal', hint: engine.terminal().running ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
     { label: '⌕ Web', hint: 'search the web', run: () => engine.activate(WEB_ID) },
+    ...(engine.agentsEnabled() ? [{ label: '✦ AI', hint: 'chat without a repository', run: () => engine.activate(AI_ID) }, { label: 'Clear AI chat', hint: 'history and scratch files', run: () => engine.clearAi() }] : []),
     { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
     ...engine.docList().map((d): PaletteItem => ({ label: `Doc: ${d.name}`, hint: d.where, run: () => engine.openDoc(d.id) })),
     { label: 'New document…', hint: '/doc new', run: () => fillPrompt('/doc new ') },
@@ -680,7 +686,7 @@ export function App({ engine, onExit }: Props) {
                 ) : inTerm ? (
                   <TerminalHeader term={term} width={mainWidth} />
                 ) : (
-                  <BandTitle title={tabTitle} width={mainWidth} right={inWeb ? 'DuckDuckGo' : tabNote} />
+                  <BandTitle title={tabTitle} width={mainWidth} right={inWeb ? 'DuckDuckGo' : inAi ? (engine.aiBusy() ? 'thinking…' : '@name picks who answers') : tabNote} />
                 )}
                 {inSettings ? (
                   <SettingsPanel

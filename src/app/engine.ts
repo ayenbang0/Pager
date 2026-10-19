@@ -11,6 +11,8 @@ import { COMMANDS, MOVED, parseCommand, SETTINGS_ARGUMENTS } from './commands.js
 import { formatChangelog, getChangesSince, isNewer as isNewerChangelog, latestVersion as latestChangelogVersion, loadChangelog } from './changelog.js'
 import { Terminal, TERM_ID, type TermEntry, type TermState } from '../tools/terminal/terminal.js'
 import { WebTool, WEB_ID, formatResults } from '../tools/web/tool.js'
+import { AiChat, AI_ID } from '../ai/chat.js'
+import { runChatTurn } from '../agents/chat.js'
 import { readPage } from '../tools/web/read.js'
 import { searchWeb } from '../tools/web/search.js'
 import { DocStore, DOCS_ID, DOC_PREFIX, type DocInfo } from '../docs/store.js'
@@ -22,7 +24,7 @@ import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from
 import { loadOrCreateIdentity, saveName } from '../chat/identity.js'
 import type { Secrets } from '../chat/secrets.js'
 import type { EnvLock } from './envSettings.js'
-import { SETTINGS_ID, type AgentSettingsView, type SettingsView } from './settingsView.js'
+import { SETTINGS_ID, type AgentSettingsView, type AiSettingsView, type SettingsView } from './settingsView.js'
 import { fileable, filed } from './folders.js'
 import { opOf, REACT_PREFIX, RENAME_PREFIX } from '../chat/ops.js'
 import { encodeReaction, foldReactions, isReactionEmoji } from '../chat/reactions.js'
@@ -180,6 +182,8 @@ export class Engine extends EventEmitter {
   private readonly share: AgentShare
   private readonly term: Terminal
   readonly web: WebTool
+  /** The AI tab; absent in a run without agents. */
+  readonly ai: AiChat | undefined
   private readonly webFetch: typeof fetch | undefined
   readonly docs: DocStore
   private openDocId: string | null = null
@@ -292,6 +296,16 @@ export class Engine extends EventEmitter {
     this.agents.on('toast', (t: Toast) => this.emit('toast', t))
     this.term = new Terminal(opts.workdir ?? process.cwd())
     this.term.on('change', () => this.emit('change'))
+    this.ai = this.agentsOn
+      ? new AiChat({
+          dir: opts.dir,
+          readyAgents: () => this.agents.names(),
+          runCli: (agent, prompt, cwd, signal) => runChatTurn({ registry: this.agents.registry, ...(opts.agentAdapters === undefined ? {} : { adapters: opts.agentAdapters }) }, { agent, prompt, cwd, signal }),
+          ...(opts.fetch === undefined ? {} : { fetch: opts.fetch }),
+          user: this.me.name,
+        })
+      : undefined
+    this.ai?.on('change', () => this.emit('change'))
     this.web = new WebTool(opts.fetch === undefined ? {} : { fetch: opts.fetch })
     this.webFetch = opts.fetch
     this.web.on('change', () => this.emit('change'))
@@ -494,6 +508,7 @@ export class Engine extends EventEmitter {
     if (convId === TERM_ID) return this.termMessages(limit)
     if (convId === DOCS_ID || convId === SETTINGS_ID) return []
     if (convId === WEB_ID) return this.webMessages(limit)
+    if (convId === AI_ID) return this.ai?.messages(limit) ?? []
     if (convId === ROOM_ID) return this.agents.messages(limit)
     const agent = parseAgentTab(convId)
     if (agent !== undefined) return this.agents.messages(limit, agent)
@@ -655,6 +670,7 @@ export class Engine extends EventEmitter {
   /** Ctrl+C in the Terminal tab: stop the running command. False when there is nothing to stop. */
   interrupt(): boolean {
     if (this.activeId === TERM_ID) return this.term.stop()
+    if (this.activeId === AI_ID) return this.ai?.stop() ?? false
     const agent = parseAgentTab(this.activeId)
     if (agent === undefined || !this.agents.busy(agent)) return false
     this.agents.stop(agent)
@@ -802,8 +818,9 @@ export class Engine extends EventEmitter {
       this.emit('change')
       return
     }
+    if (convId === AI_ID && this.ai === undefined) return this.toast('error', AGENTS_OFF)
     const agent = parseAgentTab(convId)
-    if (convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID || convId === SETTINGS_ID || convId === WEB_ID || agent !== undefined) {
+    if (convId === AI_ID || convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID || convId === SETTINGS_ID || convId === WEB_ID || agent !== undefined) {
       if (convId === ROOM_ID) this.agents.markRead()
       if (agent !== undefined) this.agents.markRead(agent)
       this.activeId = convId
@@ -838,7 +855,7 @@ export class Engine extends EventEmitter {
     const text = input.trim()
     if (text === '') return
     this.input = [...this.input.filter((h) => h !== text), text].slice(-HISTORY_MAX)
-    this.suggester.learn(text, this.activeId !== TERM_ID && this.activeId !== SETTINGS_ID && this.activeId !== WEB_ID)
+    this.suggester.learn(text, this.activeId !== TERM_ID && this.activeId !== SETTINGS_ID && this.activeId !== WEB_ID && this.activeId !== AI_ID)
     try {
       saveHistory(this.dir, this.input)
     } catch {
@@ -858,6 +875,7 @@ export class Engine extends EventEmitter {
     saveLastSeen(this.dir, Date.now())
     this.term.close()
     this.web.close()
+    this.ai?.close()
     this.docs.close()
     this.share.close()
     closeDesktop()
@@ -1409,7 +1427,55 @@ export class Engine extends EventEmitter {
   }
 
   aiBusy(): boolean {
-    return false
+    return this.ai?.busy ?? false
+  }
+
+  aiView(): AiSettingsView | undefined {
+    if (this.ai === undefined) return undefined
+    const { config, locks } = this.ai.effective()
+    const key = config.openai.key
+    return {
+      default: this.ai.stored().default,
+      backends: this.ai.backends(),
+      ollama: config.ollama,
+      openai: { url: config.openai.url, model: config.openai.model, keyHint: key === '' ? 'not set' : `••••${key.slice(-4)}` },
+      locks: Object.fromEntries(locks.map((l) => [l.key, l.source])),
+    }
+  }
+
+  /** Sets one AI backend option (`default`, `ollama.url`, `ollama.model`, `openai.url`, `openai.model`, `openai.key`). */
+  setAi(key: string, value: string): void {
+    if (this.ai === undefined) return this.toast('error', AGENTS_OFF)
+    const text = value.trim()
+    if (/\p{Cc}/u.test(text) || text.length > 2000) return this.toast('error', 'That value is not valid')
+    if ((key === 'ollama.url' || key === 'openai.url') && text !== '') {
+      let ok = false
+      try {
+        const u = new URL(text)
+        ok = u.protocol === 'http:' || u.protocol === 'https:'
+      } catch {
+        ok = false
+      }
+      if (!ok) return this.toast('error', 'An address looks like http://127.0.0.1:11434')
+    }
+    const lock = this.ai.effective().locks.find((l) => `${l.key}`.replace('ai.', '') === key)
+    if (lock !== undefined) return this.toast('error', `Locked by ${lock.source}`)
+    this.ai.update((c) => {
+      if (key === 'default') c.default = text === '' ? 'auto' : text
+      else if (key === 'ollama.url') c.ollama.url = text === '' ? 'http://127.0.0.1:11434' : text
+      else if (key === 'ollama.model') c.ollama.model = text
+      else if (key === 'openai.url') c.openai.url = text === '' ? 'https://api.openai.com/v1' : text
+      else if (key === 'openai.model') c.openai.model = text
+      else if (key === 'openai.key') c.openai.key = text
+      return c
+    })
+    this.toast('success', 'AI settings saved')
+  }
+
+  /** Empties the AI tab's history and its scratch folder. */
+  clearAi(): void {
+    this.ai?.clear()
+    this.toast('info', 'AI chat cleared')
   }
 
   // ---------------------------------------------------------------- settings tab
@@ -1442,6 +1508,7 @@ export class Engine extends EventEmitter {
       folders: this.prefs.folders.map((f) => ({ name: f.name, count: f.ids.filter((id) => fileable(id, this.convs(), this.agentsOn)).length })),
       agentsOn: this.agentsOn,
       agents: this.agentsOn ? this.agentSettingsView() : EMPTY_AGENT_SETTINGS,
+      ...(this.aiView() === undefined ? {} : { ai: this.aiView() }),
     }
   }
 
@@ -1532,6 +1599,7 @@ export class Engine extends EventEmitter {
     if (target === 'docs') return this.activate(DOCS_ID)
     if (target === 'settings') return this.activate(SETTINGS_ID)
     if (target === 'web') return this.activate(WEB_ID)
+    if (target === 'ai') return this.activate(AI_ID)
     const res = this.resolve(this.convs(), query, (c) => c.title, (c) => c.peer)
     if ('error' in res) {
       this.toast('error', res.error)
@@ -2083,6 +2151,7 @@ export class Engine extends EventEmitter {
     if (this.activeId === ROOM_ID || parseAgentTab(this.activeId) !== undefined) return this.agents.say(text, parseAgentTab(this.activeId))
     if (this.activeId === TERM_ID) return this.term.run(text)
     if (this.activeId === WEB_ID) return void this.web.run(text)
+    if (this.activeId === AI_ID) return void this.ai?.say(text)
     if (this.activeId === SETTINGS_ID) return this.toast('info', 'The Settings tab takes keys, not text (Up/Down, Enter)')
     const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
     if (!conv) {

@@ -18,6 +18,7 @@ import { DEFAULT_SETTINGS } from './settings.js'
 import { VERSION } from './version.js'
 import { SETTINGS_ID } from './settingsView.js'
 import { WEB_ID } from '../tools/web/tool.js'
+import { AI_ID } from '../ai/chat.js'
 import { DatabaseSync } from 'node:sqlite'
 import { Store } from '../chat/db.js'
 import { deriveSecrets } from '../chat/secrets.js'
@@ -404,6 +405,43 @@ test('the web tab: text searches, open and read follow, results show as messages
     delete process.env.PAGER_OPEN_FILE
     delete process.env.PAGER_NO_WEB
   }
+})
+
+test('the AI tab: /open ai, text reaches a ready agent headless, settings round-trip, and clearing empties it', async () => {
+  const fake: AdapterSpec = {
+    bin: process.execPath,
+    args: (p) => [fileURLToPath(new URL('../agents/testing/testAgent.js', import.meta.url)), p],
+    extract: (s) => s.trim(),
+  }
+  const repo = tmpDir('pager-ai-repo-')
+  const a = await boot('alice', undefined, { workdir: repo, agentAdapters: { omp: fake } })
+  await a.engine.checkAgents()
+  await a.engine.submit('/open ai')
+  assert.equal(a.engine.active(), AI_ID)
+  await a.engine.submit('ECHO from the ai tab')
+  await waitFor(() => a.engine.messages(AI_ID, 20).some((m) => m.text === 'from the ai tab' && m.agent === true), 20_000, 'ai reply')
+  assert.deepEqual(a.engine.messages(AI_ID, 20).map((m) => m.authorName), ['you', 'omp'])
+  assert.equal(a.engine.aiBusy(), false)
+  assert.equal(a.engine.convs().some((c) => c.id === AI_ID), false)
+  // the scratch folder is not a git repository and not the work dir
+  assert.ok(!fs.existsSync(path.join(a.dir, 'ai', 'work', '.git')))
+  await a.engine.submit('WRITE note.txt=hi')
+  await waitFor(() => fs.existsSync(path.join(a.dir, 'ai', 'work', 'note.txt')), 20_000, 'file in the scratch folder')
+  // settings
+  a.engine.setAi('ollama.model', 'llama3')
+  a.engine.setAi('openai.key', 'sk-abcdef1234')
+  a.engine.setAi('ollama.url', 'not a url')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  const view = a.engine.settingsView().ai
+  assert.equal(view?.ollama.model, 'llama3')
+  assert.equal(view?.openai.keyHint, '••••1234')
+  assert.deepEqual(view?.backends.slice(-2), ['ollama', 'openai'])
+  assert.equal(fs.statSync(path.join(a.dir, 'ai.json')).mode & 0o777, 0o600)
+  a.engine.clearAi()
+  assert.deepEqual(a.engine.messages(AI_ID, 20), [])
+  assert.deepEqual(fs.readdirSync(path.join(a.dir, 'ai', 'work')), [])
+  await a.engine.close()
+  fs.rmSync(repo, { recursive: true, force: true })
 })
 
 test('name change propagates to contacts', async () => {

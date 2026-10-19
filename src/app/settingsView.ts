@@ -2,6 +2,16 @@ import type { Settings } from './settings.js'
 
 export const SETTINGS_ID = 'settings'
 
+export interface AiSettingsView {
+  default: string
+  /** Every backend id: ready agents, then ollama, then openai. */
+  backends: string[]
+  ollama: { url: string; model: string }
+  openai: { url: string; model: string; keyHint: string }
+  /** `ai.openai.key` / `ai.openai.url` -> the environment variable that fixes it. */
+  locks: Record<string, string>
+}
+
 export interface AgentSettingsView {
   agents: { name: string; cli: string; model: string; effort: string; color: string; ready: boolean }[]
   review: boolean
@@ -30,4 +40,6 @@ export interface SettingsView {
   folders: { name: string; count: number }[]
   agentsOn: boolean
   agents: AgentSettingsView
+  /** Absent in a run without agents. */
+  ai?: AiSettingsView
 }

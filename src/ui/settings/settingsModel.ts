@@ -109,7 +109,22 @@ function folders(view: SettingsView): SettingsRow[] {
 }
 
 function ai(view: SettingsView): SettingsRow[] {
-  return [toggle(view, 'web', 'Web search', 'restart to apply')]
+  const rows: SettingsRow[] = [toggle(view, 'web', 'Web search', 'restart to apply')]
+  const a = view.ai
+  if (!view.agentsOn || a === undefined) return rows
+  const text = (id: string, label: string, value: string, extra: Partial<Extract<SettingsRow, { kind: 'text' }>> = {}): SettingsRow => {
+    const locked = a.locks[id]
+    return { kind: 'text', id, label, value, ...extra, ...(locked === undefined ? {} : { locked }) }
+  }
+  rows.push({ kind: 'choice', id: 'ai.default', label: 'Default backend', options: ['auto', ...a.backends], value: a.default })
+  rows.push(text('ai.ollama.url', 'Ollama address', a.ollama.url))
+  rows.push(text('ai.ollama.model', 'Ollama model (blank = first installed)', a.ollama.model))
+  rows.push(text('ai.openai.url', 'OpenAI-compatible address', a.openai.url))
+  rows.push(text('ai.openai.model', 'OpenAI-compatible model', a.openai.model))
+  rows.push(text('ai.openai.key', 'API key (or PAGER_AI_KEY)', a.openai.keyHint, { masked: true, initial: '' }))
+  rows.push({ kind: 'info', label: 'Agents run headless in a scratch folder; Ollama and API replies stream and have no tools', value: '' })
+  rows.push({ kind: 'action', id: 'ai.clear', label: 'Clear AI chat history and scratch files', confirm: true })
+  return rows
 }
 
 const BUILDERS: Record<SettingsSection, (view: SettingsView) => SettingsRow[]> = {
