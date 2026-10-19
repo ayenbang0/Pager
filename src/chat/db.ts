@@ -1,9 +1,9 @@
 import { DatabaseSync, type SQLInputValue } from 'node:sqlite'
 import { DOC_PREFIX } from '../docs/store.js'
 import type { PagerEvent } from './events.js'
+import { opOf } from './ops.js'
 
-/** LIKE pattern matching document-operation event bodies (see DOC_PREFIX). */
-const DOC_LIKE = `${DOC_PREFIX}%`
+const SCHEMA_VERSION = 2
 
 export type PeerState = 'outgoing' | 'incoming' | 'accepted' | 'blocked'
 export interface Peer {
@@ -43,11 +43,11 @@ CREATE TABLE convs(
 CREATE TABLE events(
   conv TEXT NOT NULL, author TEXT NOT NULL, seq INTEGER NOT NULL, ts INTEGER NOT NULL,
   kind TEXT NOT NULL CHECK(kind IN ('text','member-add','member-leave')), body TEXT NOT NULL, sig TEXT NOT NULL,
-  recv_at INTEGER NOT NULL, PRIMARY KEY(conv, author, seq)) WITHOUT ROWID;
+  recv_at INTEGER NOT NULL, op TEXT, PRIMARY KEY(conv, author, seq)) WITHOUT ROWID;
 CREATE INDEX events_conv_ts ON events(conv, ts);
 CREATE TABLE acks(conv TEXT NOT NULL, peer TEXT NOT NULL, author TEXT NOT NULL, seq INTEGER NOT NULL, PRIMARY KEY(conv, peer, author)) WITHOUT ROWID;
 CREATE TABLE joined(conv TEXT NOT NULL, peer TEXT NOT NULL, PRIMARY KEY(conv, peer)) WITHOUT ROWID;
-INSERT INTO meta(key, value) VALUES('schema_version', '1');
+INSERT INTO meta(key, value) VALUES('schema_version', '2');
 `
 
 type Row = Record<string, unknown>
@@ -105,6 +105,24 @@ export class Store {
     this.db.exec('PRAGMA journal_mode=WAL')
     const hasMeta = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").get()
     if (!hasMeta) this.db.exec(SCHEMA)
+    else this.migrate()
+  }
+
+  private migrate(): void {
+    const r = this.db.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get()
+    const version = Number(r?.value ?? 1)
+    if (version > SCHEMA_VERSION) throw new Error('pager.db was written by a newer pager')
+    if (version >= SCHEMA_VERSION) return
+    this.db.exec('BEGIN')
+    try {
+      this.db.exec('ALTER TABLE events ADD COLUMN op TEXT')
+      this.db.prepare('UPDATE events SET op = ? WHERE body LIKE ?').run('doc', `${DOC_PREFIX}%`)
+      this.db.prepare("UPDATE meta SET value = ? WHERE key = 'schema_version'").run(String(SCHEMA_VERSION))
+      this.db.exec('COMMIT')
+    } catch (err) {
+      this.db.exec('ROLLBACK')
+      throw err
+    }
   }
 
   close(): void {
@@ -165,8 +183,8 @@ export class Store {
   /** True if the event was new. */
   insertEvent(e: PagerEvent, recvAt: number): boolean {
     const res = this.db
-      .prepare('INSERT OR IGNORE INTO events(conv, author, seq, ts, kind, body, sig, recv_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)')
-      .run(e.conv, e.author, e.seq, e.ts, e.kind, e.body, e.sig, recvAt)
+      .prepare('INSERT OR IGNORE INTO events(conv, author, seq, ts, kind, body, sig, recv_at, op) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(e.conv, e.author, e.seq, e.ts, e.kind, e.body, e.sig, recvAt, opOf(e.body))
     return res.changes === 1
   }
 
@@ -200,8 +218,8 @@ export class Store {
   /** The bodies of the last `limit` text messages `author` sent, oldest first. */
   sentTexts(author: string, limit: number): string[] {
     const rows = this.db
-      .prepare("SELECT body FROM events WHERE kind = 'text' AND author = ? AND body NOT LIKE ? ORDER BY ts DESC, seq DESC LIMIT ?")
-      .all(author, DOC_LIKE, limit)
+      .prepare("SELECT body FROM events WHERE kind = 'text' AND author = ? AND op IS NULL ORDER BY ts DESC, seq DESC LIMIT ?")
+      .all(author, limit)
     return rows.reverse().map((r) => r.body as string)
   }
 
@@ -209,10 +227,10 @@ export class Store {
   textStats(me: string, since: number): { sent: number; received: number; recent: { ts: number; conv: string; mine: boolean }[] } {
     const totals = this.db
       .prepare(
-        "SELECT COALESCE(SUM(author = ?), 0) AS sent, COALESCE(SUM(author <> ?), 0) AS received FROM events WHERE kind = 'text' AND body NOT LIKE ?",
+        "SELECT COALESCE(SUM(author = ?), 0) AS sent, COALESCE(SUM(author <> ?), 0) AS received FROM events WHERE kind = 'text' AND op IS NULL",
       )
-      .get(me, me, DOC_LIKE)
-    const rows = this.db.prepare("SELECT ts, conv, author FROM events WHERE kind = 'text' AND ts >= ? AND body NOT LIKE ?").all(since, DOC_LIKE)
+      .get(me, me)
+    const rows = this.db.prepare("SELECT ts, conv, author FROM events WHERE kind = 'text' AND ts >= ? AND op IS NULL").all(since)
     return {
       sent: (totals?.sent as number) ?? 0,
       received: (totals?.received as number) ?? 0,
@@ -223,29 +241,42 @@ export class Store {
   /** The last `limit` rows ordered by (ts, author, seq) ascending. */
   listMessages(conv: string, limit: number): StoredEvent[] {
     const rows = this.db
-      .prepare('SELECT * FROM events WHERE conv = ? AND body NOT LIKE ? ORDER BY ts DESC, author DESC, seq DESC LIMIT ?')
-      .all(conv, DOC_LIKE, limit)
+      .prepare("SELECT * FROM events WHERE conv = ? AND (op IS NULL OR op = 'rename') ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
+      .all(conv, limit)
     return rows.reverse().map((r) => ({ ...toEvent(r), recvAt: r.recv_at as number }))
   }
 
   /** Every document operation event, in the order they were written. */
   docEvents(): PagerEvent[] {
-    return this.db.prepare('SELECT * FROM events WHERE body LIKE ? ORDER BY ts, author, seq').all(DOC_LIKE).map(toEvent)
+    return this.db.prepare("SELECT * FROM events WHERE op = 'doc' ORDER BY ts, author, seq").all().map(toEvent)
+  }
+
+  /** Every reaction event of a conversation, ordered by (author, seq). */
+  reactionEvents(conv: string): { author: string; seq: number; body: string }[] {
+    return this.db
+      .prepare("SELECT author, seq, body FROM events WHERE conv = ? AND op = 'react' ORDER BY author, seq")
+      .all(conv)
+      .map((r) => ({ author: r.author as string, seq: r.seq as number, body: r.body as string }))
+  }
+
+  getEvent(conv: string, author: string, seq: number): StoredEvent | undefined {
+    const r = this.db.prepare('SELECT * FROM events WHERE conv = ? AND author = ? AND seq = ?').get(conv, author, seq)
+    return r ? { ...toEvent(r), recvAt: r.recv_at as number } : undefined
   }
 
   /** The newest `limit` text messages (documents excluded) across all conversations, newest first; the search scan window. */
   recentTexts(limit: number): { conv: string; author: string; ts: number; body: string }[] {
     const rows = this.db
-      .prepare("SELECT conv, author, ts, body FROM events WHERE kind = 'text' AND body NOT LIKE ? ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
-      .all(DOC_LIKE, limit)
+      .prepare("SELECT conv, author, ts, body FROM events WHERE kind = 'text' AND op IS NULL ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
+      .all(limit)
     return rows.map((r) => ({ conv: r.conv as string, author: r.author as string, ts: r.ts as number, body: r.body as string }))
   }
 
   /** Per conversation, how many text messages from others arrived after `since` (receive time; documents excluded). */
   textCountsSince(me: string, since: number): Map<string, number> {
     const rows = this.db
-      .prepare("SELECT conv, COUNT(*) AS n FROM events WHERE kind = 'text' AND author <> ? AND recv_at > ? AND body NOT LIKE ? GROUP BY conv")
-      .all(me, since, DOC_LIKE)
+      .prepare("SELECT conv, COUNT(*) AS n FROM events WHERE kind = 'text' AND author <> ? AND recv_at > ? AND op IS NULL GROUP BY conv")
+      .all(me, since)
     return new Map(rows.map((r) => [r.conv as string, r.n as number]))
   }
 
@@ -254,9 +285,9 @@ export class Store {
     const r = this.db
       .prepare(
         `SELECT COUNT(*) AS n FROM events e JOIN convs c ON c.id = e.conv
-         WHERE e.conv = ? AND e.kind = 'text' AND e.author <> ? AND e.recv_at > c.read_at AND e.body NOT LIKE ?`,
+         WHERE e.conv = ? AND e.kind = 'text' AND e.author <> ? AND e.recv_at > c.read_at AND e.op IS NULL`,
       )
-      .get(conv, me, DOC_LIKE)
+      .get(conv, me)
     return (r?.n as number) ?? 0
   }
 
