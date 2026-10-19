@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events'
 import { randomBytes } from 'node:crypto'
-import { isRecord } from '../guards.js'
+import { isRecord } from '../util/guards.js'
 import { TextCrdt, type Anchor, type Id, type Inverse, type InsertOp, type TextOp } from './crdt.js'
 
 /**

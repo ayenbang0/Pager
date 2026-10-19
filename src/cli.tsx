@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import './env.js'
-import type { Engine } from './engine.js'
-import { acquireLock, AlreadyRunningError } from './lock.js'
-import { dataDir } from './paths.js'
-import { MOUSE_OFF } from './ui/mouse.js'
-import { isNewer, latestVersion, runUpdate } from './update.js'
-import { VERSION } from './version.js'
+import './platform/env.js'
+import type { Engine } from './app/engine.js'
+import { acquireLock, AlreadyRunningError } from './platform/lock.js'
+import { dataDir } from './platform/paths.js'
+import { MOUSE_OFF } from './ui/input/mouse.js'
+import { isNewer, latestVersion, runUpdate } from './app/update.js'
+import { VERSION } from './app/version.js'
 
 const USAGE = `pager: a simpler way to chat
 
@@ -57,7 +57,7 @@ const bootstrap = process.env.PAGER_BOOTSTRAP?.split(',')
 let engine: Engine
 try {
   // Dynamic for the same reason as above: keep native addons out of `pager update` / --help / --version.
-  const { Engine } = await import('./engine.js')
+  const { Engine } = await import('./app/engine.js')
   engine = await Engine.open({ dir, bootstrap: bootstrap && bootstrap.length > 0 ? bootstrap : undefined, checkAgents: true })
 } catch (err) {
   release()
