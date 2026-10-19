@@ -77,8 +77,13 @@ export class Store {
     this.db.exec('PRAGMA journal_mode=WAL')
     if (dbKey !== undefined) this.db.exec('PRAGMA secure_delete=ON')
     const hasMeta = this.db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='meta'").get()
-    if (!hasMeta) this.db.exec(SCHEMA)
-    else this.migrate()
+    try {
+      if (!hasMeta) this.db.exec(SCHEMA)
+      else this.migrate()
+    } catch (err) {
+      this.db.close() // an open handle would keep the file locked on Windows
+      throw err
+    }
   }
 
   private migrate(): void {

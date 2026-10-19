@@ -161,7 +161,12 @@ test('an encrypted Store seals bodies, titles and peer fields on disk and reads 
     assert.match(raw.prepare('SELECT name FROM peers').get()?.name as string, /^pgrenc1:/)
     assert.equal(raw.prepare("SELECT COUNT(*) AS n FROM events WHERE op = 'doc'").get()?.n, 1)
     raw.close()
-    assert.throws(() => new Store(file).listMessages(G, 5), /passphrase is required/)
+    const plain = new Store(file)
+    try {
+      assert.throws(() => plain.listMessages(G, 5), /passphrase is required/)
+    } finally {
+      plain.close()
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true })
   }

@@ -135,3 +135,10 @@ test('the real CHANGELOG.md is found from the compiled tree and its newest secti
   assert.ok((sections[0]?.entries.length ?? 0) > 5)
   assert.ok(sections.some((s) => s.version === '1.2.1'))
 })
+
+test('CRLF line endings (a Windows checkout) parse the same as LF', () => {
+  const lf = parseChangelog(SAMPLE)
+  const crlf = parseChangelog(SAMPLE.replace(/\n/g, '\r\n'))
+  assert.deepEqual(crlf, lf)
+  assert.ok((crlf[0]?.entries.length ?? 0) > 0)
+})

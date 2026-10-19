@@ -38,7 +38,7 @@ export function parseChangelog(text: string): ChangelogSection[] {
   let current: ChangelogSection | null = null
   let currentKind: ChangelogKind | null = null
 
-  for (const line of text.split('\n')) {
+  for (const line of text.split(/\r?\n/)) {
     const heading = SECTION_RE.exec(line)
     if (heading) {
       current = { version: heading[1] ?? '0.0.0', date: heading[2] ?? null, entries: [] }

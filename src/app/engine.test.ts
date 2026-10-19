@@ -437,7 +437,7 @@ test('the AI tab: /open ai, text reaches a ready agent headless, settings round-
   assert.equal(view?.ollama.model, 'llama3')
   assert.equal(view?.openai.keyHint, '••••1234')
   assert.deepEqual(view?.backends.slice(-2), ['ollama', 'openai'])
-  assert.equal(fs.statSync(path.join(a.dir, 'ai.json')).mode & 0o777, 0o600)
+  if (process.platform !== 'win32') assert.equal(fs.statSync(path.join(a.dir, 'ai.json')).mode & 0o777, 0o600)
   a.engine.clearAi()
   assert.deepEqual(a.engine.messages(AI_ID, 20), [])
   assert.deepEqual(fs.readdirSync(path.join(a.dir, 'ai', 'work')), [])
@@ -942,7 +942,13 @@ test('a locked engine keeps history sealed on disk, reads it back with the key, 
   const bodies = raw.prepare("SELECT body FROM events WHERE op IS NULL").all().map((r) => String(r.body))
   raw.close()
   assert.ok(bodies.length > 0 && bodies.every((x) => x.startsWith('pgrenc1:')))
-  assert.throws(() => new Store(path.join(dir, 'pager.db')).listMessages(conv, 5), /passphrase is required/)
+  const plain = new Store(path.join(dir, 'pager.db'))
+  try {
+    assert.throws(() => plain.listMessages(conv, 5), /passphrase is required/)
+  } finally {
+    plain.close()
+  }
   const again = await boot('alice', dir, { secrets })
   assert.ok(texts(again, conv).includes('sealed hello'))
+  await again.engine.close() // an open database keeps its folder locked on Windows
 })
