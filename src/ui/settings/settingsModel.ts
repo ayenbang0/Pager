@@ -108,13 +108,17 @@ function folders(view: SettingsView): SettingsRow[] {
   return rows
 }
 
+function ai(view: SettingsView): SettingsRow[] {
+  return [toggle(view, 'web', 'Web search', 'restart to apply')]
+}
+
 const BUILDERS: Record<SettingsSection, (view: SettingsView) => SettingsRow[]> = {
   profile,
   appearance,
   notifications,
   folders,
   agents,
-  ai: () => [],
+  ai,
   privacy: () => [],
   updates,
   advanced,

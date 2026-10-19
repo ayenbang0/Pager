@@ -25,6 +25,8 @@ function host(seen: string[], gate?: PromiseWithResolvers<string>): ToolHost {
     docRead: unused,
     docWrite: unused,
     submitReview: unused,
+    webSearch: () => Promise.reject(new Error('not used here')),
+    webRead: () => Promise.reject(new Error('not used here')),
   }
 }
 

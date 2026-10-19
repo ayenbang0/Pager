@@ -92,6 +92,8 @@ export interface OrchestratorOptions {
   adapters?: Record<string, AdapterSpec>
   /** Shared documents: agents see them in the prompt and may read and edit them with the doc tools. */
   docs?: DocsPort
+  /** Web search and page reading for the web_search and web_read tools; absent or throwing means the web is off. */
+  web?: { search(query: string): Promise<string>; read(url: string): Promise<string> }
   limits?: Partial<{ maxConcurrent: number; runTimeoutMs: number }>
 }
 export interface SetupRow {
@@ -1668,6 +1670,8 @@ export class Orchestrator extends EventEmitter {
       docRead: (from, name) => this.toolDocRead(from, name),
       docWrite: (from, name, text, append) => this.toolDocWrite(from, name, text, append),
       submitReview: (from, verdict, comments) => this.toolReview(from, verdict, comments),
+      webSearch: async (_from, query) => this.opts.web?.search(query) ?? Promise.reject(new Error('Web search is off')),
+      webRead: async (_from, url) => this.opts.web?.read(url) ?? Promise.reject(new Error('Web search is off')),
     }
   }
 

@@ -50,6 +50,14 @@ function fakeHost(): { host: ToolHost; calls: Call[]; gate: PromiseWithResolvers
       rec('submitReview', [from.agent, verdict, comments])
       return 'review recorded'
     },
+    webSearch(from, query) {
+      rec('webSearch', [from.agent, query])
+      return Promise.resolve(`results for ${query}`)
+    },
+    webRead(from, url) {
+      rec('webRead', [from.agent, url])
+      return url.includes('bad') ? Promise.reject(new Error('Web search is off')) : Promise.resolve(`text of ${url}`)
+    },
   }
   return { host, calls, gate }
 }
@@ -166,6 +174,20 @@ test('submit_review needs a review token', async () => {
   assert.match(tokenError(await server.handle(t, 'submit_review', { verdict: 'maybe', comments: '' })), /verdict must be one of: approve, changes/)
 })
 
+test('web_search and web_read validate their arguments, reach the host, and surface its refusal', async () => {
+  const { host, calls } = fakeHost()
+  const server = new ToolServer(host)
+  const t = server.issue(normal)
+  assert.deepEqual(await server.handle(t, 'web_search', { query: 'node sqlite' }), { ok: true, result: 'results for node sqlite' })
+  assert.deepEqual(await server.handle(t, 'web_read', { url: 'https://example.org/a' }), { ok: true, result: 'text of https://example.org/a' })
+  assert.match(tokenError(await server.handle(t, 'web_search', { query: '' })), /must not be empty/)
+  assert.match(tokenError(await server.handle(t, 'web_read', {})), /url is required/)
+  assert.equal(tokenError(await server.handle(t, 'web_read', { url: 'https://bad.example' })), 'Web search is off')
+  assert.deepEqual(calls.map((c) => c.method), ['webSearch', 'webRead', 'webRead'])
+  const listed = JSON.parse((await server.handle(t, '__list', {}) as { ok: true; result: string }).result) as { name: string }[]
+  assert.ok(listed.some((x) => x.name === 'web_search') && listed.some((x) => x.name === 'web_read'))
+})
+
 test('the host receives the full turn token', async () => {
   const seen: TurnToken[] = []
   const { host } = fakeHost()
@@ -191,7 +213,7 @@ test('__list shows review tools only to review tokens', async () => {
   }
   const normalNames = await names(normal)
   assert.ok(!normalNames.includes('submit_review'))
-  assert.deepEqual(normalNames.sort(), ['ask_user', 'doc_read', 'doc_write', 'list_agents', 'remember', 'send_message', 'set_status'])
+  assert.deepEqual(normalNames.sort(), ['ask_user', 'doc_read', 'doc_write', 'list_agents', 'remember', 'send_message', 'set_status', 'web_read', 'web_search'])
   assert.deepEqual((await names(review)).sort(), [...Object.keys(TOOLS)].sort())
 })
 

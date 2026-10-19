@@ -4,6 +4,7 @@ import { agentTabId, parseAgentTab, parseSharedTab } from '../agents/ids.js'
 import { ROOM_ID } from '../agents/orchestrator.js'
 import type { AgentView } from '../agents/types.js'
 import { TERM_ID } from '../tools/terminal/terminal.js'
+import { WEB_ID } from '../tools/web/tool.js'
 import { DOCS_ID } from '../docs/store.js'
 import { copyText } from '../platform/clipboard.js'
 import { splitArgs } from '../agents/run/protocol.js'
@@ -202,9 +203,10 @@ export function App({ engine, onExit }: Props) {
   const sharedRoom = sharedPk === undefined ? undefined : engine.sharedRoom(sharedPk)
   const review = engine.agentReview()
   const inTermTab = activeId === TERM_ID
+  const inWeb = activeId === WEB_ID
   // Short panes fall back to compact rows, and the terminal tab is always compact: its rows are commands and output, not speakers.
   const look: Look = {
-    density: inTermTab ? 'compact' : effectiveDensity(settings.density, frame),
+    density: inTermTab || inWeb ? 'compact' : effectiveDensity(settings.density, frame),
     badge: badgeGlyph(settings.badge, engine.me.name),
     agentColors: Object.fromEntries(room.agents.flatMap((a) => (a.color === undefined ? [] : [[a.name, a.color] as const]))),
     me: engine.me.name,
@@ -232,7 +234,7 @@ export function App({ engine, onExit }: Props) {
   const docsCtl = useRef<DocsCtl | null>(null)
   const settingsCtl = useRef<SettingsCtl | null>(null)
   // Emoji shortcodes expand in chats and agent tabs only; the terminal and the Docs list take text as typed.
-  const emojiOk = activeId !== null && activeId !== TERM_ID && !inDocs && !inSettings
+  const emojiOk = activeId !== null && activeId !== TERM_ID && !inDocs && !inSettings && !inWeb
   const agentMenu: AgentMenu | undefined = agentView === undefined ? undefined : { agent: agentView.name, commands: engine.agentCommands(agentView.name) }
   // An agent's question takes the prompt's place in its own tab and in the hub; in any other tab a banner points to it.
   const questions = engine.questions()
@@ -439,6 +441,8 @@ export function App({ engine, onExit }: Props) {
     ? { kind: 'docs', title: openDocName ?? '' }
     : inSettings
       ? { kind: 'settings', title: '' }
+      : inWeb
+      ? { kind: 'web', title: '' }
       : inTerm
       ? { kind: 'terminal', title: '' }
       : inRoom
@@ -461,11 +465,13 @@ export function App({ engine, onExit }: Props) {
   const sharedHere = sharedRoom?.guests.filter((g) => g.online).map((g) => g.name) ?? []
   const sharedNote =
     sharedRoom === undefined ? undefined : [sharedRoom.access, sharedRoom.connected ? undefined : 'host offline', sharedHere.length === 0 ? undefined : `with ${sharedHere.join(', ')}`].filter(Boolean).join(' · ')
-  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
+  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inWeb ? '⌕ web' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
   const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : undefined
   const placeholder = field !== null
     ? field.label
-    : inTerm
+    : inWeb
+      ? 'Search the web, or: open <n> · read <n> · clear'
+      : inTerm
     ? term.running
       ? 'Type to send input to the running command · Ctrl+C stops it'
       : 'Run a command (cd works) · // for a leading slash · Ctrl+C stops'
@@ -539,6 +545,7 @@ export function App({ engine, onExit }: Props) {
     ...folderItems,
     { label: 'New folder…', hint: 'sidebar', run: () => askField({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) }) },
     { label: '▸ Terminal', hint: engine.terminal().running ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
+    { label: '⌕ Web', hint: 'search the web', run: () => engine.activate(WEB_ID) },
     { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
     ...engine.docList().map((d): PaletteItem => ({ label: `Doc: ${d.name}`, hint: d.where, run: () => engine.openDoc(d.id) })),
     { label: 'New document…', hint: '/doc new', run: () => fillPrompt('/doc new ') },
@@ -673,7 +680,7 @@ export function App({ engine, onExit }: Props) {
                 ) : inTerm ? (
                   <TerminalHeader term={term} width={mainWidth} />
                 ) : (
-                  <BandTitle title={tabTitle} width={mainWidth} right={tabNote} />
+                  <BandTitle title={tabTitle} width={mainWidth} right={inWeb ? 'DuckDuckGo' : tabNote} />
                 )}
                 {inSettings ? (
                   <SettingsPanel
