@@ -8,15 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
-- **Changelog system**: what's new shows on startup after an update, and `/changelog [version]` shows recent changes on demand
-- **Merge-conflict prediction** between agent branches and your checkout, shown after each turn and in `/agent runs`
-- **Verify gate**: `/agent verify <cmd>` runs after each turn and blocks `/agent merge` on failure (`--force` overrides); `/agent log` shows the output; `+/-` line counts per run
-- **Undo**: `/agent undo <name> [n]` and `/agent checkpoints <name>`
-- **Risky-action approval** for ACP agents: `/agent risk on|off`
-- **Daily budgets**: `/agent budget`
-- **`/search <text>`** over chats and the agent room, and a "Since you left" recap on startup
-
+- Added PLAN.md describing the pager 1.5.1 release plan
 ## [1.2.1]
 
 ### Added
