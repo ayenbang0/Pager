@@ -21,7 +21,8 @@ import type { Secrets } from '../chat/secrets.js'
 import type { EnvLock } from './envSettings.js'
 import { SETTINGS_ID, type AgentSettingsView, type SettingsView } from './settingsView.js'
 import { fileable, filed } from './folders.js'
-import { opOf, RENAME_PREFIX } from '../chat/ops.js'
+import { opOf, REACT_PREFIX, RENAME_PREFIX } from '../chat/ops.js'
+import { encodeReaction, foldReactions, isReactionEmoji } from '../chat/reactions.js'
 import { checkEvent, MAX_GROUP_MEMBERS } from '../chat/ingest.js'
 import { LOCAL_CAPS, Net, type PeerLink } from '../net/net.js'
 import { NetLog } from '../net/netlog.js'
@@ -86,6 +87,10 @@ export interface MessageView {
   /** Render Markdown (agent replies only; peer text stays literal). */
   markdown?: boolean
   status: 'pending' | 'sent' | 'delivered' | 'read' | null
+  /** Emoji reactions, most used first (chats only). */
+  reactions?: { emoji: string; count: number; mine: boolean }[]
+  /** A click on this message can react to it (chat text only). */
+  reactable?: boolean
 }
 /** The plain on/off Settings switches that `setSetting` handles. */
 export type ToggleKey = 'sidebar' | 'reduceMotion' | 'mouse' | 'alerts' | 'updateCheck' | 'acp' | 'web' | 'agents' | 'lan'
@@ -474,6 +479,7 @@ export class Engine extends EventEmitter {
     const conv = this.store.getConv(convId)
     if (!conv) return []
     const others = this.otherMembers(conv)
+    const reactions = foldReactions(this.store.reactionEvents(convId), this.me.pk)
     return this.store.listMessages(convId, limit).map((e): MessageView => {
       const mine = e.author === this.me.pk
       const authorName = this.nameOf(e.author)
@@ -490,7 +496,8 @@ export class Engine extends EventEmitter {
         const read = delivered && others.every((pk) => (this.readBy.get(`${convId}:${pk}`) ?? 0) >= e.seq)
         status = read ? 'read' : delivered ? 'delivered' : sent ? 'sent' : 'pending'
       }
-      return { ...base, kind: 'text', text: e.body, status }
+      const shownReactions = reactions.get(base.key)
+      return { ...base, kind: 'text', text: e.body, status, reactable: true, ...(shownReactions === undefined ? {} : { reactions: shownReactions }) }
     })
   }
 
@@ -2048,6 +2055,20 @@ export class Engine extends EventEmitter {
     const event = this.appendEvent(conv.id, 'text', text)
     this.store.markRead(conv.id, event.ts)
     this.sendRead(conv.id)
+    this.emit('change')
+    this.deliver(conv, event)
+  }
+
+  /** Reacts to a message (or takes the reaction back when it is already mine). `key` is the message key `<author>:<seq>`. */
+  react(key: string, emoji: string): void {
+    const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
+    if (!conv || conv.state !== 'active') return this.toast('error', 'Open a conversation first')
+    const m = /^([0-9a-f]{64}):(\d{1,9})$/.exec(key)
+    const target = m === null ? undefined : this.store.getEvent(conv.id, m[1] ?? '', Number(m[2]))
+    if (target === undefined || target.kind !== 'text' || opOf(target.body) !== null) return this.toast('error', 'That message is gone')
+    if (!isReactionEmoji(emoji)) return this.toast('error', `Not an emoji: ${emoji.slice(0, 20)}`)
+    const already = foldReactions(this.store.reactionEvents(conv.id), this.me.pk).get(key)?.some((r) => r.emoji === emoji && r.mine) === true
+    const event = this.appendEvent(conv.id, 'text', encodeReaction(already ? '-' : '+', { author: target.author, seq: target.seq }, emoji))
     this.emit('change')
     this.deliver(conv, event)
   }

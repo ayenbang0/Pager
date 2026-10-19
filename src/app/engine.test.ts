@@ -332,6 +332,52 @@ test('group rename: the creator renames, members follow, others are refused, and
   await waitFor(() => title(again) === 'crew2', 25_000, 'bob catches up')
 })
 
+test('reactions: add, repeat removes, relay to a third member, never unread, never a line', async () => {
+  const a = await boot('alice')
+  const b = await boot('bob')
+  const c = await boot('carol')
+  await befriend(a, b)
+  await befriend(a, c)
+  const dm = dmConvId(a.engine.me.pk, b.engine.me.pk)
+  a.engine.activate(dm)
+  b.engine.activate(dm)
+  await a.engine.submit('react to me')
+  await waitFor(() => texts(b, dm).includes('react to me'), 20_000, 'b gets it')
+  const target = a.engine.messages(dm, 10).find((m) => m.text === 'react to me')
+  assert.ok(target?.reactable)
+  const unreadBefore = a.engine.convs().find((v) => v.id === dm)?.unread ?? 0
+  b.engine.react(target.key, '🔥')
+  await waitFor(() => (a.engine.messages(dm, 10).find((m) => m.key === target.key)?.reactions ?? []).length === 1, 20_000, 'a sees the reaction')
+  assert.deepEqual(a.engine.messages(dm, 10).find((m) => m.key === target.key)?.reactions, [{ emoji: '🔥', count: 1, mine: false }])
+  assert.deepEqual(b.engine.messages(dm, 10).find((m) => m.key === target.key)?.reactions, [{ emoji: '🔥', count: 1, mine: true }])
+  assert.equal(a.engine.convs().find((v) => v.id === dm)?.unread ?? 0, unreadBefore)
+  assert.ok(a.engine.messages(dm, 50).every((m) => !m.text.includes('rx:') && !m.text.startsWith('\u2063')), 'reaction events are not lines')
+  assert.equal(a.engine.messages(dm, 50).length, 1)
+  b.engine.react(target.key, '🔥')
+  await waitFor(() => a.engine.messages(dm, 10).find((m) => m.key === target.key)?.reactions === undefined, 20_000, 'repeat removes it')
+  b.engine.react('0'.repeat(64) + ':99', '🔥')
+  assert.equal(b.toasts.at(-1)?.text, 'That message is gone')
+  b.engine.react(target.key, 'nope')
+  assert.equal(b.toasts.at(-1)?.text, 'Not an emoji: nope')
+  // a group: bob reacts, carol (a third member) sees it after the relay
+  await a.engine.submit('/group new crew')
+  const group = a.engine.active()!
+  await a.engine.submit('/group invite bob')
+  await a.engine.submit('/group invite carol')
+  await waitFor(() => b.engine.pending().some((p) => p.type === 'group') && c.engine.pending().some((p) => p.type === 'group'), 20_000, 'invites')
+  await b.engine.submit('/accept 1')
+  await c.engine.submit('/accept 1')
+  a.engine.activate(group)
+  b.engine.activate(group)
+  c.engine.activate(group)
+  await a.engine.submit('hello crew')
+  await waitFor(() => texts(b, group).includes('hello crew') && texts(c, group).includes('hello crew'), 25_000, 'fan-out')
+  const gt = a.engine.messages(group, 10).find((m) => m.text === 'hello crew')!
+  b.engine.react(gt.key, '🎉')
+  await waitFor(() => (c.engine.messages(group, 10).find((m) => m.key === gt.key)?.reactions ?? []).length === 1, 25_000, 'carol sees it')
+  assert.deepEqual(c.engine.messages(group, 10).find((m) => m.key === gt.key)?.reactions, [{ emoji: '🎉', count: 1, mine: false }])
+})
+
 test('name change propagates to contacts', async () => {
   const a = await boot('alice')
   const b = await boot('bob')
@@ -509,7 +555,7 @@ test('agent tabs: /agent and @name drive agents, plain text is refused in the hu
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, '#14d8c4')
   a.engine.setAgentColor('omp', 'auto')
   assert.equal(a.engine.agentRoom().agents.find((v) => v.name === 'omp')?.color, undefined)
-  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5 })
+  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
 test('removeAgent deletes a teammate, and names the choices when the name is wrong', async () => {
@@ -612,7 +658,7 @@ test('removed /agent subcommands point at Settings or the palette; /agent <name>
   assert.deepEqual(a.engine.agentSettingsView().budgets, [{ key: 'claude', text: 'turns=4' }])
   a.engine.setAgentReview(true)
   assert.equal(a.engine.agentSettingsView().review, true)
-  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5 })
+  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
 test("a command an agent advertises runs verbatim in that agent's tab; pager commands win; elsewhere it is unknown", async () => {
@@ -651,7 +697,7 @@ test("a command an agent advertises runs verbatim in that agent's tab; pager com
   assert.equal(a.engine.agentRoom().runs.length, 1)
   assert.equal(typeof a.engine.agentReview(), 'boolean')
   assert.equal(a.engine.agentStats().week.length, 14)
-  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 5 })
+  fs.rmSync(repo, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
 })
 
 test('input history is de-duplicated, newest last, and survives a restart', async () => {

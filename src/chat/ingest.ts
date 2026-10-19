@@ -1,6 +1,7 @@
 import type { Store } from './db.js'
 import { verifyEvent, type PagerEvent } from './events.js'
-import { RENAME_PREFIX } from './ops.js'
+import { REACT_PREFIX, RENAME_PREFIX } from './ops.js'
+import { parseReaction } from './reactions.js'
 
 export const MAX_GROUP_MEMBERS = 16
 /** Longest group title a rename may carry. */
@@ -51,6 +52,10 @@ export function checkEvent(store: Store, me: string, sender: string, ev: PagerEv
   const last = store.lastSeq(ev.conv, ev.author)
   if (ev.seq <= last) return fail('duplicate')
   if (ev.seq > last + 1) return fail('seq-gap')
+
+  // Reactions are allowed in DMs and groups from any entitled author. The target need not exist yet: events from different
+  // authors sync independently, and refusing one would break the reactor's own seq chain.
+  if (ev.kind === 'text' && ev.body.startsWith(REACT_PREFIX) && parseReaction(ev.body) === undefined) return fail('bad-kind')
 
   if (ever) {
     if (ev.kind === 'text' && ev.body.startsWith(RENAME_PREFIX)) {

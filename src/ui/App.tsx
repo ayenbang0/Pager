@@ -31,7 +31,9 @@ import { HelpPanel, type HelpCtl } from './overlays/HelpPanel.js'
 import { BANNER_ROWS, HomeBanner } from './home/HomeBanner.js'
 import { homeAgents, type HomeAgents } from './home/homeAgents.js'
 import { emptyInput, setText, type InputBuffer } from './input/inputBuffer.js'
-import { buildLines, plainLines, windowLines, type Line } from './chat/layout.js'
+import { buildLines, PICK_CELL, plainLines, windowLines, type Line } from './chat/layout.js'
+import { expandEmoji } from '../chat/emoji.js'
+import { QUICK_REACTIONS } from '../chat/reactions.js'
 import { ModelPicker } from './overlays/ModelPicker.js'
 import type { Point } from './input/mouse.js'
 import { menuItems, type AgentMenu } from './overlays/palette.js'
@@ -116,6 +118,8 @@ export function App({ engine, onExit }: Props) {
   /** A one-shot text field that takes the prompt's place (renaming, a new folder, an API key). */
   const [field, setField] = useState<FieldRequest | null>(null)
   const [sbScroll, setSbScroll] = useState(0)
+  /** The message whose emoji picker is open, and the highlighted cell (the last one is the `…` cell for any other emoji). */
+  const [react, setReact] = useState<{ key: string; at: number } | null>(null)
   /** The left-button gesture in progress: where it started and, once the pointer moved, where it is now. */
   const gesture = useRef<{ anchor: Cell; head: Cell | null } | null>(null)
   const helpCtl = useRef<HelpCtl | null>(null)
@@ -159,6 +163,7 @@ export function App({ engine, onExit }: Props) {
   const activeId = engine.active()
   useEffect(() => setOffset(0), [activeId])
   useEffect(() => setField(null), [activeId])
+  useEffect(() => setReact(null), [activeId])
 
   const settings = engine.settings()
   const theme = resolveTheme(overlay === 'theme' && previewTheme !== null ? previewTheme : settings.theme, settings.accent === '' ? undefined : settings.accent)
@@ -243,7 +248,7 @@ export function App({ engine, onExit }: Props) {
   const activeConv = convs.find((c) => c.id === activeId)
 
   const lines: Line[] = activeId
-    ? buildLines(engine.messages(activeId, HISTORY_LIMIT), mainWidth - 2, theme, new Date(), { enabled: foldsOn, expanded }, look)
+    ? buildLines(engine.messages(activeId, HISTORY_LIMIT), mainWidth - 2, theme, new Date(), { enabled: foldsOn, expanded }, look, react)
     : plainLines(engine.home(), mainWidth - 2)
   const { visible, maxOffset } = windowLines(lines, paneRows, offset)
   // New content while scrolled up must not move what the user is reading.
@@ -331,8 +336,18 @@ export function App({ engine, onExit }: Props) {
       if (g === null) return
       if (g.head !== null) return copySelection({ anchor: g.anchor, head: g.head })
       // Pressed and released on one cell: a click, which expands a fold marker.
-      const key = visible[g.anchor.row]?.fold
-      if (key !== undefined) setExpanded((prev) => new Set(prev).add(key))
+      const line = visible[g.anchor.row]
+      if (line?.fold !== undefined) {
+        const key = line.fold
+        return setExpanded((prev) => new Set(prev).add(key))
+      }
+      if (line?.pick !== undefined && react !== null) {
+        const item = line.pick.items[Math.floor((g.anchor.col - line.pick.col) / PICK_CELL)]
+        if (item === undefined) return setReact(null)
+        return pickReaction(react.key, item)
+      }
+      if (line?.msg !== undefined) return setReact({ key: line.msg, at: 0 })
+      setReact(null)
     },
   })
   const openModel = (name?: string): void => {
@@ -341,6 +356,23 @@ export function App({ engine, onExit }: Props) {
     setModelAgent(name ?? (agentTab !== undefined && names.includes(agentTab) ? agentTab : names.length === 1 ? (names[0] ?? null) : null))
     setOverlay('model')
   }
+  /** An emoji cell was chosen: react with it, or (the `…` cell) ask for any other emoji. */
+  const pickReaction = (key: string, item: string): void => {
+    setReact(null)
+    if (item !== '…') return engine.react(key, item)
+    askField({ label: 'Emoji (paste one, or :name:)', initial: '', masked: false, onSubmit: (text) => engine.react(key, expandEmoji(text.trim())) })
+  }
+  useInput(
+    (_input, key) => {
+      if (key.eventType === 'release' || react === null) return
+      const cells = QUICK_REACTIONS.length + 1
+      if (key.escape) return setReact(null)
+      if (key.leftArrow) return setReact({ ...react, at: (react.at + cells - 1) % cells })
+      if (key.rightArrow) return setReact({ ...react, at: (react.at + 1) % cells })
+      if (key.return) return pickReaction(react.key, [...QUICK_REACTIONS, '…'][react.at] ?? '…')
+    },
+    { isActive: react !== null && overlay === null },
+  )
   const jumpToQuestion = (): void => {
     const target = questionTarget(questions, shownQuestion)
     if (target === undefined) return void engine.emit('toast', { kind: 'info', text: 'No agent is waiting for an answer' } satisfies Toast)
@@ -708,7 +740,7 @@ export function App({ engine, onExit }: Props) {
                 onEdit={setInput}
                 placeholder={placeholder}
                 menu={menu}
-                active={overlay === null}
+                active={overlay === null && react === null}
                 onSubmit={onSubmit}
                 onScroll={onScroll}
                 onSwitch={onSwitch}

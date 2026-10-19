@@ -20,6 +20,7 @@ export const KEY_SECTIONS: readonly KeySection[] = [
       ['Alt+S', 'Open Settings'],
       ['PgUp / PgDn / wheel', 'Scroll messages'],
       ['Ctrl+T / click "▸ N more lines"', 'Fold / expand long messages'],
+      ['click a message', 'React with an emoji (needs the mouse)'],
       ['Ctrl+G', 'This help'],
     ],
   },

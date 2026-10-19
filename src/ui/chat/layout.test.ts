@@ -195,3 +195,40 @@ test('messages that share a key but not a name (agent runs, you/pager) each show
   )
   assert.deepEqual(lines.filter((l) => l.key.endsWith(':head')).map(plain), ['▍ ● omp-1  09:05', '▍ ● omp-2  09:05'])
 })
+
+test('reactions add one pill row under the message; none, no extra row', () => {
+  const plainLines = buildLines([msg({ text: 'hello' })], 40, T, NOW)
+  assert.deepEqual(plainLines.map(plain), ['▍ ● bob  09:05', '▍ hello'])
+  const lines = buildLines([msg({ text: 'hello', reactions: [{ emoji: '🔥', count: 2, mine: true }, { emoji: '👍', count: 1, mine: false }] })], 40, T, NOW)
+  assert.deepEqual(lines.map(plain), ['▍ ● bob  09:05', '▍ hello', '▍  🔥 2    👍 1 '])
+  assert.equal(lines[2]?.key, 'k:react')
+  const pills = lines[2]!.segs.filter((s) => s.bg !== undefined)
+  assert.equal(pills[0]?.bg, T.pill.accent.bg, 'mine uses the accent pill')
+  assert.equal(pills[1]?.bg, T.pill.muted.bg)
+  assert.equal(lines[2]?.segs[0]?.chrome, true)
+})
+
+test('msg marks the header and body rows of reactable messages only', () => {
+  const rows = buildLines([msg({ key: 'a:1', text: 'one\ntwo', reactable: true }), msg({ key: 'b:1', authorKey: 'cd'.repeat(32), text: 'plain' })], 40, T, NOW)
+  assert.deepEqual(rows.map((l) => l.msg), ['a:1', 'a:1', 'a:1', undefined, undefined])
+  const gap = buildLines([msg({ key: 'a:1', reactable: true }), msg({ key: 'b:1', authorKey: 'cd'.repeat(32), reactable: true })], 40, T, NOW, undefined, { ...compact, density: 'roomy' })
+  const gaps = gap.filter((l) => l.key.includes(':gap'))
+  assert.ok(gaps.length > 0)
+  assert.ok(gaps.every((l) => l.msg === undefined))
+})
+
+test('the picker row lists the eight quick reactions and a … cell, four columns each, with the chosen one highlighted', () => {
+  const m = msg({ key: 'a:1', text: 'hi', reactable: true })
+  const lines = buildLines([m], 60, T, NOW, undefined, undefined, { key: 'a:1', at: 3 })
+  const row = lines.at(-1)!
+  assert.equal(row.key, 'a:1:pick')
+  assert.deepEqual(row.pick, { col: 2, items: ['👍', '👎', '😂', '🔥', '🎉', '😮', '👀', '💯', '…'] })
+  assert.equal(row.msg, undefined)
+  const cells = row.segs.filter((s) => s.chrome !== true)
+  assert.equal(cells.length >= 9, true)
+  const hit = row.segs.find((s) => s.bg === T.band.bg)
+  assert.match(hit?.text ?? '', /🔥/)
+  // no picker for another message, none when closed
+  assert.ok(!buildLines([m], 60, T, NOW, undefined, undefined, { key: 'z:9', at: 0 }).some((l) => l.pick !== undefined))
+  assert.ok(!buildLines([m], 60, T, NOW).some((l) => l.pick !== undefined))
+})

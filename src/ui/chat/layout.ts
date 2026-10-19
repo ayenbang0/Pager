@@ -3,6 +3,7 @@ import wrapAnsi from 'wrap-ansi'
 import type { MessageView } from '../../app/engine.js'
 import { DEFAULT_THEME, type Theme } from '../theme/themes.js'
 import { agentTint, colorFor, DEFAULT_LOOK, spacingFor, type Look } from '../theme/look.js'
+import { QUICK_REACTIONS } from '../../chat/reactions.js'
 import { fitSegs, pillSeg, type Seg } from '../kit/segs.js'
 
 export type { Seg } from '../kit/segs.js'
@@ -13,7 +14,14 @@ export interface Line {
   segs: Seg[]
   /** Set on a fold marker row: the message key a click expands. */
   fold?: string
+  /** Set on the header and body rows of a message a click can react to: its message key. */
+  msg?: string
+  /** Set on the emoji picker row: where its first cell starts and what each 4-column cell holds. */
+  pick?: { col: number; items: readonly string[] }
 }
+
+/** Width of one cell of the emoji picker row: a space, the glyph (1 or 2 columns) and padding. */
+export const PICK_CELL = 4
 
 const MAX_AUTHOR_COLUMNS = 20
 const MIN_BODY_COLUMNS = 10
@@ -150,6 +158,8 @@ export function buildLines(
   now: Date = new Date(),
   folds: FoldState = DEFAULT_FOLDS,
   look: Look = DEFAULT_LOOK,
+  /** The message whose emoji picker is open and the cell it highlights. */
+  pick: { key: string; at: number } | null = null,
 ): Line[] {
   const spacing = spacingFor(look.density)
   const lines: Line[] = []
@@ -194,6 +204,7 @@ export function buildLines(
     if (spacing.stacked && !sameAsPrev) {
       lines.push({
         key: `${m.key}:head`,
+        ...(m.reactable === true ? { msg: m.key } : {}),
         segs: [
           gutter,
           { text: ' ', chrome: true },
@@ -224,8 +235,23 @@ export function buildLines(
       if (i === rows.length - 1 && m.status === 'delivered') segs.push({ text: ' ✓✓', color: theme.success })
       if (i === rows.length - 1 && m.status === 'read') segs.push({ text: ' ✓✓✓', color: theme.accent, bold: true })
       if (i === rows.length - 1 && m.status === 'pending') segs.push({ text: ' …', color: theme.warning })
-      lines.push(i === foldAt ? { key: `${m.key}:${i}`, segs, fold: m.key } : { key: `${m.key}:${i}`, segs })
+      const line: Line = i === foldAt ? { key: `${m.key}:${i}`, segs, fold: m.key } : { key: `${m.key}:${i}`, segs }
+      lines.push(m.reactable === true ? { ...line, msg: m.key } : line)
     })
+    const lead: Seg[] = spacing.stacked ? [gutter, { text: ' ', chrome: true }] : [gutter, { text: ' '.repeat(bodyCol - 1), chrome: true }]
+    if (m.reactions !== undefined && m.reactions.length > 0) {
+      const pills = m.reactions.flatMap((r, n): Seg[] => [...(n === 0 ? [] : [{ text: '  ' }]), pillSeg(`${r.emoji} ${r.count}`, r.mine ? theme.pill.accent : theme.pill.muted, false)])
+      lines.push({ key: `${m.key}:react`, segs: [...lead, ...pills] })
+    }
+    if (pick !== null && pick.key === m.key) {
+      const items = [...QUICK_REACTIONS, '…']
+      const cells = items.flatMap((item, n): Seg[] => {
+        const selected = n === pick.at
+        const cell = fitSegs([{ text: ` ${item}`, ...(selected ? { color: theme.band.fg, bg: theme.band.bg, bold: true } : {}) }], PICK_CELL, selected ? { bg: theme.band.bg } : {})
+        return cell
+      })
+      lines.push({ key: `${m.key}:pick`, segs: [...lead, ...cells], pick: { col: stringWidth(lead.map((s) => s.text).join('')), items } })
+    }
   }
   return lines
 }

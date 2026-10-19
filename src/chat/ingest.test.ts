@@ -4,7 +4,8 @@ import DHT, { type KeyPair } from 'hyperdht'
 import { Store } from './db.js'
 import { dmConvId, signEvent, type EventKind, type PagerEvent } from './events.js'
 import { checkEvent, MAX_GROUP_MEMBERS, type IngestVerdict } from './ingest.js'
-import { RENAME_PREFIX } from './ops.js'
+import { REACT_PREFIX, RENAME_PREFIX } from './ops.js'
+import { encodeReaction } from './reactions.js'
 
 const hex = (kp: KeyPair): string => kp.publicKey.toString('hex')
 const me = DHT.keyPair()
@@ -106,4 +107,17 @@ test('rename events: only the creator, only in a group, with a valid title', () 
   assert.equal(reason(checkEvent(asBob, BOB, ME, mk(me, G, 2, 'text', title('bell\x07')))), 'bad-kind')
   // a DM has no creator
   assert.equal(reason(checkEvent(s, ME, BOB, mk(bob, DM, 1, 'text', title('crew')))), 'bad-kind')
+})
+
+test('reaction events: well-formed ones pass in a DM and a group from any member, malformed ones are bad-kind', () => {
+  const s = setup()
+  const good = encodeReaction('+', { author: ME, seq: 1 }, '🔥')
+  assert.equal(reason(checkEvent(s, ME, BOB, mk(bob, DM, 1, 'text', good))), 'ok')
+  assert.equal(reason(checkEvent(s, ME, BOB, mk(bob, G, 1, 'text', good))), 'ok')
+  for (const bad of [REACT_PREFIX + 'garbage', REACT_PREFIX + `+:${ME}:1:ab`, REACT_PREFIX + `*:${ME}:1:🔥`]) {
+    assert.equal(reason(checkEvent(s, ME, BOB, mk(bob, DM, 1, 'text', bad))), 'bad-kind', bad)
+    assert.equal(reason(checkEvent(s, ME, BOB, mk(bob, G, 1, 'text', bad))), 'bad-kind', bad)
+  }
+  // the target need not exist: events from different authors sync independently
+  assert.equal(reason(checkEvent(s, ME, BOB, mk(bob, G, 1, 'text', encodeReaction('+', { author: CAROL, seq: 77 }, '👍')))), 'ok')
 })
