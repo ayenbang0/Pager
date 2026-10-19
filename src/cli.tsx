@@ -11,9 +11,7 @@ import { parseArgs } from './app/args.js'
 import { applyEnvFromSettings } from './app/envSettings.js'
 import { loadSettings } from './app/settings.js'
 import { promptSecret } from './platform/secretPrompt.js'
-import { runLock, runUnlock, unlockWithPassphrase } from './app/lockCommand.js'
-import { identityLockState } from './chat/identity.js'
-import { type Secrets } from './chat/secrets.js'
+import type { Secrets } from './chat/secrets.js'
 
 const USAGE = `pager: a simpler way to chat
 
@@ -52,6 +50,8 @@ if (parsed.command === 'lock' || parsed.command === 'unlock') {
     process.stderr.write(`pager ${parsed.command} needs an interactive terminal\n`)
     process.exit(2)
   }
+  // Dynamic: these load hyperdht, whose native addons must stay unloaded for `pager update` (Windows cannot replace loaded .node files).
+  const { runLock, runUnlock } = await import('./app/lockCommand.js')
   process.exit(await (parsed.command === 'lock' ? runLock : runUnlock)(dataDir(), process.env))
 }
 if (!process.stdin.isTTY || !process.stdout.isTTY) {
@@ -71,6 +71,8 @@ try {
   throw err
 }
 
+const { identityLockState } = await import('./chat/identity.js')
+const { unlockWithPassphrase } = await import('./app/lockCommand.js')
 let secrets: Secrets | undefined
 const lockState = identityLockState(dir)
 if (lockState.locked) {
