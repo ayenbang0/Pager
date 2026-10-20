@@ -32,6 +32,10 @@ test('the site serves docs and stats only under its token, and stats come from t
     assert.equal(home.status, 200)
     assert.match(home.body, /<title>pager docs<\/title>/)
 
+    const logo = await fetch(`${site.url}logo.png`)
+    assert.equal(logo.headers.get('content-type'), 'image/png')
+    assert.deepEqual([...new Uint8Array(await logo.arrayBuffer()).slice(0, 4)], [0x89, 0x50, 0x4e, 0x47])
+
     const docs = JSON.parse((await get(`${site.url}api/docs`)).body) as { version: string; commands: { usage: string }[] }
     assert.equal(docs.version, '9.9.9')
     assert.ok(docs.commands.some((c) => c.usage === '/docs'), 'every slash command is listed, /docs included')

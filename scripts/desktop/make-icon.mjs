@@ -1,4 +1,4 @@
-// Writes desktop/assets/pager.png and pager.ico: a 16x16-cell pixel tile (cell = 16 px), no dependencies.
+// Writes desktop/assets/pager.png and pager.ico: the simple pixel P on a transparent 16x16-cell grid (cell = 16 px), no dependencies.
 import { deflateSync } from 'node:zlib'
 import { writeFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -8,24 +8,26 @@ const N = 16
 const SIZE = CELL * N
 const out = (name) => fileURLToPath(new URL(`../../desktop/assets/${name}`, import.meta.url))
 
-const P = ['#######.', '##....##', '##....##', '##....##', '#######.', '##......', '##......', '##......', '##......', '##......', '##......']
+// The simple pixel P: a 5x7 glyph drawn at 2x2 cells, OMP's blue to purple down its height, a one-cell cyan shadow, no tile.
+const P = ['####.', '#...#', '#...#', '####.', '#....', '#....', '#....']
+const X0 = 2
 const lerp = (a, b, t) => Math.round(a + (b - a) * t)
-// Omp's palette: blue #7aa2f7 to purple #bb9af7 tile, cyan #2ac3de shadow, #c0caf5 light text.
 const from = [0x7a, 0xa2, 0xf7]
 const to = [0xbb, 0x9a, 0xf7]
-const isP = (cx, cy) => cx >= 4 && cx < 12 && cy >= 2 && cy < 13 && P[cy - 2][cx - 4] === '#'
+const isP = (cx, cy) => {
+  const gx = Math.floor((cx - X0) / 2)
+  const gy = Math.floor(cy / 2)
+  return cx >= X0 && gx < 5 && gy >= 0 && gy < 7 && P[gy][gx] === '#'
+}
 
 /** RGBA of one cell. */
 function cell(cx, cy) {
-  const dx = Math.min(cx, N - 1 - cx)
-  const dy = Math.min(cy, N - 1 - cy)
-  if (dx + dy < 2) return [0, 0, 0, 0] // corner cut: 2 cells
-  if (isP(cx, cy)) return cx < 6 ? [0xc0, 0xca, 0xf5, 255] : [255, 255, 255, 255] // lit stem, white bowl
-  if (isP(cx - 1, cy - 1)) return [0x2a, 0xc3, 0xde, 255] // one-cell cyan drop shadow
-  const t = (cx + cy) / (2 * (N - 1))
-  let rgb = [lerp(from[0], to[0], t), lerp(from[1], to[1], t), lerp(from[2], to[2], t)]
-  if (cy === 0) rgb = rgb.map((v) => lerp(v, 255, 0.25))
-  return [...rgb, 255]
+  if (isP(cx, cy)) {
+    const t = Math.floor(cy / 2) / 6
+    return [lerp(from[0], to[0], t), lerp(from[1], to[1], t), lerp(from[2], to[2], t), 255]
+  }
+  if (isP(cx - 1, cy - 1)) return [0x2a, 0xc3, 0xde, 255]
+  return [0, 0, 0, 0]
 }
 
 const raw = Buffer.alloc((SIZE * 4 + 1) * SIZE)

@@ -5,7 +5,7 @@ export const INDEX_HTML = `<!doctype html>
 <title>pager docs</title><link rel="stylesheet" href="app.css"></head>
 <body>
 <aside id="side">
-  <div id="brand"><canvas id="logo" width="7" height="9"></canvas><span>pager</span><small id="ver"></small></div>
+  <div id="brand"><img id="logo" src="logo.png" alt=""><span>pager</span><small id="ver"></small></div>
   <input id="q" type="search" placeholder="search commands and keys" autocomplete="off" spellcheck="false">
   <nav id="nav"></nav>
 </aside>
@@ -22,7 +22,7 @@ body{display:grid;grid-template-columns:232px 1fr}
 #side{position:sticky;top:0;height:100vh;padding:18px 14px;border-right:1px solid var(--ring);display:flex;flex-direction:column;gap:14px;overflow:auto}
 #brand{display:flex;align-items:center;gap:10px;font-size:15px;color:var(--accent)}
 #brand small{color:var(--muted);font-size:11px;margin-left:auto}
-#logo{width:21px;height:27px;image-rendering:pixelated}
+#logo{width:28px;height:28px;image-rendering:pixelated}
 #q{width:100%;padding:7px 10px;color:var(--text);background:var(--panel);border:1px solid var(--ring);border-radius:8px;font:inherit;outline:none}
 #q:focus{border-color:var(--accent)}
 #nav a{display:block;padding:6px 10px;margin:1px 0;color:var(--muted);text-decoration:none;border-radius:6px;border:1px solid transparent}
@@ -72,15 +72,6 @@ const fmtN = (n) => n.toLocaleString()
 const fmtMs = (ms) => { const s = Math.round(ms / 1000); if (s < 60) return s + 's'; const m = Math.floor(s / 60); return m < 60 ? m + 'm ' + (s % 60) + 's' : Math.floor(m / 60) + 'h ' + (m % 60) + 'm' }
 const ago = (ts) => { if (!ts) return 'never'; const d = (Date.now() - ts) / 1000; return d < 90 ? 'just now' : d < 5400 ? Math.round(d / 60) + 'm ago' : d < 129600 ? Math.round(d / 3600) + 'h ago' : Math.round(d / 86400) + 'd ago' }
 const get = (p) => fetch(p).then((r) => { if (!r.ok) throw new Error(p + ' ' + r.status); return r.json() })
-
-// The logo: a pixel P in the OMP palette, drawn once on a 7x9 canvas and scaled up with nearest-neighbour.
-;(() => {
-  const c = $('logo').getContext('2d')
-  const rows = ['.......', '.#####.', '.##..##', '.##..##', '.#####.', '.##....', '.##....', '.##....', '.......']
-  const grad = (y) => (y < 4 ? '#7aa2f7' : '#bb9af7')
-  rows.forEach((r, y) => [...r].forEach((p, x) => { if (p === '#') { c.fillStyle = grad(y); c.fillRect(x, y, 1, 1) } }))
-  c.fillStyle = '#2ac3de'; c.fillRect(7 - 1, 8, 1, 1)
-})()
 
 let docs, stats, filter = ''
 const hl = (text) => {

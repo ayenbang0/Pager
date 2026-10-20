@@ -1,6 +1,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import http from 'node:http'
 import { APP_CSS, APP_JS, INDEX_HTML } from './assets.js'
+import { LOGO_PNG } from './logo.js'
 import { docsData, statsData, type StatsSources } from './site.js'
 
 const ASSETS: Record<string, [type: string, body: string]> = {
@@ -45,6 +46,10 @@ export async function startDocsServer(src: StatsSources): Promise<{ url: string;
       }
       if (route === '/api/docs') return send(200, 'application/json', JSON.stringify(docsData(src.version)))
       if (route === '/api/stats') return send(200, 'application/json', JSON.stringify(statsData(src)))
+      if (route === '/logo.png') {
+        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
+        return res.end(LOGO_PNG)
+      }
       const asset = ASSETS[route]
       if (asset === undefined) return send(404, 'text/plain', 'not found')
       send(200, asset[0], asset[1])
