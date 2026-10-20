@@ -90,9 +90,9 @@ function tone(base: Base): Base {
   }
 }
 
-/** Fills in the derived tokens: a band in the accent and a pill per meaning, each readable on its own background. */
-function build(raw: Base): Theme {
-  const base = tone(raw)
+/** Fills in the derived tokens: a band in the accent and a pill per meaning, each readable on its own background. Custom themes skip the toning: their colors show as written. */
+function build(raw: Base, toned = true): Theme {
+  const base = toned ? tone(raw) : raw
   return {
     ...base,
     band: pill(base.accent),
@@ -311,14 +311,244 @@ export const THEMES: readonly Theme[] = [
     authors: ['#6a1b9a', '#ad1457', '#2e7d32', '#1565c0', '#c62828', '#00695c'],
     gradient: ['#0057ff', '#7a3cff', '#d6006f'],
   }),
+  // Flat themes: one-color rules and logo, no gradients anywhere.
+  build({
+    name: 'nord',
+    description: 'Flat: frost blue on polar night, no gradients',
+    accent: '#88c0d0',
+    accent2: '#81a1c1',
+    glow: '#b9e1ec',
+    border: '#4c566a',
+    dim: '#9aa5b8',
+    text: '#eceff4',
+    surface: '#2e3440',
+    success: '#a3be8c',
+    warning: '#ebcb8b',
+    error: '#bf616a',
+    info: '#81a1c1',
+    online: '#a3be8c',
+    badge: '#ebcb8b',
+    mine: '#88c0d0',
+    userBubble: '#88c0d0',
+    authors: ['#b48ead', '#a3be8c', '#ebcb8b', '#d08770', '#8fbcbb', '#5e81ac'],
+    gradient: ['#88c0d0', '#88c0d0'],
+  }),
+  build({
+    name: 'gruvbox',
+    description: 'Flat: warm retro yellow and orange, no gradients',
+    accent: '#fabd2f',
+    accent2: '#fe8019',
+    glow: '#fde68a',
+    border: '#504945',
+    dim: '#a89984',
+    text: '#ebdbb2',
+    surface: '#282828',
+    success: '#b8bb26',
+    warning: '#fabd2f',
+    error: '#fb4934',
+    info: '#83a598',
+    online: '#b8bb26',
+    badge: '#fe8019',
+    mine: '#fabd2f',
+    userBubble: '#fabd2f',
+    authors: ['#83a598', '#d3869b', '#8ec07c', '#fe8019', '#b8bb26', '#fb4934'],
+    gradient: ['#fabd2f', '#fabd2f'],
+  }),
+  build({
+    name: 'slate',
+    description: 'Flat: calm blue on charcoal, no gradients',
+    accent: '#61afef',
+    accent2: '#c678dd',
+    glow: '#a8d1f7',
+    border: '#3b4048',
+    dim: '#8b919a',
+    text: '#e6e6e6',
+    surface: '#1e2127',
+    success: '#98c379',
+    warning: '#e5c07b',
+    error: '#e06c75',
+    info: '#56b6c2',
+    online: '#98c379',
+    badge: '#e5c07b',
+    mine: '#61afef',
+    userBubble: '#61afef',
+    authors: ['#c678dd', '#98c379', '#e5c07b', '#56b6c2', '#d19a66', '#e06c75'],
+    gradient: ['#61afef', '#61afef'],
+  }),
+  build({
+    name: 'paper',
+    description: 'Flat: ink on warm paper for light terminals, no gradients',
+    accent: '#2b6cb0',
+    accent2: '#b7791f',
+    glow: '#63a4e8',
+    border: '#b8b0a0',
+    dim: '#6b6458',
+    text: '#1f1d1a',
+    surface: '#f4f1ea',
+    success: '#2f855a',
+    warning: '#b7791f',
+    error: '#c53030',
+    info: '#2b6cb0',
+    online: '#2f855a',
+    badge: '#b7791f',
+    mine: '#2b6cb0',
+    userBubble: '#2b6cb0',
+    authors: ['#805ad5', '#d53f8c', '#2f855a', '#dd6b20', '#319795', '#c53030'],
+    gradient: ['#2b6cb0', '#2b6cb0'],
+  }),
+  // Visual themes: rich palettes with gradients.
+  build({
+    name: 'dracula',
+    description: 'Purple, pink and cyan on the classic dark',
+    accent: '#bd93f9',
+    accent2: '#ff79c6',
+    glow: '#dcc6ff',
+    border: '#44475a',
+    dim: '#7f8bbf',
+    text: '#f8f8f2',
+    surface: '#282a36',
+    success: '#50fa7b',
+    warning: '#f1fa8c',
+    error: '#ff5555',
+    info: '#8be9fd',
+    online: '#50fa7b',
+    badge: '#ffb86c',
+    mine: '#bd93f9',
+    userBubble: '#bd93f9',
+    authors: ['#8be9fd', '#50fa7b', '#ffb86c', '#ff79c6', '#f1fa8c', '#ff5555'],
+    gradient: ['#8be9fd', '#bd93f9', '#ff79c6'],
+  }),
+  build({
+    name: 'synthwave',
+    description: "Retro '84: sun yellow to hot pink to laser cyan",
+    accent: '#f92aad',
+    accent2: '#36f9f6',
+    glow: '#ff9ee0',
+    border: '#5a2a7a',
+    dim: '#a99ac8',
+    text: '#fdf2ff',
+    surface: '#1a1033',
+    success: '#72f1b8',
+    warning: '#fede5d',
+    error: '#fe4450',
+    info: '#36f9f6',
+    online: '#72f1b8',
+    badge: '#fede5d',
+    mine: '#f92aad',
+    userBubble: '#f92aad',
+    authors: ['#36f9f6', '#72f1b8', '#fede5d', '#ff8b39', '#b893ce', '#fe4450'],
+    gradient: ['#fede5d', '#ff8b39', '#f92aad', '#36f9f6'],
+  }),
+  build({
+    name: 'tokyo',
+    description: 'City lights: blue and violet on midnight',
+    accent: '#7aa2f7',
+    accent2: '#bb9af7',
+    glow: '#b4c9fb',
+    border: '#3b4261',
+    dim: '#7c84ad',
+    text: '#c8d3f5',
+    surface: '#1a1b26',
+    success: '#9ece6a',
+    warning: '#e0af68',
+    error: '#f7768e',
+    info: '#7dcfff',
+    online: '#9ece6a',
+    badge: '#ff9e64',
+    mine: '#7aa2f7',
+    userBubble: '#7aa2f7',
+    authors: ['#bb9af7', '#9ece6a', '#e0af68', '#7dcfff', '#ff9e64', '#f7768e'],
+    gradient: ['#7dcfff', '#7aa2f7', '#bb9af7'],
+  }),
+  build({
+    name: 'rose',
+    description: 'Soft rose, iris and foam (rosé pine inspired)',
+    accent: '#ebbcba',
+    accent2: '#c4a7e7',
+    glow: '#f6d6d4',
+    border: '#403d52',
+    dim: '#908caa',
+    text: '#e0def4',
+    surface: '#191724',
+    success: '#9ccfd8',
+    warning: '#f6c177',
+    error: '#eb6f92',
+    info: '#5fa8c6',
+    online: '#9ccfd8',
+    badge: '#f6c177',
+    mine: '#ebbcba',
+    userBubble: '#ebbcba',
+    authors: ['#c4a7e7', '#9ccfd8', '#f6c177', '#eb6f92', '#5fa8c6', '#e0a3b0'],
+    gradient: ['#eb6f92', '#ebbcba', '#c4a7e7'],
+  }),
+  build({
+    name: 'forest',
+    description: 'Moss green and gold on deep pine',
+    accent: '#5fd38d',
+    accent2: '#e6c35c',
+    glow: '#a7f3c5',
+    border: '#2e5a43',
+    dim: '#8fae9a',
+    text: '#e8f5e9',
+    surface: '#10201a',
+    success: '#5fd38d',
+    warning: '#e6c35c',
+    error: '#ef6f6c',
+    info: '#6cc4d9',
+    online: '#5fd38d',
+    badge: '#e6c35c',
+    mine: '#5fd38d',
+    userBubble: '#5fd38d',
+    authors: ['#e6c35c', '#6cc4d9', '#c39bd3', '#f0a35e', '#9ccc65', '#ef6f6c'],
+    gradient: ['#1fa36a', '#5fd38d', '#e6c35c'],
+  }),
+  build({
+    name: 'matrix',
+    description: 'Phosphor green raining on black',
+    accent: '#00ff41',
+    accent2: '#3dffa8',
+    glow: '#9dffb0',
+    border: '#0d5a1c',
+    dim: '#6fbf7e',
+    text: '#d4ffd9',
+    surface: '#020c04',
+    success: '#00ff41',
+    warning: '#c8ff00',
+    error: '#ff3b3b',
+    info: '#3dffa8',
+    online: '#00ff41',
+    badge: '#c8ff00',
+    mine: '#00ff41',
+    userBubble: '#00ff41',
+    authors: ['#3dffa8', '#c8ff00', '#7dff9a', '#00d4a0', '#a0ff60', '#5effc8'],
+    gradient: ['#008f11', '#00ff41', '#9dffb0'],
+  }),
 ]
 
 export const DEFAULT_THEME: Theme = THEMES[0]!
 
-/** Exact, case-insensitive match. Unknown names resolve to undefined. */
+/** Themes from the user's `themes.json`, after the built-in ones. */
+let customThemes: readonly Theme[] = []
+
+/** Every theme to choose from: the built-in ones, then the user's own. */
+export function allThemes(): readonly Theme[] {
+  return [...THEMES, ...customThemes]
+}
+
+export function setCustomThemes(themes: readonly Theme[]): void {
+  customThemes = themes
+}
+
+/** A custom theme: `base`'s tokens with `over` on top, colors exactly as written (no toning), pills re-derived. */
+export function customTheme(base: Theme, over: Partial<Base>): Theme {
+  const { band: _band, pill: _pill, ...tokens } = base
+  return build({ ...tokens, ...over }, false)
+}
+
+/** Exact, case-insensitive match over every theme. Unknown names resolve to undefined. */
 export function findTheme(name: string): Theme | undefined {
   const wanted = name.trim().toLowerCase()
-  return THEMES.find((t) => t.name === wanted)
+  return allThemes().find((t) => t.name === wanted)
 }
 
 /** `theme` with its accent replaced everywhere the accent shows: text, gutters, bands, accent pills and the logo gradient. */
@@ -329,7 +559,8 @@ export function withAccent(theme: Theme, accent: string): Theme {
     mine: accent,
     userBubble: accent,
     glow: lighten(accent, 0.45),
-    gradient: [accent, theme.accent2],
+    // A flat theme stays flat: the new accent replaces its one gradient color.
+    gradient: theme.gradient.every((g) => g === theme.gradient[0]) ? [accent, accent] : [accent, theme.accent2],
     band: pill(accent),
     pill: { ...theme.pill, accent: pill(accent) },
   }

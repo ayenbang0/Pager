@@ -445,6 +445,44 @@ test('the AI tab: /open ai, text reaches a ready agent headless, settings round-
   fs.rmSync(repo, { recursive: true, force: true })
 })
 
+test('group bots: added with /bot, pass when their job does not call for it, answer @name, and every member sees them under their own name', async () => {
+  const fetch: typeof globalThis.fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: { content: string }[] }
+    const news = body.messages?.at(-1)?.content.split('--- NEW MESSAGES ---\n')[1] ?? ''
+    const reply = news.includes('write notes') ? 'Done.\n@@doc notes\n# Notes\nhi\n@@end' : news.includes('@grumpy') ? 'you are **wrong**\nentirely' : 'NO_REPLY'
+    return new Response(`${JSON.stringify({ message: { content: reply } })}\n`)
+  }
+  const a = await boot('alice', undefined, { fetch })
+  const b = await boot('bob')
+  await befriend(a, b)
+  await a.engine.submit('/group new crew')
+  const group = a.engine.active()
+  assert.ok(group)
+  await a.engine.submit('/group invite bob')
+  await waitFor(() => b.engine.pending().length > 0, 20_000, 'bob invited')
+  await b.engine.submit('/accept 1')
+  a.engine.setAi('ollama.model', 'm')
+  await a.engine.submit('/bot add grumpy @ollama argue with everything')
+  assert.deepEqual(a.engine.groupBots(group).map((bot) => [bot.name, bot.backend]), [['grumpy', 'ollama']])
+  await waitFor(() => b.engine.messages(group, 50).some((m) => m.authorName === 'grumpy (alice)' && m.text.startsWith('👋')), 20_000, 'intro reaches bob')
+  b.engine.activate(group)
+  await b.engine.submit('nice weather')
+  await b.engine.submit('right @grumpy?')
+  const wrong = 'you are **wrong**\nentirely'
+  await waitFor(() => b.engine.messages(group, 50).some((m) => m.text === wrong), 20_000, 'the reply reaches bob')
+  const seen = b.engine.messages(group, 50).find((m) => m.text === wrong)
+  assert.deepEqual([seen?.authorName, seen?.agent, seen?.markdown, seen?.mine, seen?.reactable], ['grumpy (alice)', true, true, false, true])
+  assert.equal(a.engine.messages(group, 50).find((m) => m.text === wrong)?.authorName, 'grumpy')
+  assert.equal(a.engine.messages(group, 50).filter((m) => m.agent === true).length, 2, 'the intro and one reply: it passed on the weather')
+  await b.engine.submit('@grumpy write notes')
+  await waitFor(() => b.engine.docList().some((d) => d.name === 'notes.md' && b.engine.docs.text(d.id) === '# Notes\nhi'), 20_000, 'the bot document reaches bob')
+  assert.ok(b.engine.messages(group, 50).some((m) => m.text === 'Done.\n\n_✎ created notes.md_'))
+  await a.engine.submit('/bot remove grumpy')
+  assert.deepEqual(a.engine.groupBots(group), [])
+  await b.engine.submit('/bot add mine @nope x')
+  assert.match(b.toasts.at(-1)?.text ?? '', /No AI backend named "nope"/)
+})
+
 function gitRepo(): string {
   const repo = tmpDir('pager-r-')
   const git = (...args: string[]): void => void execFileSync('git', args, { cwd: repo })

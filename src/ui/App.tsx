@@ -469,7 +469,9 @@ export function App({ engine, onExit }: Props) {
   const sharedNote =
     sharedRoom === undefined ? undefined : [sharedRoom.access, sharedRoom.connected ? undefined : 'host offline', sharedHere.length === 0 ? undefined : `with ${sharedHere.join(', ')}`].filter(Boolean).join(' · ')
   const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inWeb ? '⌕ web' : inAi ? '✦ ai' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
-  const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : undefined
+  const groupBots = activeConv?.kind === 'group' && engine.agentsEnabled() ? engine.groupBots(activeConv.id) : []
+  const botNote = groupBots.length === 0 ? undefined : `${groupBots.some((b) => b.busy) ? '◆ thinking… · ' : '◆ '}${groupBots.map((b) => `@${b.name}`).join(' ')}`
+  const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : botNote
   const placeholder = field !== null
     ? field.label
     : inAi
@@ -585,11 +587,22 @@ export function App({ engine, onExit }: Props) {
       ? [
           { label: 'Invite to this group…', hint: '/group invite', run: () => fillPrompt('/group invite ') },
           { label: 'Leave this group…', hint: '/group leave', run: () => fillPrompt('/group leave') },
+          ...(engine.agentsEnabled()
+            ? [
+                { label: 'Add a bot to this group…', hint: '/bot add', run: () => fillPrompt('/bot add ') },
+                ...groupBots.flatMap((b): PaletteItem[] => [
+                  { label: `Bot ${b.name}: edit…`, hint: b.backend, run: () => fillPrompt(`/bot edit ${b.name} `) },
+                  { label: `Bot ${b.name}: remove`, hint: '/bot remove', run: () => void engine.submit(`/bot remove ${b.name}`) },
+                ]),
+              ]
+            : []),
         ]
       : []),
     { label: '⚙ Settings', hint: 'Alt+S', run: () => engine.openSettings() },
     { label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: 'Ctrl+B', run: () => engine.toggleSidebar() },
     { label: 'Keyboard shortcuts', hint: 'Ctrl+G', run: () => setOverlay('help') },
+    { label: 'New custom theme…', hint: 'copies the current one into themes.json', run: () => askField({ label: 'Name for your theme', initial: '', masked: false, onSubmit: (text) => engine.newCustomTheme(text) }) },
+    { label: 'Reload custom themes', hint: 'after editing themes.json', run: () => engine.reloadThemes() },
     { label: foldsOn ? 'Show long messages in full' : 'Fold long messages', hint: 'Ctrl+T', run: () => setFoldsOn((v) => !v) },
     ...folderItems,
     { label: 'New folder…', hint: 'sidebar', run: () => askField({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) }) },
