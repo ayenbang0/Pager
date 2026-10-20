@@ -1,6 +1,7 @@
 // Builds release/Pager (the own-window host) and release/Pager-<version>-win-x64.zip. No installer, no auto-updater.
 // Set PAGER_SIGN_CMD (a command template containing {file}) to Authenticode-sign every PE that gets loaded.
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -109,5 +110,7 @@ if (sign !== undefined && sign !== '') {
 console.log('6/6 zip')
 const zip = path.join(root, 'release', `Pager-${pkg.version}-win-x64.zip`)
 run('tar', ['-a', '-c', '-f', zip, '-C', path.join(root, 'release'), 'Pager'])
+// install.ps1 checks the zip against this file before it unpacks anything.
+writeFileSync(`${zip}.sha256`, `${createHash('sha256').update(readFileSync(zip)).digest('hex')}  ${path.basename(zip)}\n`)
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`
 console.log(`done: ${mb(size(out))} unpacked, ${mb(size(zip))} zipped -> ${zip}`)
