@@ -4,7 +4,7 @@ import net from 'node:net'
 import path from 'node:path'
 import { after, test } from 'node:test'
 import { removeTmpDirs, tmpDir } from '../testing/testutil.js'
-import { controlAddress, sendControl, startControl, type RunRequest } from './control.js'
+import { controlAddress, sendControl, startControl, type RunRequest, type DocsRequest } from './control.js'
 
 after(removeTmpDirs)
 
@@ -27,7 +27,7 @@ async function raw(dir: string, line: string): Promise<string> {
 
 test('a run request reaches the handler with its fields', async () => {
   const dir = tmpDir('pager-ctl-')
-  const seen: RunRequest[] = []
+  const seen: (RunRequest | DocsRequest)[] = []
   const c = await startControl(dir, (r) => {
     seen.push(r)
     return { ok: true, id: 'terminal:2' }
@@ -106,4 +106,14 @@ test('the address depends on the data dir and platform', () => {
   assert.notEqual(controlAddress('/a', 'linux', '/tmp'), controlAddress('/b', 'linux', '/tmp'))
   assert.equal(controlAddress('C:\\A', 'win32'), controlAddress('c:\\a', 'win32'))
   assert.ok(controlAddress('/a', 'linux', '/tmp').endsWith('.sock'))
+})
+
+test('a docs request reaches the handler and the reply carries the url', async () => {
+  const dir = tmpDir('pager-ctl-')
+  const c = await startControl(dir, (r) => (r.type === 'docs' ? { ok: true, url: 'http://127.0.0.1:1/t/' } : { ok: false, error: 'no' }))
+  try {
+    assert.deepEqual(await sendControl(dir, { type: 'docs' }), { kind: 'ok', reply: { ok: true, url: 'http://127.0.0.1:1/t/' } })
+  } finally {
+    c.close()
+  }
 })

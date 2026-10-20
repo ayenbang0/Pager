@@ -46,6 +46,9 @@ import { DENSITIES, isDensity, MAX_FOLDERS, validFolderName, loadLastSeen, loadS
 import { allThemes, findTheme, THEMES } from '../ui/theme/themes.js'
 import { loadCustomThemes, saveCustomTheme, themesFile } from '../ui/theme/customThemes.js'
 import { isNewer, latestVersion } from './update.js'
+import { openUrl } from '../platform/openUrl.js'
+import { startDocsServer } from '../web/server.js'
+import { programOf, TermUsageLog } from './usage.js'
 import { VERSION } from './version.js'
 import { parseChain, splitArgs } from '../agents/run/protocol.js'
 import { closeDesktop, desktopNotify, warmDesktop } from '../platform/desktop.js'
@@ -204,6 +207,8 @@ export class Engine extends EventEmitter {
   private readonly webFetch: typeof fetch | undefined
   readonly docs: DocStore
   private openDocId: string | null = null
+  private readonly termUsage: TermUsageLog
+  private site: Promise<{ url: string; close(): void }> | undefined
   private statsCache: { at: number; value: AgentStats } | undefined
   private readonly unknownTimers = new Set<NodeJS.Timeout>()
   /** Stamps `last-seen.json` every LAST_SEEN_MS while open, for the "since you left" recap. */
@@ -348,7 +353,9 @@ export class Engine extends EventEmitter {
     this.web = new WebTool(opts.fetch === undefined ? {} : { fetch: opts.fetch })
     this.webFetch = opts.fetch
     this.web.on('change', () => this.emit('change'))
+    this.termUsage = new TermUsageLog(path.join(opts.dir, 'terminal-usage.jsonl'))
     this.terms.on('finished', (_id: string, b: CommandBlock) => {
+      if (b.endedAt !== null && b.exit !== null) this.termUsage.append({ ts: b.endedAt, program: programOf(b.command), ms: b.endedAt - b.startedAt, exit: b.exit })
       if (b.endedAt !== null && b.endedAt - b.startedAt >= LONG_COMMAND_MS) this.alert('terminal', `${b.command.slice(0, 60)} ${b.exit === 0 ? 'finished' : 'failed'}`)
     })
     if (this.prefs.notify) warmDesktop()
@@ -726,6 +733,27 @@ export class Engine extends EventEmitter {
    * Opens a terminal tab and types a command into it. The one entry point for commands that come from outside the
    * UI (`/run`, `pager run`, the desktop host), so it is where they are validated.
    */
+  /** The address of the local docs and stats site; the server starts on the first request and stops with pager. */
+  docsUrl(): Promise<string> {
+    this.site ??= startDocsServer({
+      dir: this.dir,
+      version: VERSION,
+      chat: () => this.stats(),
+      agentUsages: () => this.agentUsages(),
+    })
+    return this.site.then((s) => s.url)
+  }
+
+  /** Opens the docs site in the default browser. */
+  async openDocs(): Promise<ControlReply> {
+    try {
+      const url = await this.docsUrl()
+      return openUrl(url) ? { ok: true, url } : { ok: false, error: 'Could not open a browser' }
+    } catch (e) {
+      return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    }
+  }
+
   runInTerminal(r: { cwd?: string; command?: string }): ControlReply {
     if (r.cwd !== undefined) {
       let dir = false
@@ -970,6 +998,7 @@ export class Engine extends EventEmitter {
     if (this.seenTimer !== undefined) clearInterval(this.seenTimer)
     saveLastSeen(this.dir, Date.now())
     this.terms.closeAll()
+    void this.site?.then((s) => s.close(), () => undefined)
     this.web.close()
     this.ai?.close()
     this.bots?.close()
@@ -988,6 +1017,11 @@ export class Engine extends EventEmitter {
     switch (name) {
       case 'help':
         return this.setHome(['Commands:', ...COMMANDS.map((c) => `  ${c.usage.padEnd(34)} ${c.summary}`), '', 'Press Ctrl+G for keyboard shortcuts.'])
+      case 'docs':
+        return void this.openDocs().then((r) => {
+          if (!r.ok) this.toast('error', r.error)
+          else this.toast('info', 'Opened the docs in your browser')
+        })
       case 'run': {
         const m = /^--cwd\s+(?:"([^"]+)"|(\S+))\s*([\s\S]*)$/.exec(rest)
         const reply = this.runInTerminal({ ...(m === null ? {} : { cwd: m[1] ?? m[2] }), command: m === null ? rest : m[3] })

@@ -184,6 +184,10 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 
 `npm run desktop:pack` also builds an own-window host (Electron + xterm.js, `release/Pager-<version>-win-x64.zip`, no installer): unzip anywhere and run `Pager.exe --install` once. Its keys: Ctrl+Shift+M cycles solid black, glass and mica, Ctrl+Shift+Up/Down changes opacity, Ctrl+= / Ctrl+- / Ctrl+0 resize the font. **Those binaries are unsigned** unless you set `PAGER_SIGN_CMD` (a command template containing `{file}`, run on every `.exe`, `.dll` and `.node`). Windows Smart App Control blocks unsigned executables; `pager desktop install --exe <Pager.exe>` then falls back to the Windows Terminal host automatically.
 
+## Local docs and usage stats
+
+`/docs` (or `pager docs`, or F1 / the `docs` button in the desktop window) opens a site served from your own machine: every slash command, key binding, CLI flag and feature, searchable, plus a **Usage stats** page with messages sent and received, agent turns, working time, files changed and tokens per agent, and your most used terminal programs. It listens on 127.0.0.1 only, is read-only, and the URL carries a random token that changes each run. Terminal usage is recorded in `terminal-usage.jsonl` in the data directory: the program name, duration and exit code of each command, never its arguments.
+
 ## Docs tab
 
 `▤ docs` (or `/open docs`) is a Markdown editor for notes, plans and specs that several people edit at once. A document belongs to a conversation: `/doc new plan in team` shares it with everyone in `team`; plain `/doc new plan` goes into a private `notes` group. Open one from the list (PgUp/PgDn or click, then Enter) or with `/doc open plan`.

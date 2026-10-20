@@ -1021,3 +1021,21 @@ test('goHome returns to the welcome screen after a command replaced it, and bump
   a.engine.goHome()
   assert.equal(a.engine.homeEpoch, epoch + 2, 'also replays when Home was already showing')
 })
+
+test('/docs serves the site and opens its url; the engine stops it on close', async () => {
+  const a = await boot('docsy')
+  const opened = path.join(tmpDir('pager-open-'), 'opened.txt')
+  process.env.PAGER_OPEN_FILE = opened
+  try {
+    const reply = await a.engine.openDocs()
+    assert.equal(reply.ok, true)
+    const url = reply.ok ? (reply.url ?? '') : ''
+    assert.match(url, /^http:\/\/127\.0\.0\.1:\d+\/[0-9a-f]+\/$/)
+    assert.equal(fs.readFileSync(opened, 'utf8').trim(), url)
+    assert.equal(await a.engine.docsUrl(), url, 'one server per run')
+    const stats = (await (await fetch(`${url}api/stats`)).json()) as { version: string }
+    assert.ok(stats.version.length > 0)
+  } finally {
+    delete process.env.PAGER_OPEN_FILE
+  }
+})

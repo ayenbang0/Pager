@@ -16,6 +16,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'bot', usage: '/bot add|edit|remove|list|stop', summary: 'AI bots in the open group that reply when relevant' },
   { name: 'terminal', usage: '/terminal [new|close]', summary: 'Open the Terminal tab (new: another one, close: this one)' },
   { name: 'run', usage: '/run [--cwd <dir>] <command>', summary: 'Run a command in a new terminal tab' },
+  { name: 'docs', usage: '/docs', summary: 'Open the local docs and your usage stats in the browser' },
   { name: 'doc', usage: '/doc new <name> [in <chat>]', summary: 'Shared Markdown documents (Docs tab)' },
   { name: 'agent', usage: '/agent <name> <task>', summary: 'Run coding agents in isolated worktrees' },
   { name: 'update', usage: '/update', summary: 'Check for a newer pager version' },
@@ -59,7 +60,7 @@ export const MOVED: Readonly<Record<string, string>> = {
 }
 
 /** Subcommands of `/agent` that do not depend on which agents exist. The rest moved to Settings > Agents and the palette. */
-const AGENT_SUBCOMMANDS: readonly CommandSpec[] = [
+export const AGENT_SUBCOMMANDS: readonly CommandSpec[] = [
   { name: 'chain', usage: '/agent chain a>b <task>', summary: 'Run agents in turn; each reviews the previous work' },
   { name: 'runs', usage: '/agent runs', summary: 'List agent runs' },
   { name: 'stop', usage: '/agent stop [name|run]', summary: 'Stop running agents' },

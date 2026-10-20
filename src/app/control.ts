@@ -10,8 +10,12 @@ export interface RunRequest {
   cwd?: string
   command?: string
 }
-export type ControlRequest = RunRequest | { type: 'ping' }
-export type ControlReply = { ok: true; id?: string; pid?: number } | { ok: false; error: string }
+/** Ask the running pager for the address of its local docs and stats site. */
+export interface DocsRequest {
+  type: 'docs'
+}
+export type ControlRequest = RunRequest | DocsRequest | { type: 'ping' }
+export type ControlReply = { ok: true; id?: string; pid?: number; url?: string } | { ok: false; error: string }
 export type SendResult = { kind: 'ok'; reply: ControlReply } | { kind: 'none' }
 
 const MAX_LINE = 64 * 1024
@@ -36,7 +40,7 @@ const same = (a: string, b: string): boolean => {
  */
 export async function startControl(
   dir: string,
-  handle: (r: RunRequest) => ControlReply | Promise<ControlReply>,
+  handle: (r: RunRequest | DocsRequest) => ControlReply | Promise<ControlReply>,
 ): Promise<{ close(): void }> {
   const token = randomBytes(24).toString('hex')
   const address = controlAddress(dir)
@@ -70,6 +74,12 @@ export async function startControl(
       if (typeof req !== 'object' || req === null) return reply({ ok: false, error: 'bad request' })
       if (typeof req.token !== 'string' || !same(req.token, token)) return reply({ ok: false, error: 'unauthorized' })
       if (req.type === 'ping') return reply({ ok: true, pid: process.pid })
+      if (req.type === 'docs') {
+        Promise.resolve()
+          .then(() => handle({ type: 'docs' }))
+          .then(reply, (e: unknown) => reply({ ok: false, error: e instanceof Error ? e.message : String(e) }))
+        return
+      }
       if (req.type !== 'run') return reply({ ok: false, error: 'bad request' })
       const run: RunRequest = { type: 'run' }
       if (typeof req.cwd === 'string') run.cwd = req.cwd

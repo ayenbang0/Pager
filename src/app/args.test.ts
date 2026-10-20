@@ -7,7 +7,7 @@ test('no arguments runs pager', () => {
 })
 
 test('subcommands take no flags', () => {
-  for (const c of ['update', 'lock', 'unlock'] as const) {
+  for (const c of ['update', 'docs', 'lock', 'unlock'] as const) {
     assert.equal((parseArgs([c]) as { command: string }).command, c)
     assert.ok('error' in parseArgs([c, '--lan']))
   }
