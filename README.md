@@ -49,6 +49,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/group members` | List members of the open group |
 | `/group rename <new name>` | Rename the open group (creator only; every member sees it) |
 | `/group leave` | Leave the open group permanently |
+| `/bot add <name> [@backend] <job>` | Add an AI bot to the open group (also `edit`, `remove`, `list`, `stop`); see Group bots |
 | `/settings [section]` | Open the Settings tab (Alt+S): name, badge, theme, accent, density, notifications, folders, agents, AI backends, privacy and advanced switches |
 | `/terminal` | Open the built-in Terminal tab |
 | `/doc new <name> [in <chat>]` | Create a shared Markdown document; also `open`, `rename`, `rm`, `list`. Without `in <chat>` it is private |
@@ -105,7 +106,7 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 
 A setting that an environment variable or flag fixes shows `locked by <source>` in Settings. Switches marked "restart to apply" are read when pager starts.
 
-Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar, folders, switches), `ai.json` (AI backends; mode 0600, may hold an API key), `ai-chat.jsonl` (AI tab history), `ai/work/` (the AI tab's scratch folder), `history.json` (your last 500 inputs, for Up and the dim suggestion), `update.json` (cached latest version and check time), `agents-room.jsonl` (agents room transcript), `agent-sessions.json` (agent session ids), `memory/` (shared agent notes per repository), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
+Data directory contents: `identity.json` (your secret seed and name; keep it private, losing it means contacts must re-add you), `pager.db` (SQLite history), `settings.json` (theme, sidebar, folders, switches), `themes.json` (your custom themes), `ai.json` (AI backends; mode 0600, may hold an API key), `ai-chat.jsonl` (AI tab history), `ai/work/` (the AI tab's scratch folder), `bots.json` (your group bots and their jobs), `bots/` (each bot's sandbox folder), `history.json` (your last 500 inputs, for Up and the dim suggestion), `update.json` (cached latest version and check time), `agents-room.jsonl` (agents room transcript), `agent-sessions.json` (agent session ids), `memory/` (shared agent notes per repository), `worktrees/` (agent worktrees), `pager.lock` (one instance per directory).
 
 When pager is not focused (terminals that report focus: Windows Terminal, iTerm2, kitty, Ghostty, WezTerm, tmux with `focus-events`) it rings the bell when a message arrives or the agents finish, and Windows Terminal, iTerm2, Ghostty and WezTerm also show an indeterminate progress indicator while agents run. A message that arrives in the conversation you are looking at rings too, and ghostty, WezTerm and iTerm2 also get a desktop notification (sender and a preview); other terminals rely on the bell.
 
@@ -146,17 +147,28 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Folders.** Settings > Folders (or Ctrl+P → `New folder…`) creates folders; Ctrl+P → `Move "<tab>" to folder <name>` files the open chat, group, docs tab, AI tab or agents room. Folders sit above DIRECT in the sidebar; click a header to fold it (the open tab stays visible), and `[` / `]` in Settings reorder them.
 - **Reactions.** Click a message and pick an emoji (or `…` for any other). Reactions are events in the same signed log: they never count as unread. About 500 `:shortcodes:` complete with Tab.
 - **Group rename.** The creator's `/group rename <name>` reaches every member; pager 1.4.1 and older show it as one garbled line.
+- **Themes.** Settings > Appearance or Ctrl+P → theme picker. Besides the gradient themes (omp, neon, sunset, aurora, dracula, synthwave, tokyo, rose, forest, matrix…) there are flat ones with no gradients at all (nord, gruvbox, slate, paper). **Custom themes:** Ctrl+P → `New custom theme…` copies the theme in use into `<data dir>/themes.json` with every color spelled out; edit it and run Ctrl+P → `Reload custom themes`. An entry is `{"name": "mine", "base": "nord", "accent": "#ff8800", "flat": true, …}`: `base` is the built-in theme it starts from, any color token (`accent`, `accent2`, `glow`, `border`, `dim`, `text`, `surface`, `success`, `warning`, `error`, `info`, `online`, `badge`, `mine`, `userBubble`) may be `#rrggbb` or a terminal color name, `authors` lists 2+ colors, `gradient` 1-4 colors (one, or `"flat": true`, means no gradient). Custom colors are used exactly as written; broken entries are skipped with a note on Home.
 
 ## Web and AI tabs
 
 - **⌕ web** (sidebar → tools): type to search DuckDuckGo, then `open <n>` (your browser) or `read <n>` (the page as text). Agents get `web_search` and `web_read` tools while the web is on. Pages are untrusted data and private-network addresses are refused. Turn it off in Settings > AI chat and Web or with `PAGER_NO_WEB=1`.
 - **✦ ai** (sidebar → agents): chat without a git repository with a ready agent CLI (headless, in a scratch folder), a local **Ollama**, or any **OpenAI-compatible** API. `@claude`, `@ollama` or `@openai` picks who answers and sticks until you pick another. CLI replies arrive whole; Ollama and API replies stream and have no tools. History is `ai-chat.jsonl` on your machine; the API key lives in `ai.json` (mode 0600), so prefer `PAGER_AI_KEY`.
 
+## Group bots
+
+`/bot add grumpy @claude argue with every point anyone makes` (in an open group) adds an AI bot. `@backend` picks who answers for it, like in the AI tab: a ready agent (`claude`, `omp`, …), `ollama` or `openai`; without it the AI tab's default answers. The bot introduces itself in the group, and from then on:
+
+- **It decides after every message.** Each new message (from a person or another bot) goes to the bot's model with its job and the recent chat; it replies when its job makes the message worth answering and otherwise stays quiet. **Calling it by name** (`@grumpy`) always gets an answer. Messages that arrive while it thinks are answered together.
+- **Bots talk to bots** when it makes sense; they are told not to spam (no back-and-forth for its own sake, no "I agree" replies). As a backstop, after 6 bot messages in a row no bot reacts until a person writes.
+- **Documents.** A bot sees its group's shared documents (Docs tab) and can rewrite one, append to one or create a new `.md` one; the chat gets a `✎` note and every member sees the change. Not in a secure session (encryption or LAN mode).
+- **Where it runs.** On your machine, only while pager is open, with its own sandbox folder `<data dir>/bots/<group>/<name>/` as the working directory of CLI agents (no repository needed). Its messages are signed by you and show to everyone as `grumpy (yourname)`. Each member's bots run on that member's machine; `/bot list` shows yours, Ctrl+C in the group stops them, `/bot edit grumpy @openai be nicer` changes one, `/bot remove grumpy` deletes it and its folder. Leaving a group removes your bots there.
+- **Trust.** Everyone in the group can steer your bot. A CLI agent runs **with auto-approved tools**; its sandbox sets the working directory but is not an OS sandbox, so a group member could talk it into running commands on your machine. Prefer `ollama`/`openai` (no tools) for groups you do not fully trust. The group's messages are sent to the bot's AI provider, which is why the bot announces itself. Older pager versions show bot messages as one raw line.
+
 ## Privacy and network
 
-- **Encryption at rest.** `pager lock` asks for a passphrase and seals your identity seed (AES-256-GCM, scrypt) and the database fields `body`, `title` and contact `name`/`note`; `pager unlock` reverses it. Pager asks for the passphrase at start (3 tries, or `PAGER_PASSPHRASE`). A forgotten passphrase cannot be recovered. **Not encrypted:** conversation ids, authors, sequence numbers, timestamps, kinds, signatures, acks, contact public keys, `settings.json`, `agents-room.jsonl`, `ai-chat.jsonl`, `ai.json`, `history.json`, `net.log` and agent state files.
+- **Encryption at rest.** `pager lock` asks for a passphrase and seals your identity seed (AES-256-GCM, scrypt) and the database fields `body`, `title` and contact `name`/`note`; `pager unlock` reverses it. Pager asks for the passphrase at start (3 tries, or `PAGER_PASSPHRASE`). A forgotten passphrase cannot be recovered. **Not encrypted:** conversation ids, authors, sequence numbers, timestamps, kinds, signatures, acks, contact public keys, `settings.json`, `themes.json`, `bots.json`, bot sandbox folders, `agents-room.jsonl`, `ai-chat.jsonl`, `ai.json`, `history.json`, `net.log` and agent state files.
 - **LAN mode.** `pager --lan` (or Settings > Privacy and Network, then restart) finds the local network's DHT by UDP broadcast, or starts one when nobody answers; `pager --lan host:port` joins an explicit node. No internet is used: the web tab and the update check are off and HTTP AI backends must be on a private address. CLI agents are not restricted and may reach the internet themselves.
-- **Secure sessions** (encryption or LAN mode) keep shared documents out of agent prompts and tools; `#name` references say so.
+- **Secure sessions** (encryption or LAN mode) keep shared documents out of agent and group bot prompts and tools; `#name` references say so.
 - **No-agents mode.** `pager --no-agents` (or Settings > Privacy and Network) turns off the agents room, the AI tab and the agent tool server.
 
 ## Terminal tab
@@ -222,7 +234,7 @@ npm test             # build + node:test (integration tests use a local DHT, no 
 npm run typecheck
 ```
 
-Layout: `src/app/` (engine, commands, settings), `src/chat/` (events, ingest gate, SQLite via `node:sqlite`, reactions, encryption), `src/net/` (transport, frames, LAN discovery), `src/platform/` (env, lock, clipboard, desktop), `src/agents/` (orchestrator and its `run/`, `state/`, `git/`, `tools/`, `share/` parts), `src/tools/` (terminal, web), `src/ai/` (the AI tab), `src/docs/` (shared documents), `src/ui/` (Ink components by area).
+Layout: `src/app/` (engine, commands, settings), `src/chat/` (events, ingest gate, SQLite via `node:sqlite`, reactions, bot messages, encryption), `src/net/` (transport, frames, LAN discovery), `src/platform/` (env, lock, clipboard, desktop), `src/agents/` (orchestrator and its `run/`, `state/`, `git/`, `tools/`, `share/` parts), `src/tools/` (terminal, web), `src/ai/` (the AI tab), `src/bots/` (group bots), `src/docs/` (shared documents), `src/ui/` (Ink components by area).
 
 ## License
 

@@ -260,10 +260,10 @@ export class Store {
     }
   }
 
-  /** The last `limit` rows ordered by (ts, author, seq) ascending. */
+  /** The last `limit` chat rows (texts, bot messages, renames, membership) ordered by (ts, author, seq) ascending. */
   listMessages(conv: string, limit: number): StoredEvent[] {
     const rows = this.db
-      .prepare("SELECT * FROM events WHERE conv = ? AND (op IS NULL OR op = 'rename') ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
+      .prepare("SELECT * FROM events WHERE conv = ? AND (op IS NULL OR op IN ('rename', 'bot')) ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
       .all(conv, limit)
     return rows.reverse().map((r) => ({ ...this.toEvent(r), recvAt: r.recv_at as number }))
   }
@@ -286,28 +286,28 @@ export class Store {
     return r ? { ...this.toEvent(r), recvAt: r.recv_at as number } : undefined
   }
 
-  /** The newest `limit` text messages (documents excluded) across all conversations, newest first; the search scan window. */
+  /** The newest `limit` text and bot messages (documents excluded) across all conversations, newest first; the search scan window. */
   recentTexts(limit: number): { conv: string; author: string; ts: number; body: string }[] {
     const rows = this.db
-      .prepare("SELECT conv, author, seq, ts, body FROM events WHERE kind = 'text' AND op IS NULL ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
+      .prepare("SELECT conv, author, seq, ts, body FROM events WHERE kind = 'text' AND (op IS NULL OR op = 'bot') ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
       .all(limit)
     return rows.map((r) => ({ conv: r.conv as string, author: r.author as string, ts: r.ts as number, body: this.toEvent(r).body }))
   }
 
-  /** Per conversation, how many text messages from others arrived after `since` (receive time; documents excluded). */
+  /** Per conversation, how many text and bot messages from others arrived after `since` (receive time; documents excluded). */
   textCountsSince(me: string, since: number): Map<string, number> {
     const rows = this.db
-      .prepare("SELECT conv, COUNT(*) AS n FROM events WHERE kind = 'text' AND author <> ? AND recv_at > ? AND op IS NULL GROUP BY conv")
+      .prepare("SELECT conv, COUNT(*) AS n FROM events WHERE kind = 'text' AND author <> ? AND recv_at > ? AND (op IS NULL OR op = 'bot') GROUP BY conv")
       .all(me, since)
     return new Map(rows.map((r) => [r.conv as string, r.n as number]))
   }
 
-  /** Text events from others received after the conv's read_at. */
+  /** Text events from others, and bot messages from anyone (your own bots' replies too), received after the conv's read_at. */
   unreadCount(conv: string, me: string): number {
     const r = this.db
       .prepare(
         `SELECT COUNT(*) AS n FROM events e JOIN convs c ON c.id = e.conv
-         WHERE e.conv = ? AND e.kind = 'text' AND e.author <> ? AND e.recv_at > c.read_at AND e.op IS NULL`,
+         WHERE e.conv = ? AND e.kind = 'text' AND e.recv_at > c.read_at AND ((e.op IS NULL AND e.author <> ?) OR e.op = 'bot')`,
       )
       .get(conv, me)
     return (r?.n as number) ?? 0

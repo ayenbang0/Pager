@@ -1,10 +1,11 @@
-import { agentArguments, COMMANDS, GROUP_SUBCOMMANDS, SETTINGS_ARGUMENTS, type CommandSpec } from '../../app/commands.js'
+import { agentArguments, BOT_SUBCOMMANDS, COMMANDS, GROUP_SUBCOMMANDS, SETTINGS_ARGUMENTS, type CommandSpec } from '../../app/commands.js'
 import { emojiMatches } from '../../chat/emoji.js'
 
 const MAX_ROWS = 6
 /** Commands whose first argument completes from a fixed list. */
 const ARGUMENTS: Record<string, readonly CommandSpec[]> = {
   group: GROUP_SUBCOMMANDS,
+  bot: BOT_SUBCOMMANDS,
   settings: SETTINGS_ARGUMENTS,
 }
 const ARGUMENT_RE = /^\/(\S+) (\S*)$/

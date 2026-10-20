@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Group bots**: `/bot add <name> [@backend] <job>` puts an AI bot in a group. It decides after every message whether its job calls for a reply, always answers `@name`, can answer other bots without spamming, and can write the group's Markdown documents; CLI agents work in a sandbox folder under the data directory
+- **More themes**: flat themes without gradients (nord, gruvbox, slate, paper) and new visual ones (dracula, synthwave, tokyo, rose, forest, matrix)
+- **Custom themes**: `New custom theme…` in the palette saves the current theme to `themes.json` for editing; `Reload custom themes` applies your changes
+
 ## [1.5.1] - 2026-10-18
 
 ### Added

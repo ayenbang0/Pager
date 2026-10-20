@@ -53,6 +53,8 @@ export const KEY_SECTIONS: readonly KeySection[] = [
       ['@a @b', 'Name several agents: each one hears it'],
       ['@all', 'Every agent hears it'],
       ['Ctrl+C', 'Stop the agent working in this tab'],
+      ['@bot in a group', 'Call one of the group bots: it always answers (they also chime in when their job calls for it)'],
+      ['Ctrl+C in a group', 'Stop the bots that are thinking there'],
     ],
   },
   {

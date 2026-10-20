@@ -12,7 +12,10 @@ import { formatChangelog, getChangesSince, isNewer as isNewerChangelog, latestVe
 import { Terminal, TERM_ID, type TermEntry, type TermState } from '../tools/terminal/terminal.js'
 import { WebTool, WEB_ID, formatResults } from '../tools/web/tool.js'
 import { AiChat, AI_ID } from '../ai/chat.js'
-import { runChatTurn } from '../agents/chat.js'
+import { runChatTurn, type ChatResult } from '../agents/chat.js'
+import { GroupBots, type BotView } from '../bots/bots.js'
+import type { BotLine } from '../bots/prompt.js'
+import { encodeBotMessage, parseBotMessage } from '../chat/botMessage.js'
 import { readPage } from '../tools/web/read.js'
 import { searchWeb } from '../tools/web/search.js'
 import { DocStore, DOCS_ID, DOC_PREFIX, type DocInfo } from '../docs/store.js'
@@ -36,7 +39,8 @@ import { Suggester } from './suggest.js'
 import { buildRecap } from './recap.js'
 import { formatSearch, readRoomLines, searchDocs, SEARCH_SCAN_LIMIT, type SearchDoc } from './search.js'
 import { DENSITIES, isDensity, MAX_FOLDERS, validFolderName, loadLastSeen, loadSettings, parseBadge, saveLastSeen, saveSettings, type Settings } from './settings.js'
-import { findTheme, THEMES } from '../ui/theme/themes.js'
+import { allThemes, findTheme, THEMES } from '../ui/theme/themes.js'
+import { loadCustomThemes, saveCustomTheme, themesFile } from '../ui/theme/customThemes.js'
 import { isNewer, latestVersion } from './update.js'
 import { VERSION } from './version.js'
 import { parseChain, splitArgs } from '../agents/run/protocol.js'
@@ -57,6 +61,8 @@ export interface ConvView {
   /** DM only. */
   online: boolean | null
   unread: number
+  /** Groups only: one of my bots there is deciding or writing. */
+  thinking?: boolean
 }
 /** Numbers behind the home screen. `week` holds text messages per day, oldest first, today last. */
 export interface HomeStats {
@@ -189,6 +195,8 @@ export class Engine extends EventEmitter {
   readonly web: WebTool
   /** The AI tab; absent in a run without agents. */
   readonly ai: AiChat | undefined
+  /** AI bots in groups; absent in a run without agents. */
+  private readonly bots: GroupBots | undefined
   private readonly webFetch: typeof fetch | undefined
   readonly docs: DocStore
   private openDocId: string | null = null
@@ -307,16 +315,32 @@ export class Engine extends EventEmitter {
     this.agents.on('toast', (t: Toast) => this.emit('toast', t))
     this.term = new Terminal(opts.workdir ?? process.cwd())
     this.term.on('change', () => this.emit('change'))
-    this.ai = this.agentsOn
-      ? new AiChat({
-          dir: opts.dir,
-          readyAgents: () => this.agents.names(),
-          runCli: (agent, prompt, cwd, signal) => runChatTurn({ registry: this.agents.registry, ...(opts.agentAdapters === undefined ? {} : { adapters: opts.agentAdapters }) }, { agent, prompt, cwd, signal }),
-          ...(opts.fetch === undefined ? {} : { fetch: opts.fetch }),
-          user: this.me.name,
-        })
-      : undefined
+    const runCli = (agent: string, prompt: string, cwd: string, signal: AbortSignal): Promise<ChatResult> =>
+      runChatTurn({ registry: this.agents.registry, ...(opts.agentAdapters === undefined ? {} : { adapters: opts.agentAdapters }) }, { agent, prompt, cwd, signal })
+    const ai = this.agentsOn ? new AiChat({ dir: opts.dir, readyAgents: () => this.agents.names(), runCli, ...(opts.fetch === undefined ? {} : { fetch: opts.fetch }), user: this.me.name }) : undefined
+    this.ai = ai
     this.ai?.on('change', () => this.emit('change'))
+    this.bots =
+      ai === undefined
+        ? undefined
+        : new GroupBots({
+            dir: opts.dir,
+            backends: () => ai.backends(),
+            runCli,
+            complete: (backend, messages, signal) => ai.complete(backend, messages, signal),
+            lines: (conv, limit) => this.store.listMessages(conv, limit).flatMap((e) => this.botLine(e) ?? []),
+            group: (convId) => {
+              const conv = this.store.getConv(convId)
+              if (!conv || conv.kind !== 'group' || conv.state !== 'active') return undefined
+              return { title: `#${conv.title}`, host: this.me.name, people: [...this.store.members(convId).current].map((pk) => this.nameOf(pk)) }
+            },
+            post: (conv, name, text) => this.postBot(conv, name, text),
+            // A secure session keeps documents out of every agent, bots included.
+            docs: (conv) => (this.secure ? undefined : this.docs.list(conv).map((d) => ({ name: d.name, text: this.docs.text(d.id) }))),
+            writeDoc: (conv, name, text, append, base) => this.botDocWrite(conv, name, text, append, base),
+            failed: (conv, name, error) => this.toast('warn', `Bot ${name} in ${this.convLabels().get(conv) ?? 'a group'}: ${error}`),
+          })
+    this.bots?.on('change', () => this.emit('change'))
     this.web = new WebTool(opts.fetch === undefined ? {} : { fetch: opts.fetch })
     this.webFetch = opts.fetch
     this.web.on('change', () => this.emit('change'))
@@ -326,6 +350,8 @@ export class Engine extends EventEmitter {
     if (this.prefs.notify) warmDesktop()
     this.showNewRelease()
     this.startRecap()
+    const themeProblems = loadCustomThemes(opts.dir)
+    if (themeProblems.length > 0) this.homeLines = [...(this.homeLines === null ? [] : [...this.homeLines, '']), ...themeProblems]
   }
 
   /** Shows what happened since pager was last open (appended to the changelog if that is up), then keeps the last-seen stamp fresh. */
@@ -363,7 +389,8 @@ export class Engine extends EventEmitter {
     const docs: SearchDoc[] = []
     for (const e of this.store.recentTexts(SEARCH_SCAN_LIMIT)) {
       const where = labels.get(e.conv)
-      if (where !== undefined) docs.push({ where, author: this.nameOf(e.author), ts: e.ts, text: e.body })
+      const bot = parseBotMessage(e.body)
+      if (where !== undefined) docs.push({ where, author: bot?.name ?? this.nameOf(e.author), ts: e.ts, text: bot?.text ?? e.body })
     }
     for (const l of readRoomLines(this.roomFile())) docs.push({ where: 'agents', author: l.author, ts: l.ts, text: l.text })
     this.setHome(formatSearch(q, searchDocs(docs, q), Date.now()))
@@ -421,6 +448,7 @@ export class Engine extends EventEmitter {
           peer: null,
           online: null,
           unread: this.store.unreadCount(conv.id, this.me.pk),
+          ...(this.bots?.busy(conv.id) === true ? { thinking: true } : {}),
         })
       }
     }
@@ -547,8 +575,19 @@ export class Engine extends EventEmitter {
         status = read ? 'read' : delivered ? 'delivered' : sent ? 'sent' : 'pending'
       }
       const shownReactions = reactions.get(base.key)
-      return { ...base, kind: 'text', text: e.body, status, reactable: true, ...(shownReactions === undefined ? {} : { reactions: shownReactions }) }
+      const extra = { status, reactable: true, ...(shownReactions === undefined ? {} : { reactions: shownReactions }) }
+      // A bot speaks as its host's signed event; it shows under its own name, with the host unless that is me.
+      const bot = opOf(e.body) === 'bot' ? parseBotMessage(e.body) : undefined
+      if (bot !== undefined) {
+        return { ...base, ...extra, authorName: mine ? bot.name : `${bot.name} (${authorName})`, authorKey: `bot:${e.author}:${bot.name}`, mine: false, agent: true, markdown: true, kind: 'text', text: bot.text }
+      }
+      return { ...base, ...extra, kind: 'text', text: e.body }
     })
+  }
+
+  /** My bots in a group, for the palette and the tab header. */
+  groupBots(convId: string): BotView[] {
+    return this.bots?.list(convId) ?? []
   }
 
   active(): string | null {
@@ -683,6 +722,7 @@ export class Engine extends EventEmitter {
   interrupt(): boolean {
     if (this.activeId === TERM_ID) return this.term.stop()
     if (this.activeId === AI_ID) return this.ai?.stop() ?? false
+    if (this.activeId !== null && this.bots?.busy(this.activeId) === true) return this.bots.stop(this.activeId)
     const agent = parseAgentTab(this.activeId)
     if (agent === undefined || !this.agents.busy(agent)) return false
     this.agents.stop(agent)
@@ -888,6 +928,7 @@ export class Engine extends EventEmitter {
     this.term.close()
     this.web.close()
     this.ai?.close()
+    this.bots?.close()
     this.docs.close()
     this.share.close()
     closeDesktop()
@@ -923,6 +964,8 @@ export class Engine extends EventEmitter {
         return this.cmdRemove(rest)
       case 'group':
         return this.cmdGroup(args[0]?.toLowerCase(), rest.slice((args[0] ?? '').length).trim())
+      case 'bot':
+        return this.cmdBot(args, rest)
       case 'update':
         return this.checkForUpdate()
       case 'changelog':
@@ -1297,9 +1340,30 @@ export class Engine extends EventEmitter {
 
   setTheme(name: string): void {
     const theme = findTheme(name)
-    if (!theme) return this.toast('error', `Unknown theme "${name.slice(0, 20)}". Available: ${THEMES.map((t) => t.name).join(', ')}`)
+    if (!theme) return this.toast('error', `Unknown theme "${name.slice(0, 20)}". Available: ${allThemes().map((t) => t.name).join(', ')}`)
     this.updateSettings({ theme: theme.name })
     this.toast('success', `Theme: ${theme.name}`)
+  }
+
+  /** Saves the theme in use (accent included) as a new custom theme in themes.json, ready to edit, and switches to it. */
+  newCustomTheme(raw: string): void {
+    const name = raw.trim().toLowerCase()
+    const from = findTheme(this.prefs.theme) ?? allThemes()[0]
+    if (from === undefined) return
+    const why = saveCustomTheme(this.dir, name, this.prefs.accent === '' ? from : { ...from, accent: this.prefs.accent, mine: this.prefs.accent, userBubble: this.prefs.accent })
+    if (why !== undefined) return this.toast('error', why)
+    this.reloadThemes()
+    this.updateSettings({ theme: name, accent: '' })
+    this.toast('success', `Theme ${name} saved to ${themesFile(this.dir)}: edit its colors there, then Ctrl+P → Reload custom themes`)
+  }
+
+  /** Re-reads themes.json (after you edited it). */
+  reloadThemes(): void {
+    const problems = loadCustomThemes(this.dir)
+    for (const p of problems) this.toast('warn', p)
+    if (findTheme(this.prefs.theme) === undefined) this.updateSettings({ theme: allThemes()[0]?.name ?? 'omp' })
+    this.emit('change')
+    if (problems.length === 0) this.toast('success', `Custom themes reloaded: ${allThemes().length - THEMES.length}`)
   }
 
   setAccent(raw: string): void {
@@ -1528,7 +1592,7 @@ export class Engine extends EventEmitter {
       version: VERSION,
       update: this.update,
       locks: Object.fromEntries(this.envLocks.map((l) => [l.key, l.source])),
-      themes: THEMES.map((t) => t.name),
+      themes: allThemes().map((t) => t.name),
       folders: this.prefs.folders.map((f) => ({ name: f.name, count: f.ids.filter((id) => fileable(id, this.convs(), this.agentsOn)).length })),
       agentsOn: this.agentsOn,
       agents: this.agentsOn ? this.agentSettingsView() : EMPTY_AGENT_SETTINGS,
@@ -1667,6 +1731,50 @@ export class Engine extends EventEmitter {
       }
       default:
         this.toast('error', 'Usage: /group new <name> | invite <name> | rename <name> | members | leave')
+    }
+  }
+
+  /** `/bot …` in an open group: add, edit, remove, list or stop the bots that run here. */
+  private cmdBot(args: string[], rest: string): void {
+    const usage = 'Usage: /bot add <name> [@backend] <job> | edit <name> [@backend] [job] | remove <name> | list | stop'
+    if (this.bots === undefined || this.ai === undefined) return this.toast('error', AGENTS_OFF)
+    const conv = this.activeGroup()
+    if (!conv) return
+    const sub = (args[0] ?? 'list').toLowerCase()
+    const name = (args[1] ?? '').toLowerCase()
+    const words = rest.split(/\s+/).slice(2)
+    const backend = words[0]?.startsWith('@') === true ? words[0].slice(1).toLowerCase() : undefined
+    const job = (backend === undefined ? words : words.slice(1)).join(' ')
+    switch (sub) {
+      case 'add': {
+        if (name === '') return this.toast('error', 'Usage: /bot add <name> [@backend] <job>, e.g. /bot add grumpy @claude argue with every point anyone makes')
+        const chosen = backend ?? this.ai.defaultBackend()
+        const why = this.bots.add(conv.id, name, chosen, job)
+        if (why !== undefined) return this.toast('error', why)
+        this.toast('success', `${name} joined #${conv.title} (${chosen}): it answers when its job calls for it, or when someone writes @${name}`)
+        if (chosen !== 'ollama' && chosen !== 'openai') this.toast('warn', `Everyone in #${conv.title} can steer ${name}: ${chosen} runs with auto-approved tools in ${this.bots.sandbox(conv.id, name)}`)
+        return this.postBot(conv.id, name, `👋 Hi, I'm ${name}, ${this.me.name}'s bot (${chosen}). I read this group and reply when it fits my job, or when someone writes @${name}.`)
+      }
+      case 'edit': {
+        if (name === '' || (backend === undefined && job === '')) return this.toast('error', 'Usage: /bot edit <name> [@backend] [job]')
+        const why = this.bots.edit(conv.id, name, { ...(backend === undefined ? {} : { backend }), ...(job === '' ? {} : { instructions: job }) })
+        return this.toast(why === undefined ? 'success' : 'error', why ?? `${name} updated (applies from its next turn)`)
+      }
+      case 'remove':
+        if (!this.bots.remove(conv.id, name)) return this.toast('error', `No bot named ${name || '…'} in #${conv.title}. Bots: ${this.bots.list(conv.id).map((b) => b.name).join(', ') || 'none'}`)
+        this.postBot(conv.id, name, `👋 ${name} left the group.`)
+        return this.toast('info', `Removed ${name} and its sandbox folder`)
+      case 'list': {
+        const bots = this.bots.list(conv.id)
+        return this.setHome([
+          `#${conv.title} bots (yours; others' bots run on their own machines):`,
+          ...(bots.length === 0 ? ['  none yet: /bot add <name> [@backend] <job>'] : bots.map((b) => `  ${b.name.padEnd(14)} ${b.backend.padEnd(10)} ${b.busy ? 'thinking… ' : ''}${b.instructions}`)),
+        ])
+      }
+      case 'stop':
+        return this.toast('info', this.bots.stop(conv.id) ? 'Stopped the bots in this group' : 'No bot is busy here')
+      default:
+        this.toast('error', usage)
     }
   }
 
@@ -1857,6 +1965,7 @@ export class Engine extends EventEmitter {
     const conv = this.store.getConv(convId)
     if (!conv || conv.kind !== 'group' || conv.state === 'left') return
     const event = this.appendEvent(convId, 'member-leave', '')
+    this.bots?.forget(convId)
     this.store.upsertConv({ ...conv, state: 'left' })
     for (const pk of this.store.members(convId).current) {
       if (pk !== this.me.pk) this.sendEvents(this.net.link(pk), convId, [event])
@@ -2062,7 +2171,10 @@ export class Engine extends EventEmitter {
         const op = opOf(ev.body)
         if (op === 'doc') this.docs.applyEvent(ev)
         else if (op === 'rename') this.applyRename(ev)
-        else if (op === null) this.onIncomingText(ev)
+        else if (op === null || op === 'bot') {
+          this.onIncomingText(ev)
+          this.hearBots(ev)
+        }
       } else membership = true
     }
     for (const author of touched) link.send({ t: 'ack', conv: convId, author, seq: this.store.lastSeq(convId, author) })
@@ -2084,8 +2196,9 @@ export class Engine extends EventEmitter {
     if (ev.author === this.me.pk) return
     const conv = this.store.getConv(ev.conv)
     if (!conv) return
-    const who = this.nameOf(ev.author)
-    const snippet = ev.body.slice(0, 60)
+    const bot = parseBotMessage(ev.body)
+    const who = bot === undefined ? this.nameOf(ev.author) : `${bot.name} (${this.nameOf(ev.author)})`
+    const snippet = (bot?.text ?? ev.body).slice(0, 60)
     // The desktop alert is skipped while pager has focus (see alert()).
     this.alert(conv.kind === 'group' ? `#${conv.title}` : who, conv.kind === 'group' ? `${who}: ${snippet}` : snippet)
     if (this.activeId === conv.id) {
@@ -2198,6 +2311,50 @@ export class Engine extends EventEmitter {
     this.sendRead(conv.id)
     this.emit('change')
     this.deliver(conv, event)
+    this.hearBots(event)
+  }
+
+  /** A bot of mine writes a document of its group (creating it when new); the edit is signed by me, like any agent's. */
+  private botDocWrite(convId: string, name: string, text: string, append: boolean, base: string | undefined): string {
+    const doc = this.docs.find(name, convId)
+    if (doc === undefined) {
+      const made = this.docs.create(convId, name)
+      if (typeof made === 'string') return made
+      this.docs.setText(made.id, text)
+      return `created ${made.name}`
+    }
+    const current = this.docs.text(doc.id)
+    if (!append && base !== undefined && current !== base) return `${doc.name} changed meanwhile, so it was not rewritten`
+    this.docs.setText(doc.id, append ? `${current}${current === '' || current.endsWith('\n') ? '' : '\n'}${text}` : text)
+    return `${append ? 'added to' : 'rewrote'} ${doc.name}`
+  }
+
+  /** One of my bots speaks in a group: an event signed by me that every member shows under the bot's name. */
+  private postBot(convId: string, name: string, text: string): void {
+    const conv = this.store.getConv(convId)
+    if (!conv || conv.kind !== 'group' || conv.state !== 'active') return
+    const event = this.appendEvent(convId, 'text', encodeBotMessage(name, text))
+    if (this.activeId === convId) this.store.markRead(convId, event.ts)
+    else this.toast('info', `#${conv.title} ${name}: ${text.slice(0, 60)}`)
+    this.emit('change')
+    this.deliver(conv, event)
+    this.hearBots(event)
+  }
+
+  /** A chat or bot message as the bots read it; undefined for documents, renames, reactions and membership. */
+  private botLine(e: PagerEvent): BotLine | undefined {
+    if (e.kind !== 'text') return undefined
+    const base = { key: `${e.author}:${e.seq}`, ts: e.ts, from: this.nameOf(e.author) }
+    const op = opOf(e.body)
+    if (op === null) return { ...base, text: e.body }
+    const bot = op === 'bot' ? parseBotMessage(e.body) : undefined
+    return bot === undefined ? undefined : { ...base, bot: { name: bot.name, mine: e.author === this.me.pk }, text: bot.text }
+  }
+
+  /** Offers a new chat line to the bots of its group. */
+  private hearBots(ev: PagerEvent): void {
+    const line = this.bots === undefined ? undefined : this.botLine(ev)
+    if (line !== undefined) this.bots?.hear(ev.conv, line)
   }
 
   /** Reacts to a message (or takes the reaction back when it is already mine). `key` is the message key `<author>:<seq>`. */
@@ -2206,7 +2363,8 @@ export class Engine extends EventEmitter {
     if (!conv || conv.state !== 'active') return this.toast('error', 'Open a conversation first')
     const m = /^([0-9a-f]{64}):(\d{1,9})$/.exec(key)
     const target = m === null ? undefined : this.store.getEvent(conv.id, m[1] ?? '', Number(m[2]))
-    if (target === undefined || target.kind !== 'text' || opOf(target.body) !== null) return this.toast('error', 'That message is gone')
+    const op = target === undefined ? null : opOf(target.body)
+    if (target === undefined || target.kind !== 'text' || (op !== null && op !== 'bot')) return this.toast('error', 'That message is gone')
     if (!isReactionEmoji(emoji)) return this.toast('error', `Not an emoji: ${emoji.slice(0, 20)}`)
     const already = foldReactions(this.store.reactionEvents(conv.id), this.me.pk).get(key)?.some((r) => r.emoji === emoji && r.mine) === true
     const event = this.appendEvent(conv.id, 'text', encodeReaction(already ? '-' : '+', { author: target.author, seq: target.seq }, emoji))
