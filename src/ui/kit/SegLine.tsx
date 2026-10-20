@@ -6,7 +6,7 @@ export function SegLine({ segs }: { segs: readonly Seg[] }) {
   return (
     <Text wrap="truncate-end">
       {segs.map((s, i) => (
-        <Text key={i} color={s.color} backgroundColor={s.bg} bold={s.bold} dimColor={s.dim} italic={s.italic} inverse={s.inverse}>
+        <Text key={i} color={s.color} backgroundColor={s.bg} bold={s.bold} dimColor={s.dim} italic={s.italic} underline={s.underline} strikethrough={s.strike} inverse={s.inverse}>
           {s.text}
         </Text>
       ))}

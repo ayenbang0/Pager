@@ -30,6 +30,8 @@
     "testnet": "node scripts/testnet.mjs"
   },
   "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.15",
+    "@xterm/headless": "^6.0.0",
     "hypercore-crypto": "^3.7.0",
     "hyperdht": "^6.34.1",
     "ink": "^8.0.0",

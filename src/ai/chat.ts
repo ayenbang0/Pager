@@ -86,18 +86,34 @@ export class AiChat extends EventEmitter {
     return [...this.deps.readyAgents(), 'ollama', 'openai']
   }
 
+  /** Who answers when nobody is named: the configured default when it is available, else the first ready agent, else ollama. */
+  defaultBackend(): string {
+    const backends = this.backends()
+    return this.config.default !== 'auto' && backends.includes(this.config.default) ? this.config.default : (this.deps.readyAgents()[0] ?? 'ollama')
+  }
+
   /** The backend a message goes to, and the message without its `@name`. `error` when `@name` is unknown. */
   resolve(text: string): { backend: string; text: string } | { error: string } {
     const m = MENTION.exec(text)
-    const backends = this.backends()
     if (m !== null) {
       const name = (m[1] ?? '').toLowerCase()
-      if (!backends.includes(name)) return { error: `No AI backend named "${m[1]}"` }
+      if (!this.backends().includes(name)) return { error: `No AI backend named "${m[1]}"` }
       this.sticky = name
       return { backend: name, text: (m[2] ?? '').trim() }
     }
-    const configured = this.config.default !== 'auto' && backends.includes(this.config.default) ? this.config.default : undefined
-    return { backend: this.sticky ?? configured ?? this.deps.readyAgents()[0] ?? 'ollama', text }
+    return { backend: this.sticky ?? this.defaultBackend(), text }
+  }
+
+  /** One whole reply from Ollama or the OpenAI-compatible API, outside this tab's history (group bots ask through it). */
+  async complete(backend: 'ollama' | 'openai', messages: ChatMessage[], signal: AbortSignal): Promise<string> {
+    const { config } = this.effective()
+    let text = ''
+    const onChunk = (chunk: string): void => {
+      text += chunk
+    }
+    if (backend === 'ollama') await streamOllama(config.ollama, messages, signal, onChunk, this.httpDeps())
+    else await streamOpenAi(config.openai, messages, signal, onChunk, this.httpDeps())
+    return text
   }
 
   /** Queues one message; resolves when its turn is over. */
@@ -215,7 +231,11 @@ export class AiChat extends EventEmitter {
     const res = await this.deps.runCli(agent, prompt, cwd, signal)
     if (signal.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('stopped')
     if (!res.ok) throw new Error(res.error)
-    this.transcript.add(agent, 'reply', res.text)
+    this.transcript.add(agent, 'reply', res.text === '' ? '(no text; it may have worked on files in the scratch folder)' : res.text)
+  }
+
+  private httpDeps(): { fetch?: typeof fetch; lan: boolean } {
+    return { ...(this.deps.fetch === undefined ? {} : { fetch: this.deps.fetch }), lan: (this.deps.env ?? process.env).PAGER_LAN === '1' }
   }
 
   private async http(backend: 'ollama' | 'openai', history: readonly AiEntry[], message: string, signal: AbortSignal): Promise<void> {
@@ -225,7 +245,7 @@ export class AiChat extends EventEmitter {
       ...history.map((e): ChatMessage => ({ role: e.kind === 'user' ? 'user' : 'assistant', content: e.text })),
       { role: 'user', content: message },
     ]
-    const http = { ...(this.deps.fetch === undefined ? {} : { fetch: this.deps.fetch }), lan: (this.deps.env ?? process.env).PAGER_LAN === '1' }
+    const http = this.httpDeps()
     let entry: AiEntry | undefined
     const onChunk = (text: string): void => {
       entry ??= this.transcript.add(backend, 'reply', '', false)

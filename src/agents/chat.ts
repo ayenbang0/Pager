@@ -74,7 +74,7 @@ export async function runChatTurn(deps: ChatDeps, turn: ChatTurn): Promise<ChatR
     })
     if (reply.kind === 'cancelled') return { ok: false, error: 'stopped' }
     if (reply.kind === 'failed') return { ok: false, error: reply.reason }
-    if (reply.kind === 'text') return { ok: true, text: reply.text === '' ? '(no text; it may have worked on files in the scratch folder)' : reply.text }
+    if (reply.kind === 'text') return { ok: true, text: reply.text }
     return { ok: false, error: 'the agent sent no reply' }
   } finally {
     turn.signal.removeEventListener('abort', stop)

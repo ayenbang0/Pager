@@ -11,6 +11,9 @@ export interface Seg {
   bold?: boolean
   dim?: boolean
   italic?: boolean
+  /** Terminal cells only. */
+  underline?: boolean
+  strike?: boolean
   /** Set by the mouse selection highlight, never by layout. */
   inverse?: boolean
   /** Decoration (gutter bars, author headers, role glyphs): drawn and selectable, but left out of copied text. */
@@ -100,7 +103,7 @@ export function mergeSegs(segs: readonly Seg[]): Seg[] {
   const out: Seg[] = []
   for (const seg of segs) {
     const last = out.at(-1)
-    if (last !== undefined && last.color === seg.color && last.bg === seg.bg && last.bold === seg.bold && last.dim === seg.dim && last.italic === seg.italic && last.inverse === seg.inverse && last.chrome === seg.chrome) {
+    if (last !== undefined && last.color === seg.color && last.bg === seg.bg && last.bold === seg.bold && last.dim === seg.dim && last.italic === seg.italic && last.underline === seg.underline && last.strike === seg.strike && last.inverse === seg.inverse && last.chrome === seg.chrome) {
       out[out.length - 1] = { ...last, text: last.text + seg.text }
     } else out.push(seg)
   }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Box, useInput } from 'ink'
-import { PILL_KINDS, THEMES, type Theme } from '../theme/themes.js'
+import { allThemes, PILL_KINDS, type Theme } from '../theme/themes.js'
 import { BandTitle } from '../kit/kit.js'
 import { SegLine } from '../kit/SegLine.js'
 import { fitSegs, keycap, type Seg } from '../kit/segs.js'
@@ -34,6 +34,7 @@ function swatch(t: Theme): Seg[] {
  */
 export function ThemePicker({ width, height, current, onPreview, onPick, onCancel }: Props) {
   const theme = useTheme()
+  const THEMES = allThemes()
   const [at, setAt] = useState(Math.max(0, THEMES.findIndex((t) => t.name === current)))
   const move = (delta: number): void => {
     const next = (at + delta + THEMES.length) % THEMES.length
@@ -63,7 +64,7 @@ export function ThemePicker({ width, height, current, onPreview, onPick, onCance
         const selected = first + i === at
         const bg = selected ? theme.band.bg : undefined
         const lead: Seg = selected ? { text: '▎', color: theme.glow, bg, bold: true } : { text: ' ' }
-        const name: Seg = { text: ` ${t.name === current ? '✓' : ' '} ${t.name.padEnd(9)}`, color: selected ? theme.band.fg : theme.text, bg, bold: selected }
+        const name: Seg = { text: ` ${t.name === current ? '✓' : ' '} ${t.name.padEnd(10)}`, color: selected ? theme.band.fg : theme.text, bg, bold: selected }
         const note: Seg = { text: `  ${t.description}`, color: selected ? theme.band.fg : theme.dim, bg }
         const row = [lead, name, ...swatch(t).map((sw): Seg => (selected ? { ...sw, bg } : sw)), note]
         return <SegLine key={t.name} segs={fitSegs(row, width, bg === undefined ? {} : { bg })} />

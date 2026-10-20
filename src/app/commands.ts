@@ -13,6 +13,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'open', usage: '/open <name>', summary: 'Open a conversation' },
   { name: 'remove', usage: '/remove <name>', summary: 'Remove a contact' },
   { name: 'group', usage: '/group new|invite|rename|members|leave', summary: 'Manage groups' },
+  { name: 'bot', usage: '/bot add|edit|remove|list|stop', summary: 'AI bots in the open group that reply when relevant' },
   { name: 'terminal', usage: '/terminal', summary: 'Open the built-in terminal tab' },
   { name: 'doc', usage: '/doc new <name> [in <chat>]', summary: 'Shared Markdown documents (Docs tab)' },
   { name: 'agent', usage: '/agent <name> <task>', summary: 'Run coding agents in isolated worktrees' },
@@ -30,6 +31,14 @@ export const GROUP_SUBCOMMANDS: readonly CommandSpec[] = [
   { name: 'rename', usage: '/group rename <new name>', summary: 'Rename this group (creator only)' },
   { name: 'members', usage: '/group members', summary: 'List members' },
   { name: 'leave', usage: '/group leave', summary: 'Leave this group for good' },
+]
+
+export const BOT_SUBCOMMANDS: readonly CommandSpec[] = [
+  { name: 'add', usage: '/bot add <name> [@backend] <job>', summary: 'Add a bot to this group (backend: a ready agent, ollama or openai)' },
+  { name: 'edit', usage: '/bot edit <name> [@backend] [job]', summary: "Change a bot's backend or job" },
+  { name: 'remove', usage: '/bot remove <name>', summary: 'Remove a bot and its sandbox folder' },
+  { name: 'list', usage: '/bot list', summary: 'List your bots in this group' },
+  { name: 'stop', usage: '/bot stop', summary: 'Stop the bots that are thinking here' },
 ]
 
 export const SETTINGS_SECTIONS_KEYS = ['profile', 'appearance', 'notifications', 'folders', 'agents', 'ai', 'privacy', 'updates', 'advanced'] as const
