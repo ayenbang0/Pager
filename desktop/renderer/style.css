@@ -1,6 +1,6 @@
 /* Text and lines are clean vectors (Cascadia Mono). The pixel font only draws block elements and braille dots: the logo, the spinners and the animations. */
 @font-face { font-family: "Pager Pixel"; src: url("fonts/DepartureMono-Regular.otf"); unicode-range: U+2580-259F, U+2800-28FF, U+25A0-25FF, U+2022; }
-:root { --tint: 0.55; }
+:root { --tint: 1; }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; overflow: hidden; }
 /* The tint is the whole glass: it only darkens what the acrylic already blurs. */
@@ -12,4 +12,4 @@ body { background: rgba(0, 0, 0, var(--tint)); color: #d7e3f4; display: flex; fl
 .xterm .xterm-viewport { background-color: transparent !important; scrollbar-width: none; }
 .xterm .xterm-viewport::-webkit-scrollbar { display: none; }
 /* A crisp hairline ring; nothing else sits on top of the terminal. */
-#glass { position: fixed; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .30); }
+#glass { position: fixed; inset: 0; pointer-events: none; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .30), inset 0 1px 0 rgba(255, 255, 255, .5); background: linear-gradient(180deg, rgba(255, 255, 255, .06), transparent 12%); }

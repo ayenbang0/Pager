@@ -29,14 +29,15 @@ export interface Fragment {
 }
 
 export function buildFragment(o: { node: string; cli: string; opacity?: number }): Fragment {
-  const glass: Record<string, unknown> = {
+  // Pitch black and opaque by default; the glass profile lets the blurred desktop through.
+  const black: Record<string, unknown> = {
     name: 'Pager',
     commandline: `"${o.node}" "${o.cli}"`,
     icon: 'pager.ico',
     startingDirectory: '%USERPROFILE%',
     font: { face: FONT, size: 12, weight: 'normal' },
-    opacity: o.opacity ?? 55,
-    useAcrylic: true,
+    opacity: 100,
+    useAcrylic: false,
     colorScheme: SCHEME,
     padding: '10, 8',
     cursorShape: 'filledBox',
@@ -45,6 +46,6 @@ export function buildFragment(o: { node: string; cli: string; opacity?: number }
     scrollbarState: 'hidden',
     closeOnExit: 'always',
   }
-  const solid = { ...glass, name: 'Pager Solid', opacity: 100, useAcrylic: false }
-  return { profiles: [glass, solid], schemes: [{ name: SCHEME, ...SURFACE, ...ANSI }] }
+  const glass = { ...black, name: 'Pager Glass', opacity: o.opacity ?? 55, useAcrylic: true }
+  return { profiles: [black, glass], schemes: [{ name: SCHEME, ...SURFACE, ...ANSI }] }
 }

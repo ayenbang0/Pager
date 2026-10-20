@@ -15,7 +15,7 @@ export interface LaunchIo {
 }
 
 export interface LaunchOptions extends PassArgs {
-  solid?: boolean
+  glass?: boolean
   node: string
   cli: string
   dataDir: string

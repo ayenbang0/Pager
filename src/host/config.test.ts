@@ -21,7 +21,7 @@ test('values are validated and clamped; valid ones round-trip', () => {
   const dir = tmpDir('pager-cfg-')
   const file = path.join(dir, 'desktop.json')
   fs.writeFileSync(file, JSON.stringify({ material: 'wood', opacity: 500, fontSize: 3 }))
-  assert.deepEqual(loadConfig(file), { material: 'glass', opacity: 100, fontSize: 10 })
+  assert.deepEqual(loadConfig(file), { material: 'solid', opacity: 100, fontSize: 10 })
   const c = { material: 'mica', opacity: 35, fontSize: 18 } as const
   saveConfig(file, c)
   assert.deepEqual(loadConfig(file), c)

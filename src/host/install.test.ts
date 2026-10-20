@@ -74,7 +74,7 @@ test('install with an exe that cannot start uses Windows Terminal, via conhost, 
   assert.ok(menu.some((a) => a.includes('conhost.exe" --headless') && a.endsWith('desktop launch --cwd "%V" /f')), menu.join('\n'))
   assert.deepEqual(JSON.parse(f.files.get('C:\\D\\desktop-host.json') ?? ''), { host: 'wt' })
   const frag = JSON.parse(f.files.get('C:\\L\\Microsoft\\Windows Terminal\\Fragments\\Pager\\pager.json') ?? '{}') as { profiles: { name: string }[] }
-  assert.deepEqual(frag.profiles.map((p) => p.name), ['Pager', 'Pager Solid'])
+  assert.deepEqual(frag.profiles.map((p) => p.name), ['Pager', 'Pager Glass'])
   assert.ok(f.log.some((l) => l.startsWith('copy pager.ico -> C:\\L\\Microsoft\\Windows Terminal\\Fragments\\Pager\\pager.ico')))
 })
 

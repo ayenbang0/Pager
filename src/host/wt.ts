@@ -10,7 +10,7 @@ export function passArgs(o: PassArgs): string[] {
 }
 
 /** `wt.exe` arguments for a new Pager tab in the one window named `pager`. `;` separates wt commands, so it is escaped. */
-export function wtArgs(o: PassArgs & { node: string; cli: string; solid?: boolean }): string[] {
-  const args = ['-w', 'pager', 'new-tab', '--title', 'pager', '-p', o.solid === true ? 'Pager Solid' : 'Pager', ...(o.cwd === undefined ? [] : ['-d', o.cwd]), o.node, o.cli, ...passArgs(o)]
+export function wtArgs(o: PassArgs & { node: string; cli: string; glass?: boolean }): string[] {
+  const args = ['-w', 'pager', 'new-tab', '--title', 'pager', '-p', o.glass === true ? 'Pager Glass' : 'Pager', ...(o.cwd === undefined ? [] : ['-d', o.cwd]), o.node, o.cli, ...passArgs(o)]
   return args.map((a) => a.replaceAll(';', '\\;'))
 }

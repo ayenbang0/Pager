@@ -11,7 +11,7 @@ export interface HostConfig {
   fontSize: number
 }
 
-export const DEFAULT_CONFIG: HostConfig = { material: 'glass', opacity: 55, fontSize: 14 }
+export const DEFAULT_CONFIG: HostConfig = { material: 'solid', opacity: 55, fontSize: 14 }
 
 const MATERIALS: readonly Material[] = ['glass', 'mica', 'solid']
 const clamp = (n: number, lo: number, hi: number): number => Math.min(hi, Math.max(lo, Math.round(n)))

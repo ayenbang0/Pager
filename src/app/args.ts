@@ -6,7 +6,8 @@ export interface DesktopArgs {
   exe?: string
   cwd?: string
   words?: string[]
-  solid?: boolean
+  /** The translucent profile; the default window is opaque black. */
+  glass?: boolean
 }
 
 export interface ParsedArgs {
@@ -87,11 +88,11 @@ function parseDesktop(argv: string[], out: ParsedArgs): ParsedArgs | { error: st
   const rest = argv.slice(1)
   const desktop: DesktopArgs = { action: act }
   if (act === 'launch') {
-    const p = parseWords(rest, (f) => f === '--solid')
+    const p = parseWords(rest, (f) => f === '--glass')
     if ('error' in p) return p.error.startsWith('unknown argument: ') ? { error: `pager desktop launch does not take ${p.error.slice('unknown argument: '.length)}` } : p
     if (p.cwd !== undefined) desktop.cwd = p.cwd
     if (p.words.length > 0) desktop.words = p.words
-    if (p.flags.includes('--solid')) desktop.solid = true
+    if (p.flags.includes('--glass')) desktop.glass = true
   } else if (act === 'install') {
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i]!

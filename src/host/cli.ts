@@ -56,7 +56,7 @@ export async function runDesktop(a: DesktopArgs, dataDir: string): Promise<numbe
           print: (t) => void process.stderr.write(t),
           wt: hostPaths(process.env).wt,
         }
-        return await launch({ node: process.execPath, cli, dataDir, ...(a.cwd === undefined ? {} : { cwd: path.resolve(a.cwd) }), ...(a.words === undefined ? {} : { words: a.words }), ...(a.solid === true ? { solid: true } : {}) }, io)
+        return await launch({ node: process.execPath, cli, dataDir, ...(a.cwd === undefined ? {} : { cwd: path.resolve(a.cwd) }), ...(a.words === undefined ? {} : { words: a.words }), ...(a.glass === true ? { glass: true } : {}) }, io)
       }
     }
   } catch (e) {
