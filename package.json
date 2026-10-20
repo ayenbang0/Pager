@@ -12,7 +12,8 @@
   },
   "files": [
     "dist",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "desktop/assets/pager.ico"
   ],
   "repository": {
     "type": "git",
@@ -27,7 +28,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/cli.js",
     "test": "npm run build && node --test \"dist/**/*.test.js\"",
-    "testnet": "node scripts/testnet.mjs"
+    "testnet": "node scripts/testnet.mjs",
+    "desktop:pack": "node scripts/desktop/pack.mjs"
   },
   "dependencies": {
     "@lydell/node-pty": "1.2.0-beta.15",

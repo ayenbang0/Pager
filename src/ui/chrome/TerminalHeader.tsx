@@ -1,16 +1,15 @@
 import { Box } from 'ink'
+import type { TermInfo } from '../../tools/terminal/sessions.js'
 import { SegLine } from '../kit/SegLine.js'
 import { useTheme } from '../theme/theme.js'
-import { shellLabel, terminalTitle, type TermInfo } from './terminalChrome.js'
+import { terminalTitle } from './terminalChrome.js'
 
-const SHELL = shellLabel(process.env, process.platform)
-
-/** Title row of the Terminal tab: band, shell pill, running command or directory, and a running / exit-code pill. */
-export function TerminalHeader({ term, width }: { term: TermInfo; width: number }) {
+/** Title row of a Terminal tab: band, shell pill, running command or directory, and a running / exit-code pill. */
+export function TerminalHeader({ term, width, n }: { term: TermInfo; width: number; n: number }) {
   const theme = useTheme()
   return (
     <Box width={width} height={1}>
-      <SegLine segs={terminalTitle(term, SHELL, width, theme)} />
+      <SegLine segs={terminalTitle(term, width, theme, n)} />
     </Box>
   )
 }

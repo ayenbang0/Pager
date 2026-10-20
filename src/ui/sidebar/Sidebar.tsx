@@ -6,7 +6,7 @@ import { ROOM_ID, type RoomView } from '../../agents/orchestrator.js'
 import type { AgentView } from '../../agents/types.js'
 import { AI_ID } from '../../ai/chat.js'
 import { SETTINGS_ID } from '../../app/settingsView.js'
-import { TERM_ID } from '../../tools/terminal/terminal.js'
+import { isTermTab, TERM_ID } from '../../tools/terminal/sessions.js'
 import { WEB_ID } from '../../tools/web/tool.js'
 import { DOCS_ID } from '../../docs/store.js'
 import { SegLine } from '../kit/SegLine.js'
@@ -86,8 +86,8 @@ export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, a
     if (conv) return <Row key={id} spec={{ glyph: '#', glyphColor: theme.accent2, label: conv.title, badge: unreadBadge(conv.unread, theme), ...(conv.thinking === true ? { spinner: true } : {}) }} active={active} />
     if (id === ROOM_ID) return <Row key={id} spec={{ glyph: '⌁', glyphColor: theme.accent2, label: 'agents', badge: unreadBadge(room.unread, theme) }} active={active} />
     if (id === AI_ID) return <Row key={id} spec={{ glyph: '✦', glyphColor: theme.accent2, spinner: aiBusy, label: 'ai' }} active={active} />
-    if (id === TERM_ID) {
-      return <Row key={id} spec={{ glyph: '▸', glyphColor: theme.accent, label: 'terminal', ...(terminalRunning ? { badge: [pillSeg('● run', theme.pill.success)] } : {}) }} active={active} />
+    if (isTermTab(id)) {
+      return <Row key={id} spec={{ glyph: '▸', glyphColor: theme.accent, label: id === TERM_ID ? 'terminal' : `terminal ${id.slice(9)}`, ...(terminalRunning ? { badge: [pillSeg('● run', theme.pill.success)] } : {}) }} active={active} />
     }
     if (id === DOCS_ID) return <Row key={id} spec={{ glyph: '▤', glyphColor: theme.accent, label: 'docs' }} active={active} />
     if (id === WEB_ID) {

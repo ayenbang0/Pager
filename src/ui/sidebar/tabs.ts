@@ -6,7 +6,6 @@ import { fileable } from '../../app/folders.js'
 import type { Folder } from '../../app/settings.js'
 import { SETTINGS_ID } from '../../app/settingsView.js'
 import { DOCS_ID } from '../../docs/store.js'
-import { TERM_ID } from '../../tools/terminal/terminal.js'
 import { WEB_ID } from '../../tools/web/tool.js'
 
 export type SectionKey = 'pending' | 'direct' | 'groups' | 'agents' | 'tools' | `folder:${string}`
@@ -29,13 +28,15 @@ export interface SidebarInput {
   folders: readonly Folder[]
   collapsed: ReadonlySet<string>
   activeId: string | null
+  /** Terminal tab ids, in order. */
+  terminals: readonly string[]
 }
 
 export { fileable }
 
 /** The sidebar as a flat list: what is drawn, what a click hits and what Alt+Up/Down walks. */
 export function sidebarEntries(input: SidebarInput): SidebarEntry[] {
-  const { convs, agentsOn, folders, collapsed, activeId } = input
+  const { convs, agentsOn, folders, collapsed, activeId, terminals } = input
   const filed = new Set(folders.flatMap((f) => f.ids))
   const out: SidebarEntry[] = [{ kind: 'static', title: 'HOME' }, { kind: 'tab', id: null }]
   if (input.pendingCount > 0) {
@@ -60,7 +61,7 @@ export function sidebarEntries(input: SidebarInput): SidebarEntry[] {
     const ids = [...[ROOM_ID, AI_ID].filter(unfiled), ...input.agentNames.map(agentTabId), ...input.shared.map(sharedTabId)]
     section('agents', 'AGENTS', ids)
   }
-  section('tools', 'TOOLS', [TERM_ID, ...[DOCS_ID].filter(unfiled), WEB_ID, SETTINGS_ID])
+  section('tools', 'TOOLS', [...terminals, ...[DOCS_ID].filter(unfiled), WEB_ID, SETTINGS_ID])
   return out
 }
 

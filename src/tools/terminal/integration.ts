@@ -80,7 +80,11 @@ const PWSH = String.raw`if (-not (Test-Path variable:global:__pagerPrompt)) {
   }
   if (Get-Module PSReadLine) {
     Set-PSReadLineKeyHandler -Key Enter -ScriptBlock {
-      [Console]::Write("$([char]27)]133;C$([char]7)")
+      $l = $null
+      $c = $null
+      [Microsoft.PowerShell.PSConsoleReadLine]::GetBufferState([ref]$l, [ref]$c)
+      $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($l))
+      [Console]::Write("$([char]27)]633;E;$b64$([char]7)$([char]27)]133;C$([char]7)")
       [Microsoft.PowerShell.PSConsoleReadLine]::AcceptLine()
     }
   }

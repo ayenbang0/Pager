@@ -990,3 +990,34 @@ test('a locked engine keeps history sealed on disk, reads it back with the key, 
   assert.ok(texts(again, conv).includes('sealed hello'))
   await again.engine.close() // an open database keeps its folder locked on Windows
 })
+
+test('/run opens and activates a new terminal tab; bad folders and control characters are refused', async () => {
+  const a = await boot('runner')
+  const dir = tmpDir('pager-run-')
+  await a.engine.submit(`/run --cwd "${dir}"`) // no command, so no shell is typed into
+  assert.equal(a.engine.active(), 'terminal:2')
+  assert.equal(a.engine.terms.info('terminal:2')?.cwd, dir)
+
+  await a.engine.submit('/run --cwd C:\\definitely\\not\\here')
+  assert.equal(a.toasts.at(-1)?.kind, 'error')
+  assert.match(a.toasts.at(-1)?.text ?? '', /^cwd is not a folder: /)
+  assert.equal(a.engine.terms.ids().length, 2, 'a refused request opens nothing')
+
+  assert.deepEqual(a.engine.runInTerminal({ command: 'echo a\nrm b' }), { ok: false, error: 'command has control characters' })
+  assert.deepEqual(a.engine.runInTerminal({ cwd: 'relative' }), { ok: false, error: 'cwd is not a folder: relative' })
+  assert.equal(a.engine.terms.ids().length, 2)
+})
+
+test('goHome returns to the welcome screen after a command replaced it, and bumps the animation epoch', async () => {
+  const a = await boot('homer')
+  await a.engine.submit('/code')
+  assert.equal(a.engine.welcome(), false, 'the command output replaced the banner')
+  a.engine.activate('terminal')
+  const epoch = a.engine.homeEpoch
+  a.engine.goHome()
+  assert.equal(a.engine.active(), null)
+  assert.equal(a.engine.welcome(), true)
+  assert.equal(a.engine.homeEpoch, epoch + 1)
+  a.engine.goHome()
+  assert.equal(a.engine.homeEpoch, epoch + 2, 'also replays when Home was already showing')
+})

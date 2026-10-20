@@ -32,3 +32,32 @@ test('anything else is an error', () => {
   assert.ok('error' in parseArgs(['--lan', 'nope']))
   assert.ok('error' in parseArgs(['update', 'x']))
 })
+
+test('--cwd on a normal start', () => {
+  assert.deepEqual(parseArgs(['--cwd', 'C:\\work']), { command: 'run', lan: false, noAgents: false, cwd: 'C:\\work' })
+  assert.deepEqual(parseArgs(['--cwd']), { error: '--cwd needs a folder' })
+})
+
+test('pager run: a command, --cwd, and the -- separator', () => {
+  const base = { command: 'exec', lan: false, noAgents: false }
+  assert.deepEqual(parseArgs(['run', 'npm', 'test', '--', '-x']), { ...base, words: ['npm', 'test', '--', '-x'] })
+  assert.deepEqual(parseArgs(['run', '--cwd', 'd', '--', '-weird']), { ...base, cwd: 'd', words: ['-weird'] })
+  assert.deepEqual(parseArgs(['run', '--cwd', 'd']), { ...base, cwd: 'd' })
+  assert.deepEqual(parseArgs(['run']), { error: 'pager run needs a command or --cwd' })
+  assert.deepEqual(parseArgs(['run', '-x']), { error: 'unknown argument: -x' })
+  assert.deepEqual(parseArgs(['run', '--cwd']), { error: '--cwd needs a folder' })
+})
+
+test('pager desktop: actions, their flags and the errors', () => {
+  const base = { command: 'desktop', lan: false, noAgents: false }
+  assert.deepEqual(parseArgs(['desktop', 'status']), { ...base, desktop: { action: 'status' } })
+  assert.deepEqual(parseArgs(['desktop', 'install', '--exe', 'C:\\p\\Pager.exe']), { ...base, desktop: { action: 'install', exe: 'C:\\p\\Pager.exe' } })
+  assert.deepEqual(parseArgs(['desktop', 'launch', '--solid', '--cwd', 'd', '--', 'echo', 'hi']), { ...base, desktop: { action: 'launch', cwd: 'd', words: ['echo', 'hi'], solid: true } })
+  assert.deepEqual(parseArgs(['desktop', 'launch']), { ...base, desktop: { action: 'launch' } })
+  assert.deepEqual(parseArgs(['desktop']), { error: 'pager desktop needs one of: install, uninstall, launch, status' })
+  assert.deepEqual(parseArgs(['desktop', 'nope']), { error: 'pager desktop needs one of: install, uninstall, launch, status' })
+  assert.deepEqual(parseArgs(['desktop', 'status', '--exe']), { error: 'pager desktop status does not take --exe' })
+  assert.deepEqual(parseArgs(['desktop', 'install', '--solid']), { error: 'pager desktop install does not take --solid' })
+  assert.deepEqual(parseArgs(['desktop', 'launch', '--exe']), { error: 'pager desktop launch does not take --exe' })
+  assert.deepEqual(parseArgs(['desktop', 'install', '--exe']), { error: '--exe needs a path' })
+})

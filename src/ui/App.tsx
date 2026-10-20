@@ -3,7 +3,7 @@ import { Box, Text, useInput, useWindowSize } from 'ink'
 import { agentTabId, parseAgentTab, parseSharedTab } from '../agents/ids.js'
 import { ROOM_ID } from '../agents/orchestrator.js'
 import type { AgentView } from '../agents/types.js'
-import { TERM_ID } from '../tools/terminal/terminal.js'
+import { isTermTab, TERM_ID } from '../tools/terminal/sessions.js'
 import { WEB_ID } from '../tools/web/tool.js'
 import { DOCS_ID } from '../docs/store.js'
 import { copyText } from '../platform/clipboard.js'
@@ -12,6 +12,7 @@ import { AgentHeader, HubHeader } from './chrome/AgentHeader.js'
 import { AgentSetup } from './overlays/AgentSetup.js'
 import { watchCtrlH } from './input/ctrlH.js'
 import { DocsPanel, type DocsCtl } from './docs/DocsPanel.js'
+import { TerminalPanel, type TermCtl } from './terminal/TerminalPanel.js'
 import { SETTINGS_ID } from '../app/settingsView.js'
 import type { FieldRequest } from '../app/settingsActions.js'
 import { SettingsPanel, type SettingsCtl } from './settings/SettingsPanel.js'
@@ -186,6 +187,7 @@ export function App({ engine, onExit }: Props) {
     folders: settings.folders,
     collapsed: new Set(settings.collapsed),
     activeId,
+    terminals: engine.terms.ids(),
   })
   /** Rows the sidebar has: the screen less the header and the status bar. */
   const sbRows = Math.max(1, frame - 2)
@@ -202,12 +204,12 @@ export function App({ engine, onExit }: Props) {
   const sharedPk = parseSharedTab(activeId)
   const sharedRoom = sharedPk === undefined ? undefined : engine.sharedRoom(sharedPk)
   const review = engine.agentReview()
-  const inTermTab = activeId === TERM_ID
+  const inTerm = isTermTab(activeId)
   const inWeb = activeId === WEB_ID
   const inAi = activeId === AI_ID
   // Short panes fall back to compact rows, and the terminal tab is always compact: its rows are commands and output, not speakers.
   const look: Look = {
-    density: inTermTab || inWeb ? 'compact' : effectiveDensity(settings.density, frame),
+    density: inTerm || inWeb ? 'compact' : effectiveDensity(settings.density, frame),
     badge: badgeGlyph(settings.badge, engine.me.name),
     agentColors: Object.fromEntries(room.agents.flatMap((a) => (a.color === undefined ? [] : [[a.name, a.color] as const]))),
     me: engine.me.name,
@@ -230,12 +232,13 @@ export function App({ engine, onExit }: Props) {
   // Ctrl+H goes to the Home tab. Legacy terminals deliver it as the backspace byte, so it is read from raw input (not while an overlay
   // or the document editor owns the keyboard).
   const homeOk = useRef(false)
-  homeOk.current = overlay === null && !inEditor
-  useEffect(() => watchCtrlH(() => homeOk.current && engine.activate(null)), [engine])
+  homeOk.current = overlay === null && !inEditor && !inTerm
+  useEffect(() => watchCtrlH(() => homeOk.current && engine.goHome()), [engine])
   const docsCtl = useRef<DocsCtl | null>(null)
+  const termCtl = useRef<TermCtl | null>(null)
   const settingsCtl = useRef<SettingsCtl | null>(null)
   // Emoji shortcodes expand in chats and agent tabs only; the terminal and the Docs list take text as typed.
-  const emojiOk = activeId !== null && activeId !== TERM_ID && !inDocs && !inSettings && !inWeb
+  const emojiOk = activeId !== null && !inTerm && !inDocs && !inSettings && !inWeb
   const agentMenu: AgentMenu | undefined = agentView === undefined ? undefined : { agent: agentView.name, commands: engine.agentCommands(agentView.name) }
   // An agent's question takes the prompt's place in its own tab and in the hub; in any other tab a banner points to it.
   const questions = engine.questions()
@@ -243,9 +246,9 @@ export function App({ engine, onExit }: Props) {
   const shownQuestion = sharedRoom === undefined ? questionFor(questions, agentTab, activeId === ROOM_ID) : sharedRoom.access === 'control' ? sharedRoom.questions[0] : undefined
   const questionLine = questionBanner(questions, sharedRoom === undefined ? shownQuestion : undefined)
   const pickerH = shownQuestion === undefined ? 0 : pickerHeight(shownQuestion, Math.max(8, Math.floor(frame / 2)))
-  const menu = overlay === null && !inEditor && shownQuestion === undefined && field === null ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu, engine.contactNames()) : []
-  const bannerRow = !inEditor && questionLine !== undefined ? 1 : 0
-  const noPrompt = inEditor || (inSettings && field === null)
+  const menu = overlay === null && !inEditor && !inTerm && shownQuestion === undefined && field === null ? menuItems(input.text, input.cursor, emojiOk, engine.agentNames(), agentMenu, engine.contactNames()) : []
+  const bannerRow = !inEditor && !inTerm && questionLine !== undefined ? 1 : 0
+  const noPrompt = inEditor || (inSettings && field === null) || inTerm
   const paneRows = Math.max(MIN_PANE_ROWS, frame - (FIXED_ROWS - PROMPT_ROWS) - (shownQuestion === undefined || noPrompt ? PROMPT_ROWS : pickerH) - bannerRow - menu.length)
   const mainWidth = columns - (sidebarShown ? SIDEBAR_WIDTH : 0)
   const activeConv = convs.find((c) => c.id === activeId)
@@ -305,7 +308,8 @@ export function App({ engine, onExit }: Props) {
       if (overlay === null && sidebarShown && at.x <= sidebarCols) return setSbScroll((cur) => Math.max(0, Math.min(maxScroll, cur - dir * WHEEL_LINES)))
       if (overlay === 'help') return helpCtl.current?.wheel(dir)
       if (overlay !== null) return
-      if (inDocs) docsCtl.current?.wheel(dir)
+      if (inTerm) termCtl.current?.wheel(dir)
+      else if (inDocs) docsCtl.current?.wheel(dir)
       else if (inSettings) settingsCtl.current?.wheel(dir)
       else setOffset((o) => Math.min(maxOffset, Math.max(0, o + dir * WHEEL_LINES)))
     },
@@ -321,6 +325,7 @@ export function App({ engine, onExit }: Props) {
         return
       }
       if (overlay !== null || at.x <= sidebarCols) return
+      if (inTerm) return termCtl.current?.click(at.x, at.y)
       if (inDocs) return docsCtl.current?.click(at.x, at.y)
       if (inSettings) return settingsCtl.current?.click(at.x, at.y)
       const anchor = showBanner ? null : cellAt(at, false)
@@ -389,14 +394,14 @@ export function App({ engine, onExit }: Props) {
   useInput(
     (input, key) => {
       if (key.eventType === 'release') return
-      if (key.ctrl && input === 'h') return void engine.activate(null)
+      if (key.ctrl && input === 'h') return void engine.goHome()
       if (!key.meta) return
       if (input === 'm') openModel()
       else if (input === 'i') inviteToAgents()
       else if (input === 'q') jumpToQuestion()
       else if (input === 's') engine.openSettings()
     },
-    { isActive: overlay === null && !inEditor && field === null },
+    { isActive: overlay === null && !inEditor && !inTerm && field === null },
   )
   const onSwitch = (dir: 1 | -1): void => {
     const ids = visibleTabIds(entries)
@@ -434,8 +439,9 @@ export function App({ engine, onExit }: Props) {
 
   const inRoom = activeId === ROOM_ID
   const guestCount = engine.sessionGuests().filter((g) => g.state === 'joined').length
-  const inTerm = activeId === TERM_ID
-  const term = engine.terminal()
+  const termInfo = isTermTab(activeId) ? engine.terms.info(activeId) : undefined
+  const termRunning = engine.terms.running()
+  const termNum = activeId === TERM_ID ? 1 : Number(activeId?.slice(9))
   const openDocName = inDocs ? engine.docs.info(engine.openedDoc() ?? '')?.name : undefined
   const title = activeConv ? (activeConv.kind === 'group' ? `#${activeConv.title}` : activeConv.title) : 'home'
   const place: Place = inDocs
@@ -459,7 +465,7 @@ export function App({ engine, onExit }: Props) {
             : activeConv
               ? { kind: 'dm', title: activeConv.title }
               : { kind: 'home', title: '' }
-  useWindowTitle({ state: questions.length > 0 ? 'attention' : agentsActive > 0 || term.running ? 'working' : 'idle', unread, label: titleLabel(place, activeConv?.online === true) })
+  useWindowTitle({ state: questions.length > 0 ? 'attention' : agentsActive > 0 || termRunning ? 'working' : 'idle', unread, label: titleLabel(place, activeConv?.online === true) })
   if (columns < MIN_COLUMNS || rows < MIN_ROWS) {
     return <Text>Terminal too small (need {MIN_COLUMNS}x{MIN_ROWS})</Text>
   }
@@ -479,9 +485,7 @@ export function App({ engine, onExit }: Props) {
       : inWeb
       ? 'Search the web, or: open <n> · read <n> · clear'
       : inTerm
-    ? term.running
-      ? 'Type to send input to the running command · Ctrl+C stops it'
-      : 'Run a command (cd works) · // for a leading slash · Ctrl+C stops'
+    ? ''
     : sharedRoom !== undefined
       ? sharedRoom.access === 'view'
         ? 'View only: the host invited you to watch'
@@ -566,7 +570,7 @@ export function App({ engine, onExit }: Props) {
       ),
   ]
   const paletteItems: PaletteItem[] = [
-    { label: '⌂ Home', run: () => engine.activate(null) },
+    { label: '⌂ Home', run: () => engine.goHome() },
     ...convs.map(
       (c): PaletteItem => ({
         label: c.kind === 'group' ? `# ${c.title}` : c.title,
@@ -606,7 +610,9 @@ export function App({ engine, onExit }: Props) {
     { label: foldsOn ? 'Show long messages in full' : 'Fold long messages', hint: 'Ctrl+T', run: () => setFoldsOn((v) => !v) },
     ...folderItems,
     { label: 'New folder…', hint: 'sidebar', run: () => askField({ label: 'New folder name', initial: '', masked: false, onSubmit: (text) => engine.folderNew(text) }) },
-    { label: '▸ Terminal', hint: engine.terminal().running ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
+    { label: '▸ Terminal', hint: termRunning ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
+    { label: 'Terminal: new tab', hint: '/terminal new', run: () => engine.openTerminal() },
+    ...(inTerm && activeId !== null ? [{ label: 'Terminal: close tab', hint: '/terminal close', run: () => engine.closeTerminal(activeId) }] : []),
     { label: '⌕ Web', hint: 'search the web', run: () => engine.activate(WEB_ID) },
     ...(engine.agentsEnabled() ? [{ label: '✦ AI', hint: 'chat without a repository', run: () => engine.activate(AI_ID) }, { label: 'Clear AI chat', hint: 'history and scratch files', run: () => engine.clearAi() }] : []),
     { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
@@ -617,7 +623,6 @@ export function App({ engine, onExit }: Props) {
   ]
 
   let hint = 'Enter send · Alt+↑/↓ switch · Ctrl+P commands · Ctrl+G help'
-  if (inTerm) hint = term.running ? 'Enter send input · Ctrl+C stop command' : 'Enter run · Alt+↑/↓ switch · Ctrl+P commands · Ctrl+G help'
   if (offset > 0) hint = 'Scrolled · PgDn for newer'
   else if (input.text.startsWith('/')) hint = 'Tab complete · Enter run · Esc clear'
   else if (menu.length > 0) hint = 'Tab insert emoji · Enter send as typed · Esc clear'
@@ -657,7 +662,7 @@ export function App({ engine, onExit }: Props) {
               room={room}
               shared={shared}
               activeId={activeId}
-              terminalRunning={term.running}
+              terminalRunning={termRunning}
               webBusy={engine.webBusy()}
               aiBusy={engine.aiBusy()}
             />
@@ -699,8 +704,8 @@ export function App({ engine, onExit }: Props) {
                   <AgentHeader view={agentView} files={filesChanged(room.runs, agentView.name)} review={engine.agentReview()} />
                 ) : inRoom ? (
                   <HubHeader agents={room.agents} goal={engine.agentGoal()} guests={guestCount} />
-                ) : inTerm ? (
-                  <TerminalHeader term={term} width={mainWidth} />
+                ) : inTerm && termInfo !== undefined ? (
+                  <TerminalHeader term={termInfo} width={mainWidth} n={termNum} />
                 ) : (
                   <BandTitle title={tabTitle} width={mainWidth} right={inWeb ? 'DuckDuckGo' : inAi ? (engine.aiBusy() ? 'thinking…' : '@name picks who answers') : tabNote} />
                 )}
@@ -737,8 +742,21 @@ export function App({ engine, onExit }: Props) {
                     onHelp={() => setOverlay('help')}
                     onQuit={onExit}
                   />
+                ) : inTerm && activeId !== null ? (
+                  <TerminalPanel
+                    engine={engine}
+                    id={activeId}
+                    width={mainWidth}
+                    height={paneRows + PROMPT_ROWS}
+                    left={(sidebarShown ? SIDEBAR_WIDTH : 0) + 1}
+                    top={PANE_TOP_ROW}
+                    active={overlay === null}
+                    ctl={termCtl}
+                    onPalette={() => setOverlay('palette')}
+                    onSwitch={onSwitch}
+                  />
                 ) : showBanner ? (
-                  <HomeBanner width={mainWidth - 2} height={paneRows} stats={engine.stats()} agents={homeData(engine, room.agents)} agentsOn={engine.agentsEnabled()} info={engine.home().slice(2)} />
+                  <HomeBanner key={engine.homeEpoch} width={mainWidth - 2} height={paneRows} stats={engine.stats()} agents={homeData(engine, room.agents)} agentsOn={engine.agentsEnabled()} info={engine.home().slice(2)} />
                 ) : (
                   <Box height={paneRows} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
                     {visible.map((line, row) => (

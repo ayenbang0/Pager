@@ -131,8 +131,6 @@ function markdownRows(text: string, columns: number, theme: Theme): Seg[][] {
 
 /** The glyph that says what kind of speaker wrote a message. */
 function roleGlyph(m: MessageView, look: Look): string {
-  if (m.authorKey === 'term') return '▸'
-  if (m.authorKey === 'term-out') return '◂'
   if (m.mine) return look.badge === '' ? '●' : look.badge
   if (m.agent === true) return '◆'
   return m.authorName === 'pager' ? '⚙' : '●'

@@ -99,10 +99,10 @@ export const KEY_SECTIONS: readonly KeySection[] = [
   {
     title: 'Terminal tab',
     rows: [
-      ['Enter', 'Run the line in your shell; cd works'],
-      ['Typing while it runs', 'The line goes to the running command'],
-      ['Ctrl+C', 'Stop the running command'],
-      ['//', 'Start a line with a literal slash'],
+      ['Alt+Up / Alt+Down', 'Previous / next tab'],
+      ['Alt+P', 'Command palette (Quit is there)'],
+      ['Alt+K', 'Block mode: select a finished command (c output, y command, r rerun)'],
+      ['Everything else', 'Goes to the shell, including Ctrl+C, Ctrl+D and Ctrl+P'],
     ],
   },
   {

@@ -51,7 +51,8 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/group leave` | Leave the open group permanently |
 | `/bot add <name> [@backend] <job>` | Add an AI bot to the open group (also `edit`, `remove`, `list`, `stop`); see Group bots |
 | `/settings [section]` | Open the Settings tab (Alt+S): name, badge, theme, accent, density, notifications, folders, agents, AI backends, privacy and advanced switches |
-| `/terminal` | Open the built-in Terminal tab |
+| `/terminal` | Open the built-in Terminal tab (`/terminal new`, `/terminal close`) |
+| `/run [--cwd <dir>] <command>` | Run a command in a new Terminal tab |
 | `/doc new <name> [in <chat>]` | Create a shared Markdown document; also `open`, `rename`, `rm`, `list`. Without `in <chat>` it is private |
 | `/agent <name> <task>` | Run a coding agent in an isolated worktree (`omp`, `claude`, `opencode`, `hermes`); also `chain`, `runs`, `stop`, `merge`, `drop`, `undo`, `log` |
 | `/agent invite <contact> [--view]` | Let a contact into your agent room: they can message the agents and answer questions (`--view`: only watch). Remove guests or leave a session in Settings > Agents; a guest uses `/accept n` |
@@ -173,7 +174,15 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 
 ## Terminal tab
 
-`▸ terminal` in the sidebar (or `/terminal`, or the palette) runs shell commands without leaving pager: each line runs in your shell (`cmd` on Windows, `$SHELL` elsewhere) in a persistent directory (`cd` works, `clear` empties the tab), output streams in with escape codes stripped, and a line typed while a command runs goes to its stdin. Ctrl+C stops the command; one that ran over 5 s rings an unfocused terminal when it ends. There is no pseudo-terminal, so full-screen programs (vim, htop) do not work. A line that must start with `/` is typed with `//`.
+`▸ terminal` in the sidebar (or `/terminal`, or the palette) is a real shell on a pseudo-terminal: colors, full-screen programs (vim, htop), resize, history and Ctrl+C all work. The shell is pwsh, then powershell, then cmd on Windows, `$SHELL` elsewhere (`PAGER_SHELL` overrides). `/terminal new` opens up to six tabs, `/terminal close` ends one. bash, zsh, fish and PowerShell mark each command, so a gutter bar shows running, passed or failed; `Alt+K` selects a finished command (`c` copy output, `y` copy text, `r` rerun, `l` lens, `e` explain in the AI tab). Only Alt+Up/Down, Alt+P and Alt+K belong to pager here; everything else goes to the shell.
+
+`/run [--cwd <dir>] <command>` opens a new tab and types the command into it. From outside, `pager run [--cwd DIR] [--] <command...>` does the same in the running pager (or starts pager with it).
+
+## Desktop window (Windows)
+
+`pager desktop install` gives pager a glass-and-pixel window without administrator rights: a Windows Terminal profile (55% black acrylic, Cascadia Mono text; `Pager Solid` is the opaque variant), a Start menu entry and an "Open Pager here" entry in Explorer's folder menu. `pager desktop launch [--solid] [--cwd DIR] [-- command...]` opens it (a second launch reuses the live pager and just adds a tab), `status` lists what is installed and `uninstall` removes it. Requires Windows Terminal (Microsoft Store). The own-window host (below) also draws the logo, spinners and other block-and-braille animations in the [Departure Mono](https://departuremono.com) pixel font while text and lines stay crisp. Everything it launches is Microsoft-signed, so Smart App Control does not block it.
+
+`npm run desktop:pack` also builds an own-window host (Electron + xterm.js, `release/Pager-<version>-win-x64.zip`, no installer): unzip anywhere and run `Pager.exe --install` once. Its keys: Ctrl+Shift+M cycles glass, mica and solid, Ctrl+Shift+Up/Down changes opacity, Ctrl+= / Ctrl+- / Ctrl+0 resize the font. **Those binaries are unsigned** unless you set `PAGER_SIGN_CMD` (a command template containing `{file}`, run on every `.exe`, `.dll` and `.node`). Windows Smart App Control blocks unsigned executables; `pager desktop install --exe <Pager.exe>` then falls back to the Windows Terminal host automatically.
 
 ## Docs tab
 

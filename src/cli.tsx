@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import './platform/env.js'
+import fs from 'node:fs'
 import type { Engine } from './app/engine.js'
 import type { LanHandle } from './net/lan.js'
 import { acquireLock, AlreadyRunningError } from './platform/lock.js'
@@ -11,15 +12,22 @@ import { parseArgs } from './app/args.js'
 import { applyEnvFromSettings } from './app/envSettings.js'
 import { loadSettings } from './app/settings.js'
 import { promptSecret } from './platform/secretPrompt.js'
+import { startError } from './platform/appControl.js'
+import { sendControl, startControl } from './app/control.js'
 import type { Secrets } from './chat/secrets.js'
 
 const USAGE = `pager: a simpler way to chat
 
-Usage: pager [--lan [host:port]] [--no-agents] [update | lock | unlock | -h | --help | -v | --version]
+Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | desktop | update | lock | unlock | -h | --help | -v | --version]
 
+  --cwd DIR          start with the Terminal tab in DIR
   --lan [host:port]  chat over the local network only: find (or start) the network's DHT, or join the one at host:port
   --no-agents        turn off the agents room, the AI tab and the agent tool server
 
+  run [--cwd DIR] [--] <command...>
+                   run a command in a new Terminal tab of the running pager (or start pager with it)
+  desktop install|uninstall|launch|status
+                   Windows only: a glass window host for pager (Windows Terminal), Start menu entry, "Open Pager here"
   update           install the latest release (npm install -g pager-cli@latest)
   lock             protect your identity key and encrypt history, group titles and contact names with a passphrase
   unlock           remove that protection again
@@ -45,6 +53,41 @@ if (parsed.command === 'version') {
   process.exit(0)
 }
 if (parsed.command === 'update') process.exit(await runUpdate(dataDir(), VERSION))
+if (parsed.command === 'desktop') {
+  const { runDesktop } = await import('./host/cli.js') // only the desktop commands pay for loading it
+  process.exit(await runDesktop(parsed.desktop!, dataDir()))
+}
+if (parsed.cwd !== undefined) {
+  let isDir = false
+  try {
+    isDir = fs.statSync(parsed.cwd).isDirectory()
+  } catch {
+    // not there
+  }
+  if (!isDir) {
+    process.stderr.write(`not a folder: ${parsed.cwd}\n`)
+    process.exit(2)
+  }
+  process.chdir(parsed.cwd)
+}
+let startup: { cwd: string; command?: string } | undefined
+if (parsed.command === 'exec') {
+  const command = parsed.words?.join(' ')
+  const request = { cwd: process.cwd(), ...(command === undefined ? {} : { command }) }
+  let sent
+  try {
+    sent = await sendControl(dataDir(), { type: 'run', ...request })
+  } catch (err) {
+    process.stderr.write(`pager run: ${err instanceof Error ? err.message : String(err)}\n`)
+    process.exit(1)
+  }
+  if (sent.kind === 'ok') {
+    if (sent.reply.ok) process.stdout.write('sent to pager\n')
+    else process.stderr.write(`${sent.reply.error}\n`)
+    process.exit(sent.reply.ok ? 0 : 1)
+  }
+  startup = request
+}
 if (parsed.command === 'lock' || parsed.command === 'unlock') {
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     process.stderr.write(`pager ${parsed.command} needs an interactive terminal\n`)
@@ -71,8 +114,15 @@ try {
   throw err
 }
 
-const { identityLockState } = await import('./chat/identity.js')
-const { unlockWithPassphrase } = await import('./app/lockCommand.js')
+// Dynamic like the Engine import below: native addons stay out of `pager update` / --help / --version. A load failure
+// (Smart App Control refusing a .node file) is explained instead of printing a stack.
+const failStart = (err: unknown): never => {
+  release()
+  process.stderr.write(`pager failed to start: ${startError(err)}\n`)
+  process.exit(1)
+}
+const { identityLockState } = await import('./chat/identity.js').catch(failStart)
+const { unlockWithPassphrase } = await import('./app/lockCommand.js').catch(failStart)
 let secrets: Secrets | undefined
 const lockState = identityLockState(dir)
 if (lockState.locked) {
@@ -121,7 +171,7 @@ try {
   engine = await Engine.open({ dir, bootstrap: nodes, checkAgents: agents, secrets, envLocks, agents, ...(lan === undefined ? {} : { lan: { hosting: lan.hosting, address: lan.address } }) })
 } catch (err) {
   release()
-  process.stderr.write(`pager failed to start: ${err instanceof Error ? err.message : String(err)}\n`)
+  process.stderr.write(`pager failed to start: ${startError(err)}\n`)
   process.exit(1)
 }
 
@@ -131,10 +181,18 @@ if (process.env.PAGER_NO_UPDATE_CHECK !== '1') {
   })
 }
 
+let control: { close(): void } | undefined
+try {
+  control = await startControl(dir, (r) => engine.runInTerminal(r))
+} catch {
+  // No control channel (name taken, pipes unavailable): pager still works, `pager run` just starts its own.
+}
+
 let shuttingDown = false
 async function shutdown(code: number, error?: unknown): Promise<void> {
   if (shuttingDown) return
   shuttingDown = true
+  control?.close()
   app.unmount()
   await app.waitUntilExit().catch(() => {})
   process.stdout.write(MOUSE_OFF) // the terminal outlives us; never leave mouse reporting on
@@ -162,3 +220,9 @@ const app = render(createElement(App, { engine, onExit: () => void shutdown(0) }
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void shutdown(0))
 process.on('uncaughtException', (err) => void shutdown(1, err))
 process.on('unhandledRejection', (err) => void shutdown(1, err))
+
+// `pager run` found no running pager: this one starts with the request.
+if (startup !== undefined) {
+  const reply = engine.runInTerminal(startup)
+  if (!reply.ok) engine.toast('error', reply.error)
+}

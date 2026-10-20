@@ -5,13 +5,28 @@ All notable changes to pager are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.0] - 2026-10-20
 
 ### Added
 
 - **Group bots**: `/bot add <name> [@backend] <job>` puts an AI bot in a group. It decides after every message whether its job calls for a reply, always answers `@name`, can answer other bots without spamming, and can write the group's Markdown documents; CLI agents work in a sandbox folder under the data directory
 - **More themes**: flat themes without gradients (nord, gruvbox, slate, paper) and new visual ones (dracula, synthwave, tokyo, rose, forest, matrix)
 - **Custom themes**: `New custom theme…` in the palette saves the current theme to `themes.json` for editing; `Reload custom themes` applies your changes
+- **Real terminal**: the Terminal tab is now a shell on a PTY (colors, full-screen programs, resize, history, Ctrl+C) instead of one process per line; up to six tabs with `/terminal new` and `/terminal close`, and `PAGER_SHELL` picks the shell (default: pwsh, then powershell, then cmd on Windows; `$SHELL` elsewhere)
+- **Command blocks**: bash, zsh, fish and PowerShell mark each command, so a gutter bar shows running, passed or failed; `Alt+K` selects a finished command to copy its output (`c`) or text (`y`), rerun it (`r`), view a lens (`l`) or send it to the AI tab to explain (`e`)
+- **Output lenses**: `ping`, `dig`, `curl -i/-I/-v`, `traceroute` and `tracert` output shows as a compact card; anything unrecognised stays as plain output
+- **Desktop window (Windows)**: `pager desktop install` adds a glass-and-pixel window host (Windows Terminal profile with 55% black acrylic and clean Cascadia Mono text), a Start menu entry and an "Open Pager here" folder menu, all per-user without administrator rights; `desktop launch`, `status` and `uninstall` manage it. An own-window Electron host (`npm run desktop:pack`, unsigned unless `PAGER_SIGN_CMD` is set) is used instead when it can start on the PC
+- **Run from outside**: `pager run [--cwd DIR] [--] <command>` and `/run [--cwd <dir>] <command>` open a new Terminal tab and type the command into it; `pager run` hands the request to the running pager or starts one with it, and `pager --cwd DIR` starts in a folder
+- `Ctrl+H` jumps to Home and replays the logo animation, even after a command replaced the welcome screen
+- A start-up failure caused by Windows Smart App Control blocking a native file now names the file and says why
+
+### Changed
+
+- In the Terminal tab only Alt+Up/Down, Alt+P and Alt+K belong to pager; every other key, including Ctrl+C, Ctrl+D and Ctrl+P, goes to the shell (Quit is in the palette)
+
+### Removed
+
+- The line-at-a-time terminal runner (`cd`/`clear` interception, `TERM=dumb`)
 
 ## [1.5.1] - 2026-10-18
 

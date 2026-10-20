@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import fs from 'node:fs'
 import path from 'node:path'
 import type { BootstrapNode } from 'hyperdht'
 import type { AdapterSpec } from '../agents/run/adapters.js'
@@ -8,8 +9,11 @@ import { AgentShare, type GuestView, type SharedRoom, type SharedView } from '..
 import { Orchestrator, ROOM_ID, type AgentStats, type RoomView, type SetupRow } from '../agents/orchestrator.js'
 import type { AnswerMap, QuestionView } from '../agents/run/questions.js'
 import { COMMANDS, MOVED, parseCommand, SETTINGS_ARGUMENTS } from './commands.js'
+import type { ControlReply } from './control.js'
 import { formatChangelog, getChangesSince, isNewer as isNewerChangelog, latestVersion as latestChangelogVersion, loadChangelog } from './changelog.js'
-import { Terminal, TERM_ID, type TermEntry, type TermState } from '../tools/terminal/terminal.js'
+import type { CommandBlock } from '../tools/terminal/blocks.js'
+import { explainPrompt } from '../tools/terminal/explain.js'
+import { isTermTab, TERM_ID, Terminals } from '../tools/terminal/sessions.js'
 import { WebTool, WEB_ID, formatResults } from '../tools/web/tool.js'
 import { AiChat, AI_ID } from '../ai/chat.js'
 import { runChatTurn, type ChatResult } from '../agents/chat.js'
@@ -191,7 +195,7 @@ export class Engine extends EventEmitter {
   private readonly netLog: NetLog
   private readonly agents: Orchestrator
   private readonly share: AgentShare
-  private readonly term: Terminal
+  readonly terms: Terminals
   readonly web: WebTool
   /** The AI tab; absent in a run without agents. */
   readonly ai: AiChat | undefined
@@ -313,8 +317,8 @@ export class Engine extends EventEmitter {
     })
     this.agents.on('notify', (title: string, body: string) => this.alert(title, body))
     this.agents.on('toast', (t: Toast) => this.emit('toast', t))
-    this.term = new Terminal(opts.workdir ?? process.cwd())
-    this.term.on('change', () => this.emit('change'))
+    this.terms = new Terminals({ cwd: opts.workdir ?? process.cwd(), env: process.env, dir: opts.dir })
+    this.terms.on('change', () => this.emit('change'))
     const runCli = (agent: string, prompt: string, cwd: string, signal: AbortSignal): Promise<ChatResult> =>
       runChatTurn({ registry: this.agents.registry, ...(opts.agentAdapters === undefined ? {} : { adapters: opts.agentAdapters }) }, { agent, prompt, cwd, signal })
     const ai = this.agentsOn ? new AiChat({ dir: opts.dir, readyAgents: () => this.agents.names(), runCli, ...(opts.fetch === undefined ? {} : { fetch: opts.fetch }), user: this.me.name }) : undefined
@@ -344,8 +348,8 @@ export class Engine extends EventEmitter {
     this.web = new WebTool(opts.fetch === undefined ? {} : { fetch: opts.fetch })
     this.webFetch = opts.fetch
     this.web.on('change', () => this.emit('change'))
-    this.term.on('finished', (e: TermEntry) => {
-      if (Date.now() - e.ts >= LONG_COMMAND_MS) this.alert('terminal', `${e.command.slice(0, 60)} ${e.state === 'done' ? 'finished' : e.state}`)
+    this.terms.on('finished', (_id: string, b: CommandBlock) => {
+      if (b.endedAt !== null && b.endedAt - b.startedAt >= LONG_COMMAND_MS) this.alert('terminal', `${b.command.slice(0, 60)} ${b.exit === 0 ? 'finished' : 'failed'}`)
     })
     if (this.prefs.notify) warmDesktop()
     this.showNewRelease()
@@ -528,25 +532,8 @@ export class Engine extends EventEmitter {
     return out.slice(-limit)
   }
 
-  /** The Terminal tab: each command, then its output as a reply. */
-  private termMessages(limit: number): MessageView[] {
-    const out: MessageView[] = []
-    for (const e of this.term.list()) {
-      out.push({ key: `t${e.n}`, ts: e.ts, authorName: path.basename(e.cwd) || e.cwd, authorKey: 'term', mine: true, kind: 'text', text: e.command, status: null })
-      const lines = [...e.lines, e.partial]
-      while (lines.at(-1) === '') lines.pop()
-      if (e.dropped > 0) lines.unshift(`… ${e.dropped} earlier lines dropped`)
-      if (e.state === 'stopped') lines.push('(stopped)')
-      else if (e.state === 'failed' && e.code !== null && lines.length === 0) lines.push(`exit ${e.code}`)
-      else if (e.state === 'failed' && e.code !== null) lines.push(`(exit ${e.code})`)
-      if (lines.length > 0) out.push({ key: `t${e.n}o`, ts: e.ts, authorName: e.state === 'running' ? 'running…' : 'output', authorKey: 'term-out', mine: false, kind: 'text', text: lines.join('\n'), status: null })
-    }
-    return out.slice(-limit)
-  }
-
   messages(convId: string, limit: number): MessageView[] {
-    if (convId === TERM_ID) return this.termMessages(limit)
-    if (convId === DOCS_ID || convId === SETTINGS_ID) return []
+    if (isTermTab(convId) || convId === DOCS_ID || convId === SETTINGS_ID) return []
     if (convId === WEB_ID) return this.webMessages(limit)
     if (convId === AI_ID) return this.ai?.messages(limit) ?? []
     if (convId === ROOM_ID) return this.agents.messages(limit)
@@ -718,9 +705,8 @@ export class Engine extends EventEmitter {
     return this.agents.goal()
   }
 
-  /** Ctrl+C in the Terminal tab: stop the running command. False when there is nothing to stop. */
+  /** Ctrl+C: stop the active AI/bot/agent turn. False when there is nothing to stop. */
   interrupt(): boolean {
-    if (this.activeId === TERM_ID) return this.term.stop()
     if (this.activeId === AI_ID) return this.ai?.stop() ?? false
     if (this.activeId !== null && this.bots?.busy(this.activeId) === true) return this.bots.stop(this.activeId)
     const agent = parseAgentTab(this.activeId)
@@ -729,9 +715,55 @@ export class Engine extends EventEmitter {
     return true
   }
 
-  terminal(): { running: boolean; cwd: string; last: { command: string; state: TermState; code: number | null } | null } {
-    const last = this.term.list().at(-1)
-    return { running: this.term.running, cwd: this.term.cwd, last: last === undefined ? null : { command: last.command, state: last.state, code: last.code } }
+  /** Opens another terminal tab (cwd of the active one). */
+  openTerminal(): void {
+    const id = this.terms.open({ from: this.activeId ?? undefined })
+    if (id === undefined) return this.toast('error', 'At most 6 terminals')
+    this.activate(id)
+  }
+
+  /**
+   * Opens a terminal tab and types a command into it. The one entry point for commands that come from outside the
+   * UI (`/run`, `pager run`, the desktop host), so it is where they are validated.
+   */
+  runInTerminal(r: { cwd?: string; command?: string }): ControlReply {
+    if (r.cwd !== undefined) {
+      let dir = false
+      try {
+        dir = path.isAbsolute(r.cwd) && fs.statSync(r.cwd).isDirectory()
+      } catch {
+        // not there
+      }
+      if (!dir) return { ok: false, error: `cwd is not a folder: ${r.cwd}` }
+    }
+    const command = r.command?.trim() || undefined
+    if (command !== undefined && (command.length > 4096 || /[\x00-\x08\x0a-\x1f\x7f]/.test(command))) {
+      return { ok: false, error: 'command has control characters' }
+    }
+    const id = this.terms.open({ ...(r.cwd === undefined ? {} : { cwd: r.cwd }), from: this.activeId ?? undefined })
+    if (id === undefined) return { ok: false, error: 'At most 6 terminals' }
+    this.activate(id)
+    if (command !== undefined) void this.terms.run(id, command)
+    return { ok: true, id }
+  }
+
+  /** Sends a terminal command block (command, exit code, output tail) to the AI tab to explain. */
+  explainBlock(termId: string, blockId: number): void {
+    if (this.ai === undefined) return this.toast('error', 'AI is off (agents are disabled)')
+    const session = this.terms.get(termId)
+    const block = session?.blocks.list().find((b) => b.id === blockId)
+    if (session === undefined || block === undefined) return this.toast('error', 'That block is gone')
+    void this.ai.say(explainPrompt(block, session.blocks.text(blockId)))
+    this.activate(AI_ID)
+    this.toast('info', 'Sent to the AI tab')
+  }
+
+  /** Kills a terminal tab's shell. Other tabs disappear (the first one is shown instead); the first tab starts a fresh shell. */
+  closeTerminal(id: string): void {
+    this.terms.close(id)
+    if (id !== TERM_ID) {
+      if (this.activeId === id) this.activate(TERM_ID)
+    } else if (this.activeId === id) void this.terms.ensure(id)
   }
 
   // ---------------------------------------------------------------- docs
@@ -861,6 +893,17 @@ export class Engine extends EventEmitter {
     this.toast('error', usage)
   }
 
+  /** Counts visits through `goHome`; the Home screen restarts its animation when it changes. */
+  homeEpoch = 0
+
+  /** Back to the welcome screen: drops any command output Home was showing and replays the logo animation. */
+  goHome(): void {
+    this.homeLines = null
+    this.homeEpoch++
+    this.activate(null)
+    this.emit('change')
+  }
+
   activate(convId: string | null): void {
     const shared = parseSharedTab(convId)
     if (!this.agentsOn && (shared !== undefined || convId === ROOM_ID || convId === AI_ID || parseAgentTab(convId) !== undefined)) return this.toast('error', AGENTS_OFF)
@@ -872,10 +915,11 @@ export class Engine extends EventEmitter {
       return
     }
     const agent = parseAgentTab(convId)
-    if (convId === AI_ID || convId === ROOM_ID || convId === TERM_ID || convId === DOCS_ID || convId === SETTINGS_ID || convId === WEB_ID || agent !== undefined) {
+    if (convId === AI_ID || convId === ROOM_ID || (isTermTab(convId) && this.terms.has(convId)) || convId === DOCS_ID || convId === SETTINGS_ID || convId === WEB_ID || agent !== undefined) {
       if (convId === ROOM_ID) this.agents.markRead()
       if (agent !== undefined) this.agents.markRead(agent)
       this.activeId = convId
+      if (isTermTab(convId)) void this.terms.ensure(convId)
       this.emit('change')
       return
     }
@@ -907,7 +951,7 @@ export class Engine extends EventEmitter {
     const text = input.trim()
     if (text === '') return
     this.input = [...this.input.filter((h) => h !== text), text].slice(-HISTORY_MAX)
-    this.suggester.learn(text, this.activeId !== TERM_ID && this.activeId !== SETTINGS_ID && this.activeId !== WEB_ID && this.activeId !== AI_ID)
+    this.suggester.learn(text, !isTermTab(this.activeId) && this.activeId !== SETTINGS_ID && this.activeId !== WEB_ID && this.activeId !== AI_ID)
     try {
       saveHistory(this.dir, this.input)
     } catch {
@@ -925,7 +969,7 @@ export class Engine extends EventEmitter {
     this.unknownTimers.clear()
     if (this.seenTimer !== undefined) clearInterval(this.seenTimer)
     saveLastSeen(this.dir, Date.now())
-    this.term.close()
+    this.terms.closeAll()
     this.web.close()
     this.ai?.close()
     this.bots?.close()
@@ -944,8 +988,21 @@ export class Engine extends EventEmitter {
     switch (name) {
       case 'help':
         return this.setHome(['Commands:', ...COMMANDS.map((c) => `  ${c.usage.padEnd(34)} ${c.summary}`), '', 'Press Ctrl+G for keyboard shortcuts.'])
-      case 'terminal':
+      case 'run': {
+        const m = /^--cwd\s+(?:"([^"]+)"|(\S+))\s*([\s\S]*)$/.exec(rest)
+        const reply = this.runInTerminal({ ...(m === null ? {} : { cwd: m[1] ?? m[2] }), command: m === null ? rest : m[3] })
+        if (!reply.ok) this.toast('error', reply.error)
+        return
+      }
+      case 'terminal': {
+        const sub = args[0]?.toLowerCase()
+        if (sub === 'new') return this.openTerminal()
+        if (sub === 'close') {
+          if (!isTermTab(this.activeId)) return this.toast('info', 'Not a terminal tab')
+          return this.closeTerminal(this.activeId)
+        }
         return this.activate(TERM_ID)
+      }
       case 'doc':
         return this.cmdDoc(args)
       case 'settings':
@@ -2275,9 +2332,9 @@ export class Engine extends EventEmitter {
     return event
   }
 
-  /** Where chat, room and agent-tab text goes out: `:fire:` shortcodes become unicode here, so peers on any version see it. The terminal gets what was typed. */
+  /** Where chat, room and agent-tab text goes out: `:fire:` shortcodes become unicode here, so peers on any version see it. */
   private sendText(typed: string): void {
-    const text = this.activeId === TERM_ID ? typed : expandEmoji(typed)
+    const text = expandEmoji(typed)
     if (text.length > MAX_TEXT) {
       this.toast('error', `Message too long (max ${MAX_TEXT} characters)`)
       return
@@ -2293,7 +2350,6 @@ export class Engine extends EventEmitter {
       this.warnSecureDocs(text)
       return this.agents.say(text, parseAgentTab(this.activeId))
     }
-    if (this.activeId === TERM_ID) return this.term.run(text)
     if (this.activeId === WEB_ID) return void this.web.run(text)
     if (this.activeId === AI_ID) return void this.ai?.say(text)
     if (this.activeId === SETTINGS_ID) return this.toast('info', 'The Settings tab takes keys, not text (Up/Down, Enter)')
@@ -2379,7 +2435,7 @@ export class Engine extends EventEmitter {
 
   // ---------------------------------------------------------------- helpers
 
-  private toast(kind: ToastKind, text: string): void {
+  toast(kind: ToastKind, text: string): void {
     this.emit('toast', { kind, text } satisfies Toast)
   }
 

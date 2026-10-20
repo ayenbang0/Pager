@@ -6,7 +6,7 @@ import { ROOM_ID } from '../../agents/orchestrator.js'
 import { AI_ID } from '../../ai/chat.js'
 import { SETTINGS_ID } from '../../app/settingsView.js'
 import { DOCS_ID } from '../../docs/store.js'
-import { TERM_ID } from '../../tools/terminal/terminal.js'
+import { TERM_ID } from '../../tools/terminal/sessions.js'
 import { WEB_ID } from '../../tools/web/tool.js'
 import { entryIndexOf, fileable, sidebarEntries, sidebarHit, visibleTabIds, type SidebarEntry, type SidebarInput } from './tabs.js'
 
@@ -21,6 +21,7 @@ const input = (over: Partial<SidebarInput> = {}): SidebarInput => ({
   folders: [],
   collapsed: new Set(),
   activeId: null,
+  terminals: [TERM_ID],
   ...over,
 })
 
@@ -37,6 +38,11 @@ test('order: home, direct, groups, agents (room, ai, each agent, shared), then t
     'v tools (4)', TERM_ID, DOCS_ID, WEB_ID, SETTINGS_ID,
   ])
   assert.deepEqual(visibleTabIds(entries), [null, 'd1', 'd2', 'g1', ROOM_ID, AI_ID, agentTabId('omp'), agentTabId('claude'), sharedTabId('ab'.repeat(32)), TERM_ID, DOCS_ID, WEB_ID, SETTINGS_ID])
+})
+
+test('extra terminal tabs sit right after the first, ahead of docs', () => {
+  const ids = visibleTabIds(sidebarEntries(input({ terminals: [TERM_ID, 'terminal:2', 'terminal:3'] })))
+  assert.deepEqual(ids.slice(-6), [TERM_ID, 'terminal:2', 'terminal:3', DOCS_ID, WEB_ID, SETTINGS_ID])
 })
 
 test('empty DIRECT and GROUPS are omitted; pending rows come right after HOME', () => {
