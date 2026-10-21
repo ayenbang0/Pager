@@ -45,9 +45,28 @@ term.onTitleChange((t) => window.pager.title(t))
 document.getElementById('docs').addEventListener('click', () => window.pager.hotkey('docs'))
 document.getElementById('studio').addEventListener('click', () => window.pager.hotkey('studio'))
 
+// Ctrl+click a link in the output to read it in the browser pane.
+term.registerLinkProvider({
+  provideLinks(y, callback) {
+    const line = term.buffer.active.getLine(y - 1)
+    if (!line) return callback(undefined)
+    const text = line.translateToString(true)
+    const links = []
+    for (const m of text.matchAll(/https?:\/\/[^\s<>"'`)\]]+[^\s<>"'`)\].,;:!?]/g)) {
+      links.push({
+        range: { start: { x: m.index + 1, y }, end: { x: m.index + m[0].length, y } },
+        text: m[0],
+        activate: (event, url) => event.ctrlKey && window.pager.browser('open', url),
+      })
+    }
+    callback(links)
+  },
+})
+
 const HOTKEYS = {
   F1: () => window.pager.hotkey('docs'),
   F2: () => window.pager.hotkey('studio'),
+  'Ctrl+Shift+B': () => window.pager.hotkey('browser'),
   'Ctrl+Shift+M': () => window.pager.hotkey('material'),
   'Ctrl+Shift+ArrowUp': () => window.pager.hotkey('opacity+'),
   'Ctrl+Shift+ArrowDown': () => window.pager.hotkey('opacity-'),

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { openUrl } from '../../platform/openUrl.js'
+import { openInApp } from '../../platform/appBrowser.js'
 import { scrub } from './html.js'
 import { readPage } from './read.js'
 import { searchWeb, type WebResult } from './search.js'
@@ -23,7 +23,7 @@ export interface WebEntry {
 
 export const WEB_OFF = 'Web search is off (Settings > AI chat and Web)'
 
-const HELP = ['search <text> (or just type it)  find pages', 'open <n>                        open result n in your browser', 'read <n>                        show result n as text', 'clear                           empty this tab']
+const HELP = ['search <text> (or just type it)  find pages', 'open <n>                        open result n in the browser pane', 'read <n>                        show result n as text', 'clear                           empty this tab']
 
 /** Numbered result blocks: `1. Title`, the address, then the snippet. */
 export function formatResults(results: readonly WebResult[]): string[] {
@@ -80,7 +80,7 @@ export class WebTool extends EventEmitter {
       const n = Number(arg)
       const hit = Number.isInteger(n) ? this.results[n - 1] : undefined
       if (hit === undefined) return this.fail(entry, `No result ${arg}`)
-      if (verb === 'open') return openUrl(hit.url) ? this.done(entry, [`Opened ${hit.url}`]) : this.fail(entry, `Could not open ${hit.url}`)
+      if (verb === 'open') return (await openInApp(hit.url)) ? this.done(entry, [`Opened ${hit.url} in the browser pane`]) : this.fail(entry, `The browser pane is part of the Pager desktop window; here it is: ${hit.url}`)
       const page = await readPage(hit.url, this.opts)
       this.done(entry, [...(page.title === '' ? [] : [page.title, '']), ...page.text.split('\n').map(scrub)])
     } catch (err) {

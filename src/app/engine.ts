@@ -47,7 +47,7 @@ import { DENSITIES, isDensity, MAX_FOLDERS, validFolderName, loadLastSeen, loadS
 import { allThemes, findTheme, THEMES } from '../ui/theme/themes.js'
 import { loadCustomThemes, saveCustomTheme, themesFile } from '../ui/theme/customThemes.js'
 import { isNewer, latestVersion } from './update.js'
-import { openUrl } from '../platform/openUrl.js'
+import { openInApp } from '../platform/appBrowser.js'
 import { startDocsServer } from '../web/server.js'
 import { STUDIO_LIMITS, type StudioApi } from '../web/studio.js'
 import { programOf, TermUsageLog } from './usage.js'
@@ -785,11 +785,11 @@ export class Engine extends EventEmitter {
     }
   }
 
-  /** Opens the docs site, or its bot studio, in the default browser. */
+  /** Shows the docs site, or its bot studio, in the browser pane of the desktop window. */
   async openDocs(page?: 'studio'): Promise<ControlReply> {
     try {
       const url = await this.docsUrl(page)
-      return openUrl(url) ? { ok: true, url } : { ok: false, error: 'Could not open a browser' }
+      return (await openInApp(url)) ? { ok: true, url } : { ok: false, error: `The browser pane is part of the Pager desktop window (pager desktop install). The page is at ${url}` }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
     }
@@ -1062,7 +1062,7 @@ export class Engine extends EventEmitter {
       case 'studio':
         return void this.openDocs(name === 'studio' ? 'studio' : undefined).then((r) => {
           if (!r.ok) this.toast('error', r.error)
-          else this.toast('info', name === 'studio' ? 'Opened the bot studio in your browser' : 'Opened the docs in your browser')
+          else this.toast('info', name === 'studio' ? 'Opened the bot studio in the browser pane' : 'Opened the docs in the browser pane')
         })
       case 'run': {
         const m = /^--cwd\s+(?:"([^"]+)"|(\S+))\s*([\s\S]*)$/.exec(rest)

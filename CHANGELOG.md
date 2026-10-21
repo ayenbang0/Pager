@@ -5,6 +5,23 @@ All notable changes to pager are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.0] - 2026-10-21
+
+### Added
+
+- **Browser pane (desktop window)**: a real browser docked beside the terminal, toggled with Ctrl+Shift+B or the `web` button: tabs, address bar with search, back, forward, reload, a draggable divider, pages in a sandboxed session with no permissions and no downloads
+- Ctrl+click a link in the terminal output to read it in the pane
+- Pages open links in new tabs; Ctrl+L, Ctrl+T, Ctrl+W, Ctrl+Tab, F5 and Alt+Left/Right work while a page has focus
+
+### Changed
+
+- `/docs`, `/studio`, `pager docs`, `pager studio`, F1, F2 and the web tool's `open <n>` show their page in the pane; pager no longer starts your default browser. Outside the desktop window they print the address instead
+- Chromium switches such as `--remote-debugging-port` are no longer passed on to pager by the desktop window
+
+### Fixed
+
+- A taskbar button pinned from the desktop window kept Electron's icon: the window now declares the pager icon for pins and relaunch, not only in the exe (unpin the old button and pin again)
+
 ## [1.8.0] - 2026-10-21
 
 ### Added

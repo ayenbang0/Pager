@@ -5,13 +5,36 @@
 html, body { margin: 0; height: 100%; overflow: hidden; }
 /* The tint is the whole glass: it only darkens what the acrylic already blurs. */
 body { background: rgba(0, 0, 0, var(--tint)); color: #d7e3f4; display: flex; flex-direction: column; transition: background-color .25s ease; }
-#docs, #studio { padding: 2px 10px; font: inherit; letter-spacing: inherit; color: #9aa8c4; background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .22); border-radius: 6px; cursor: pointer; -webkit-app-region: no-drag; }
+#docs, #studio, #web { padding: 2px 10px; font: inherit; letter-spacing: inherit; color: #9aa8c4; background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .22); border-radius: 6px; cursor: pointer; -webkit-app-region: no-drag; }
 #docs { margin-left: auto; }
-#docs:hover, #studio:hover { color: #c0caf5; border-color: #7aa2f7; }
+#docs:hover, #studio:hover, #web:hover, #web.on { color: #c0caf5; border-color: #7aa2f7; }
 #bar { height: 30px; flex: none; display: flex; align-items: center; gap: 8px; padding: 0 150px 0 12px; font: 11px "Cascadia Mono", Consolas, monospace; letter-spacing: .5px; color: #7f93b2; -webkit-app-region: drag; user-select: none; }
 #bar img { width: 14px; height: 14px; image-rendering: pixelated; }
 #bar .name { text-transform: lowercase; }
-#term { flex: 1; min-height: 0; margin: 0 0 8px 12px; }
+#work { flex: 1; min-height: 0; display: flex; }
+#term { flex: 1; min-width: 0; min-height: 0; margin: 0 0 8px 12px; }
+:root { --pane-w: 46%; }
+#split { flex: none; width: 8px; margin: 0 0 8px; cursor: col-resize; position: relative; }
+#split::after { content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px; background: rgba(255, 255, 255, .16); }
+#split:hover::after { background: #7aa2f7; }
+/* The pane: glass chrome (tabs, address bar) above the native page view. */
+#pane { flex: none; width: var(--pane-w); min-width: 300px; display: flex; flex-direction: column; margin: 0 8px 8px 0; font: 12px "Cascadia Mono", Consolas, monospace; color: #9aa8c4; }
+#pane[hidden], #split[hidden] { display: none; }
+#tabs { flex: none; display: flex; gap: 4px; align-items: center; overflow: hidden; padding: 0 0 6px; }
+.tab { display: flex; align-items: center; gap: 4px; min-width: 0; max-width: 190px; padding: 3px 4px 3px 10px; border: 1px solid rgba(255, 255, 255, .14); border-radius: 8px; background: rgba(255, 255, 255, .04); cursor: default; }
+.tab.on { color: #c0caf5; border-color: #7aa2f7; background: rgba(255, 255, 255, .09); }
+.tab .ttl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pane button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; border-radius: 6px; }
+#pane button:hover:not(:disabled) { color: #c0caf5; background: rgba(255, 255, 255, .1); }
+#pane button:disabled { opacity: .35; cursor: default; }
+.tab .x, .plus { width: 20px; height: 20px; line-height: 18px; text-align: center; padding: 0; }
+.plus { flex: none; }
+#nav { flex: none; display: flex; gap: 4px; align-items: center; padding: 4px; border: 1px solid rgba(255, 255, 255, .16); border-radius: 10px; background: rgba(255, 255, 255, .06); backdrop-filter: blur(14px); }
+#nav button { width: 26px; height: 24px; padding: 0; font-size: 14px; }
+#addr { flex: 1; min-width: 0; padding: 4px 8px; font: inherit; color: #d7e3f4; background: rgba(0, 0, 0, .55); border: 1px solid rgba(255, 255, 255, .14); border-radius: 7px; outline: none; }
+#addr:focus { border-color: #7aa2f7; }
+#note { flex: none; min-height: 16px; padding: 3px 4px 0; color: #e0af68; font-size: 11px; }
+#viewport { flex: 1; min-height: 0; border: 1px solid rgba(255, 255, 255, .14); border-radius: 10px; }
 .xterm .xterm-viewport { background-color: transparent !important; scrollbar-width: none; }
 .xterm .xterm-viewport::-webkit-scrollbar { display: none; }
 /* A crisp hairline ring; nothing else sits on top of the terminal. */

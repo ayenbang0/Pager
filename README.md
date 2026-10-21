@@ -152,7 +152,7 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 
 ## Web and AI tabs
 
-- **⌕ web** (sidebar → tools): type to search DuckDuckGo, then `open <n>` (your browser) or `read <n>` (the page as text). Agents get `web_search` and `web_read` tools while the web is on. Pages are untrusted data and private-network addresses are refused. Turn it off in Settings > AI chat and Web or with `PAGER_NO_WEB=1`.
+- **⌕ web** (sidebar → tools): type to search DuckDuckGo, then `open <n>` (the browser pane of the desktop window) or `read <n>` (the page as text). Agents get `web_search` and `web_read` tools while the web is on. Pages are untrusted data and private-network addresses are refused. Turn it off in Settings > AI chat and Web or with `PAGER_NO_WEB=1`.
 - **✦ ai** (sidebar → agents): chat without a git repository with a ready agent CLI (headless, in a scratch folder), a local **Ollama**, or any **OpenAI-compatible** API. `@claude`, `@ollama` or `@openai` picks who answers and sticks until you pick another. CLI replies arrive whole; Ollama and API replies stream and have no tools. History is `ai-chat.jsonl` on your machine; the API key lives in `ai.json` (mode 0600), so prefer `PAGER_AI_KEY`.
 
 ## Group bots
@@ -185,6 +185,15 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 `npm run desktop:pack` also builds an own-window host (Electron + xterm.js, `release/Pager-<version>-win-x64.zip`, no installer): unzip anywhere and run `Pager.exe --install` once. Its keys: Ctrl+Shift+M cycles solid black, glass and mica, Ctrl+Shift+Up/Down changes opacity, Ctrl+= / Ctrl+- / Ctrl+0 resize the font. **Those binaries are unsigned** unless you set `PAGER_SIGN_CMD` (a command template containing `{file}`, run on every `.exe`, `.dll` and `.node`). Windows Smart App Control blocks unsigned executables; `pager desktop install --exe <Pager.exe>` then falls back to the Windows Terminal host automatically.
 
 **One-line install** (PowerShell, no administrator): `irm https://raw.githubusercontent.com/ayenbang0/Pager/main/scripts/install.ps1 | iex`. It downloads the release zip, checks its SHA-256 against the `.sha256` published next to it, unpacks to `%LOCALAPPDATA%\Programs\Pager` and runs `Pager.exe --install`. To pin a version and hash, save the script and run `.\install.ps1 -Version 1.6.0 -Sha256 <hash>`; `-Uninstall` removes it. Pushing a `v*` tag builds and publishes the zip through `.github/workflows/release-desktop.yml`. The script and the release are only as trustworthy as the repository: read the script before you pipe it into `iex`.
+
+## Browser pane
+
+The desktop window has its own browser, docked beside the terminal. **Ctrl+Shift+B** (or the `web` button) shows and hides it; drag the divider to resize. It has tabs, an address bar (a host opens as https, anything else is a DuckDuckGo search), back, forward and reload.
+
+- `/docs`, `/studio`, `pager docs`, `pager studio`, F1, F2 and the web tool's `open <n>` all show their page here. Pager never starts another browser; in a plain terminal they print the address instead.
+- **Ctrl+click** a link in the terminal output to open it in the pane.
+- Keys while a page has focus: Ctrl+L address, Ctrl+T new tab, Ctrl+W close tab, Ctrl+Tab next tab, F5 or Ctrl+R reload, Alt+Left and Alt+Right history.
+- Pages run in their own sandboxed session (cookies are kept between runs) with no access to Pager and no permissions (camera, location, notifications). Downloads are off. Only http and https pages open.
 
 ## Bot studio
 

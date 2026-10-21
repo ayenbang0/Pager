@@ -14,7 +14,7 @@ import { loadSettings } from './app/settings.js'
 import { promptSecret } from './platform/secretPrompt.js'
 import { startError } from './platform/appControl.js'
 import { sendControl, startControl } from './app/control.js'
-import { openUrl } from './platform/openUrl.js'
+import { openInApp } from './platform/appBrowser.js'
 import type { Secrets } from './chat/secrets.js'
 
 const USAGE = `pager: a simpler way to chat
@@ -25,7 +25,7 @@ Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | docs | studio 
   --lan [host:port]  chat over the local network only: find (or start) the network's DHT, or join the one at host:port
   --no-agents        turn off the agents room, the AI tab and the agent tool server
 
-  docs             open the local docs and your usage stats (a running pager serves them; opens in your browser)
+  docs             open the local docs and your usage stats (a running pager serves them; shown in the desktop window's browser pane)
   studio           open the local bot studio: shape bots in fine detail, preview their prompt, try them
   run [--cwd DIR] [--] <command...>
                    run a command in a new Terminal tab of the running pager (or start pager with it)
@@ -62,7 +62,7 @@ if (parsed.command === 'docs' || parsed.command === 'studio') {
     process.stderr.write(sent.kind === 'ok' && !sent.reply.ok ? `${sent.reply.error}\n` : 'pager is not running: start it, then run pager ${parsed.command} (or press F1 / F2 in the desktop window)\n')
     process.exit(1)
   }
-  if (!openUrl(sent.reply.url)) process.stdout.write(`${sent.reply.url}\n`)
+  if (!(await openInApp(sent.reply.url))) process.stdout.write(`${sent.reply.url}\n(the browser pane lives in the Pager desktop window: pager desktop install)\n`)
   process.exit(0)
 }
 if (parsed.command === 'desktop') {

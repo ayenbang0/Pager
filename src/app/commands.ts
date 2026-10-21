@@ -16,7 +16,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'bot', usage: '/bot add|edit|remove|list|stop', summary: 'AI bots in the open group that reply when relevant' },
   { name: 'terminal', usage: '/terminal [new|close]', summary: 'Open the Terminal tab (new: another one, close: this one)' },
   { name: 'run', usage: '/run [--cwd <dir>] <command>', summary: 'Run a command in a new terminal tab' },
-  { name: 'docs', usage: '/docs', summary: 'Open the local docs and your usage stats in the browser' },
+  { name: 'docs', usage: '/docs', summary: 'Open the local docs and your usage stats in the browser pane' },
   { name: 'studio', usage: '/studio', summary: 'Open the bot studio: personas, triggers, test runs' },
   { name: 'doc', usage: '/doc new <name> [in <chat>]', summary: 'Shared Markdown documents (Docs tab)' },
   { name: 'agent', usage: '/agent <name> <task>', summary: 'Run coding agents in isolated worktrees' },
