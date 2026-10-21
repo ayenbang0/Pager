@@ -57,3 +57,56 @@ test('the site serves docs and stats only under its token, and stats come from t
     site.close()
   }
 })
+
+test('the studio changes bots only on a POST that carries the header, a JSON body and the token', async () => {
+  const dir = tmpDir('pager-web-')
+  const saved: { create: boolean; name: string; keywords: string[] }[] = []
+  const conv = `grp:${'cd'.repeat(16)}`
+  const studio = {
+    state: () => ({ groups: [{ id: conv, title: '#t' }], backends: ['ollama'], bots: [], defaults: {}, limits: {} }) as never,
+    save: (b: { name: string; keywords: string[] }, create: boolean) => {
+      saved.push({ create, name: b.name, keywords: b.keywords })
+      return b.name === 'taken' ? 'This group already has a bot named taken' : undefined
+    },
+    remove: () => true,
+    preview: () => ({ system: 'S', chat: 'C' }),
+    test: async () => ({ reply: 'hi' }),
+  }
+  const site = await startDocsServer({ dir, version: '1', chat: () => chat, agentUsages: () => [] }, studio)
+  const post = (route: string, body: unknown, headers: Record<string, string> = { 'x-pager': 'studio', 'content-type': 'application/json' }): Promise<Response> =>
+    fetch(`${site.url}${route}`, { method: 'POST', headers, body: JSON.stringify(body) })
+  const bot = { conv, name: 'scribe', backend: 'ollama', instructions: 'take notes', keywords: ['ship'], mode: 'mention' }
+  try {
+    assert.match((await get(`${site.url}studio/`)).body, /pager bot studio/)
+    assert.equal((await post('api/studio/save', bot, { 'content-type': 'application/json' })).status, 403, 'no header: refused')
+    assert.equal((await post('api/studio/save', bot, { 'x-pager': 'studio', 'content-type': 'text/plain' })).status, 403, 'not JSON: refused')
+    assert.deepEqual(saved, [])
+    assert.equal((await post('api/studio/save', { ...bot, create: true })).status, 200)
+    assert.deepEqual(saved, [{ create: true, name: 'scribe', keywords: ['ship'] }])
+    const bad = await post('api/studio/save', { ...bot, name: 'Bad Name' })
+    assert.equal(bad.status, 400)
+    assert.match(((await bad.json()) as { error: string }).error, /not a valid bot name/)
+    const taken = await post('api/studio/save', { ...bot, name: 'taken' })
+    assert.match(((await taken.json()) as { error: string }).error, /already has a bot/)
+    assert.deepEqual(await (await post('api/studio/preview', bot)).json(), { system: 'S', chat: 'C' })
+    assert.deepEqual(await (await post('api/studio/test', { ...bot, message: 'hello' })).json(), { reply: 'hi' })
+    assert.equal((await post('api/studio/remove', { conv, name: 'scribe' })).status, 200)
+    const rebinding = Promise.withResolvers<number>()
+    const req = http.request(`${site.url}api/studio/save`, { method: 'POST', headers: { host: 'evil.example', 'x-pager': 'studio', 'content-type': 'application/json' } }, (res) => {
+      res.resume()
+      rebinding.resolve(res.statusCode ?? 0)
+    })
+    req.on('error', rebinding.reject)
+    req.end('{}')
+    assert.equal(await rebinding.promise, 403, 'a foreign Host header is refused on POST too')
+    assert.equal(JSON.parse((await get(`${site.url}api/studio`)).body).groups[0].id, conv)
+  } finally {
+    site.close()
+  }
+  const off = await startDocsServer({ dir, version: '1', chat: () => chat, agentUsages: () => [] })
+  try {
+    assert.equal((await get(`${off.url}api/studio`)).status, 503, 'no agents, no studio')
+  } finally {
+    off.close()
+  }
+})

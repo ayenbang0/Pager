@@ -12,7 +12,7 @@ export interface DesktopArgs {
 
 export interface ParsedArgs {
   /** `run` starts the UI; `exec` hands a command to the running pager (or starts one with it). */
-  command: 'run' | 'exec' | 'desktop' | 'update' | 'docs' | 'lock' | 'unlock' | 'help' | 'version'
+  command: 'run' | 'exec' | 'desktop' | 'update' | 'docs' | 'studio' | 'lock' | 'unlock' | 'help' | 'version'
   lan: boolean
   lanTarget?: string
   noAgents: boolean
@@ -26,7 +26,7 @@ const DESKTOP_ACTIONS: readonly string[] = ['install', 'uninstall', 'launch', 's
 
 export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   const out: ParsedArgs = { command: 'run', lan: false, noAgents: false }
-  if (argv[0] === 'update' || argv[0] === 'docs' || argv[0] === 'lock' || argv[0] === 'unlock') {
+  if (argv[0] === 'update' || argv[0] === 'docs' || argv[0] === 'studio' || argv[0] === 'lock' || argv[0] === 'unlock') {
     return argv.length === 1 ? { ...out, command: argv[0] } : { error: `pager ${argv[0]} takes no arguments` }
   }
   if (argv[0] === 'run') return parseExec(argv.slice(1), out)

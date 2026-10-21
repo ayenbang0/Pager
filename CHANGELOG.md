@@ -5,6 +5,24 @@ All notable changes to pager are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-10-21
+
+### Added
+
+- **Bot studio**: `/studio`, `pager studio`, or F2 / the `bots` button in the desktop window open a local page (127.0.0.1, random token in the URL, changes only by a POST that carries a header a foreign web page cannot send) to shape bots in detail: persona, keywords, only-when-called mode, reply cap, cooldown, history length, document access, ignoring other bots, pausing
+- **Bot preview and test**: the studio shows the exact prompt a bot is sent and tries the bot on a pretend message without posting anything
+- Bots keep working as before: `/bot` bots get the defaults, `bots.json` entries from older versions load unchanged, and a bot's job may now be up to 4000 characters and several lines
+- `scripts/install.ps1` (`irm … | iex`): per-user install of the desktop window from a GitHub release, verified by SHA-256; `npm run desktop:pack` writes the `.sha256`, and a tag workflow publishes both
+- Local docs and usage stats: `/docs`, `pager docs`, or F1 / the `docs` button in the desktop window open a read-only site on 127.0.0.1 (random token in the URL) with every command, key binding and feature, plus your messages, agent turns, tokens and terminal commands (programs only, never arguments) computed from your data directory
+
+### Fixed
+
+- The desktop window's taskbar button, a pinned shortcut, Alt+Tab and Task Manager showed Electron's icon; `Pager.exe` now carries the pager icon and version info (stamped by `npm run desktop:pack`)
+
+### Changed
+
+- The app icon is the plain pixel P, in the window, the Windows Terminal profile and the docs
+
 ## [1.6.0] - 2026-10-20
 
 ### Added
@@ -17,8 +35,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Output lenses**: `ping`, `dig`, `curl -i/-I/-v`, `traceroute` and `tracert` output shows as a compact card; anything unrecognised stays as plain output
 - **Desktop window (Windows)**: `pager desktop install` adds a glass-and-pixel window host (Windows Terminal profile in pitch black with clean Cascadia Mono text (plus a 55% acrylic `Pager Glass` profile)), a Start menu entry and an "Open Pager here" folder menu, all per-user without administrator rights; `desktop launch`, `status` and `uninstall` manage it. An own-window Electron host (`npm run desktop:pack`, unsigned unless `PAGER_SIGN_CMD` is set) is used instead when it can start on the PC
 - **Run from outside**: `pager run [--cwd DIR] [--] <command>` and `/run [--cwd <dir>] <command>` open a new Terminal tab and type the command into it; `pager run` hands the request to the running pager or starts one with it, and `pager --cwd DIR` starts in a folder
-- `scripts/install.ps1` (`irm … | iex`): per-user install of the desktop window from a GitHub release, verified by SHA-256; `npm run desktop:pack` writes the `.sha256`, and a tag workflow publishes both
-- Local docs and usage stats: `/docs`, `pager docs`, or F1 / the `docs` button in the desktop window open a read-only site on 127.0.0.1 (random token in the URL) with every command, key binding and feature, plus your messages, agent turns, tokens and terminal commands (programs only, never arguments) computed from your data directory
 - `Ctrl+H` jumps to Home and replays the logo animation, even after a command replaced the welcome screen
 - A start-up failure caused by Windows Smart App Control blocking a native file now names the file and says why
 

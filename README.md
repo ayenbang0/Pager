@@ -186,6 +186,20 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 
 **One-line install** (PowerShell, no administrator): `irm https://raw.githubusercontent.com/ayenbang0/Pager/main/scripts/install.ps1 | iex`. It downloads the release zip, checks its SHA-256 against the `.sha256` published next to it, unpacks to `%LOCALAPPDATA%\Programs\Pager` and runs `Pager.exe --install`. To pin a version and hash, save the script and run `.\install.ps1 -Version 1.6.0 -Sha256 <hash>`; `-Uninstall` removes it. Pushing a `v*` tag builds and publishes the zip through `.github/workflows/release-desktop.yml`. The script and the release are only as trustworthy as the repository: read the script before you pipe it into `iex`.
 
+## Bot studio
+
+`/studio` (or `pager studio`, or F2 / the `bots` button in the desktop window) opens a local page, served by the running pager on 127.0.0.1 like the docs, where you shape group bots beyond what `/bot` offers:
+
+| Setting | What it does |
+| --- | --- |
+| Job, persona | what the bot does, and how it talks (style only) |
+| Mode, keywords | speak when the model decides, or only when called with `@name` or a keyword |
+| Reply cap, cooldown | longest reply, and least time between replies (a person calling it overrides the cooldown) |
+| History | how many chat lines it re-reads each turn |
+| Documents, other bots, enabled | whether it may touch the group's docs, answer other bots, or is paused |
+
+**Preview prompt** shows exactly what the model is sent; **Try it** runs the bot once on a pretend message and posts nothing. CLI backends run with their tools in a scratch folder, so a test can touch files there.
+
 ## Local docs and usage stats
 
 `/docs` (or `pager docs`, or F1 / the `docs` button in the desktop window) opens a site served from your own machine: every slash command, key binding, CLI flag and feature, searchable, plus a **Usage stats** page with messages sent and received, agent turns, working time, files changed and tokens per agent, and your most used terminal programs. It listens on 127.0.0.1 only, is read-only, and the URL carries a random token that changes each run. Terminal usage is recorded in `terminal-usage.jsonl` in the data directory: the program name, duration and exit code of each command, never its arguments.

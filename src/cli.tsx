@@ -19,13 +19,14 @@ import type { Secrets } from './chat/secrets.js'
 
 const USAGE = `pager: a simpler way to chat
 
-Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | docs | desktop | update | lock | unlock | -h | --help | -v | --version]
+Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | docs | studio | desktop | update | lock | unlock | -h | --help | -v | --version]
 
   --cwd DIR          start with the Terminal tab in DIR
   --lan [host:port]  chat over the local network only: find (or start) the network's DHT, or join the one at host:port
   --no-agents        turn off the agents room, the AI tab and the agent tool server
 
   docs             open the local docs and your usage stats (a running pager serves them; opens in your browser)
+  studio           open the local bot studio: shape bots in fine detail, preview their prompt, try them
   run [--cwd DIR] [--] <command...>
                    run a command in a new Terminal tab of the running pager (or start pager with it)
   desktop install|uninstall|launch|status
@@ -55,10 +56,10 @@ if (parsed.command === 'version') {
   process.exit(0)
 }
 if (parsed.command === 'update') process.exit(await runUpdate(dataDir(), VERSION))
-if (parsed.command === 'docs') {
-  const sent = await sendControl(dataDir(), { type: 'docs' })
+if (parsed.command === 'docs' || parsed.command === 'studio') {
+  const sent = await sendControl(dataDir(), parsed.command === 'studio' ? { type: 'docs', page: 'studio' } : { type: 'docs' })
   if (sent.kind === 'none' || !sent.reply.ok || sent.reply.url === undefined) {
-    process.stderr.write(sent.kind === 'ok' && !sent.reply.ok ? `${sent.reply.error}\n` : 'pager is not running: start it, then run pager docs (or press F1 in the desktop window)\n')
+    process.stderr.write(sent.kind === 'ok' && !sent.reply.ok ? `${sent.reply.error}\n` : 'pager is not running: start it, then run pager ${parsed.command} (or press F1 / F2 in the desktop window)\n')
     process.exit(1)
   }
   if (!openUrl(sent.reply.url)) process.stdout.write(`${sent.reply.url}\n`)
@@ -194,7 +195,7 @@ if (process.env.PAGER_NO_UPDATE_CHECK !== '1') {
 
 let control: { close(): void } | undefined
 try {
-  control = await startControl(dir, (r) => (r.type === 'docs' ? engine.docsUrl().then((url) => ({ ok: true as const, url })) : engine.runInTerminal(r)))
+  control = await startControl(dir, (r) => (r.type === 'docs' ? engine.docsUrl(r.page).then((url) => ({ ok: true as const, url })) : engine.runInTerminal(r)))
 } catch {
   // No control channel (name taken, pipes unavailable): pager still works, `pager run` just starts its own.
 }

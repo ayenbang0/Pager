@@ -76,27 +76,30 @@ function run() {
   const material = (m) => (m === 'solid' ? 'none' : m === 'mica' ? 'mica' : 'acrylic')
 
   // The docs and stats site is served by the running Pager on 127.0.0.1; this window only shows it.
-  let docsWin
-  async function openDocs() {
-    if (docsWin && !docsWin.isDestroyed()) return docsWin.focus()
+  const siteWins = {}
+  async function openSite(page) {
+    const open = siteWins[page]
+    if (open && !open.isDestroyed()) return open.focus()
     const { sendControl } = await load('app/control.js')
     const { dataDir } = await load('platform/paths.js')
-    const sent = await sendControl(dataDir(), { type: 'docs' }).catch(() => ({ kind: 'none' }))
-    if (sent.kind !== 'ok' || !sent.reply.ok || !sent.reply.url) return void dialog.showErrorBox('Pager docs', 'Pager is not running yet.')
+    const sent = await sendControl(dataDir(), page === 'studio' ? { type: 'docs', page } : { type: 'docs' }).catch(() => ({ kind: 'none' }))
+    if (sent.kind !== 'ok' || !sent.reply.ok || !sent.reply.url) return void dialog.showErrorBox(page === 'studio' ? 'Pager bot studio' : 'Pager docs', sent.kind === 'ok' && !sent.reply.ok ? sent.reply.error : 'Pager is not running yet.')
     const url = sent.reply.url
+    const root = url.replace(/studio\/$/, '')
     const solid = config.material === 'solid'
-    docsWin = new BrowserWindow({
-      width: 1100, height: 760, minWidth: 560, minHeight: 360, parent: win, show: false, title: 'Pager docs',
+    const w = new BrowserWindow({
+      width: 1100, height: 760, minWidth: 560, minHeight: 360, parent: win, show: false, title: page === 'studio' ? 'Pager bot studio' : 'Pager docs',
       icon: path.join(A, 'renderer', 'pager.png'),
       backgroundColor: solid ? '#000000' : '#00000000',
       backgroundMaterial: material(config.material),
       webPreferences: { contextIsolation: true, sandbox: true, nodeIntegration: false, devTools: false },
     })
-    docsWin.removeMenu()
-    docsWin.once('ready-to-show', () => docsWin.show())
-    docsWin.webContents.on('will-navigate', (e, to) => { if (!to.startsWith(url)) e.preventDefault() })
-    docsWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    docsWin.loadURL(url)
+    siteWins[page] = w
+    w.removeMenu()
+    w.once('ready-to-show', () => w.show())
+    w.webContents.on('will-navigate', (e, to) => { if (!to.startsWith(root)) e.preventDefault() })
+    w.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    w.loadURL(url)
   }
 
   function applyConfig() {
@@ -138,7 +141,7 @@ function run() {
     })
     ipcMain.on('title', (_e, t) => win.setTitle(t || 'Pager'))
     ipcMain.on('hotkey', (_e, name) => {
-      if (name === 'docs') return void openDocs()
+      if (name === 'docs' || name === 'studio') return void openSite(name)
       if (name === 'material') config = { ...config, material: cfg.nextMaterial(config.material) }
       else if (name === 'opacity+') config = { ...config, opacity: cfg.stepOpacity(config.opacity, 10) }
       else if (name === 'opacity-') config = { ...config, opacity: cfg.stepOpacity(config.opacity, -10) }

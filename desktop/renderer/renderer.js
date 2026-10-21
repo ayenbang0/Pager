@@ -43,9 +43,11 @@ term.onResize(({ cols, rows }) => window.pager.resize(cols, rows))
 term.onTitleChange((t) => window.pager.title(t))
 
 document.getElementById('docs').addEventListener('click', () => window.pager.hotkey('docs'))
+document.getElementById('studio').addEventListener('click', () => window.pager.hotkey('studio'))
 
 const HOTKEYS = {
   F1: () => window.pager.hotkey('docs'),
+  F2: () => window.pager.hotkey('studio'),
   'Ctrl+Shift+M': () => window.pager.hotkey('material'),
   'Ctrl+Shift+ArrowUp': () => window.pager.hotkey('opacity+'),
   'Ctrl+Shift+ArrowDown': () => window.pager.hotkey('opacity-'),

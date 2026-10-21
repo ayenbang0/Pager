@@ -18,6 +18,7 @@ import { WebTool, WEB_ID, formatResults } from '../tools/web/tool.js'
 import { AiChat, AI_ID } from '../ai/chat.js'
 import { runChatTurn, type ChatResult } from '../agents/chat.js'
 import { GroupBots, type BotView } from '../bots/bots.js'
+import { DEFAULT_SETTINGS } from '../bots/config.js'
 import type { BotLine } from '../bots/prompt.js'
 import { encodeBotMessage, parseBotMessage } from '../chat/botMessage.js'
 import { readPage } from '../tools/web/read.js'
@@ -48,6 +49,7 @@ import { loadCustomThemes, saveCustomTheme, themesFile } from '../ui/theme/custo
 import { isNewer, latestVersion } from './update.js'
 import { openUrl } from '../platform/openUrl.js'
 import { startDocsServer } from '../web/server.js'
+import { STUDIO_LIMITS, type StudioApi } from '../web/studio.js'
 import { programOf, TermUsageLog } from './usage.js'
 import { VERSION } from './version.js'
 import { parseChain, splitArgs } from '../agents/run/protocol.js'
@@ -734,20 +736,59 @@ export class Engine extends EventEmitter {
    * UI (`/run`, `pager run`, the desktop host), so it is where they are validated.
    */
   /** The address of the local docs and stats site; the server starts on the first request and stops with pager. */
-  docsUrl(): Promise<string> {
-    this.site ??= startDocsServer({
-      dir: this.dir,
-      version: VERSION,
-      chat: () => this.stats(),
-      agentUsages: () => this.agentUsages(),
-    })
-    return this.site.then((s) => s.url)
+  docsUrl(page?: 'studio'): Promise<string> {
+    this.site ??= startDocsServer(
+      {
+        dir: this.dir,
+        version: VERSION,
+        chat: () => this.stats(),
+        agentUsages: () => this.agentUsages(),
+      },
+      this.studioApi(),
+    )
+    return this.site.then((s) => (page === 'studio' ? `${s.url}studio/` : s.url))
   }
 
-  /** Opens the docs site in the default browser. */
-  async openDocs(): Promise<ControlReply> {
+  /** What the bot studio page may do; undefined in a run without agents. */
+  private studioApi(): StudioApi | undefined {
+    const bots = this.bots
+    const ai = this.ai
+    if (bots === undefined || ai === undefined) return undefined
+    return {
+      state: () => {
+        const groups = this.convs().filter((c) => c.kind === 'group').map((c) => ({ id: c.id, title: `#${c.title}` }))
+        const titles = new Map(groups.map((g) => [g.id, g.title]))
+        return { groups, backends: ai.backends(), bots: bots.list().map((b) => ({ ...b, where: titles.get(b.conv) ?? 'a group you left' })), defaults: DEFAULT_SETTINGS, limits: { ...STUDIO_LIMITS } }
+      },
+      save: (cfg, create) => {
+        const conv = this.store.getConv(cfg.conv)
+        if (conv?.kind !== 'group' || conv.state !== 'active') return 'That group is gone'
+        const { conv: id, name, backend, instructions, ...settings } = cfg
+        const why = create ? bots.add(id, name, backend, instructions, settings) : bots.edit(id, name, { backend, instructions, ...settings })
+        if (why !== undefined) return why
+        if (create) {
+          this.toast('success', `${name} joined #${conv.title} from the bot studio`)
+          this.postBot(id, name, `👋 Hi, I'm ${name}, ${this.me.name}'s bot (${backend}). I read this group and reply when it fits my job, or when someone writes @${name}.`)
+        }
+        return undefined
+      },
+      remove: (conv, name) => {
+        if (!bots.remove(conv, name)) return false
+        this.postBot(conv, name, `👋 ${name} left the group.`)
+        return true
+      },
+      preview: (cfg, message) => bots.preview(cfg, message),
+      test: async (cfg, message, signal) => {
+        const reply = await bots.test(cfg, message, signal)
+        return reply === undefined ? {} : { reply }
+      },
+    }
+  }
+
+  /** Opens the docs site, or its bot studio, in the default browser. */
+  async openDocs(page?: 'studio'): Promise<ControlReply> {
     try {
-      const url = await this.docsUrl()
+      const url = await this.docsUrl(page)
       return openUrl(url) ? { ok: true, url } : { ok: false, error: 'Could not open a browser' }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) }
@@ -1018,9 +1059,10 @@ export class Engine extends EventEmitter {
       case 'help':
         return this.setHome(['Commands:', ...COMMANDS.map((c) => `  ${c.usage.padEnd(34)} ${c.summary}`), '', 'Press Ctrl+G for keyboard shortcuts.'])
       case 'docs':
-        return void this.openDocs().then((r) => {
+      case 'studio':
+        return void this.openDocs(name === 'studio' ? 'studio' : undefined).then((r) => {
           if (!r.ok) this.toast('error', r.error)
-          else this.toast('info', 'Opened the docs in your browser')
+          else this.toast('info', name === 'studio' ? 'Opened the bot studio in your browser' : 'Opened the docs in your browser')
         })
       case 'run': {
         const m = /^--cwd\s+(?:"([^"]+)"|(\S+))\s*([\s\S]*)$/.exec(rest)

@@ -10,9 +10,10 @@ export interface RunRequest {
   cwd?: string
   command?: string
 }
-/** Ask the running pager for the address of its local docs and stats site. */
+/** Ask the running pager for the address of its local docs and stats site, or of the bot studio on it. */
 export interface DocsRequest {
   type: 'docs'
+  page?: 'studio'
 }
 export type ControlRequest = RunRequest | DocsRequest | { type: 'ping' }
 export type ControlReply = { ok: true; id?: string; pid?: number; url?: string } | { ok: false; error: string }
@@ -76,7 +77,7 @@ export async function startControl(
       if (req.type === 'ping') return reply({ ok: true, pid: process.pid })
       if (req.type === 'docs') {
         Promise.resolve()
-          .then(() => handle({ type: 'docs' }))
+          .then(() => handle(req.page === 'studio' ? { type: 'docs', page: 'studio' } : { type: 'docs' }))
           .then(reply, (e: unknown) => reply({ ok: false, error: e instanceof Error ? e.message : String(e) }))
         return
       }

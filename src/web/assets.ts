@@ -136,7 +136,7 @@ const view = {
 const page = () => { const p = location.hash.slice(1); return view[p] ? p : 'overview' }
 const render = () => {
   const p = page()
-  $('nav').replaceChildren(...PAGES.map(([id, label]) => h('a', { href: '#' + id, class: id === p ? 'on' : '' }, label)))
+  $('nav').replaceChildren(...PAGES.map(([id, label]) => h('a', { href: '#' + id, class: id === p ? 'on' : '' }, label)), h('a', { href: 'studio/' }, 'Bot studio \u2197'))
   $('main').replaceChildren(...view[p]().flat())
 }
 $('q').addEventListener('input', (e) => { filter = e.target.value.trim().toLowerCase(); if (filter && !['commands', 'keys', 'cli', 'features'].includes(page())) location.hash = '#commands'; else render() })
