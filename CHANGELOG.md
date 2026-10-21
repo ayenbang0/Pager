@@ -5,6 +5,21 @@ All notable changes to pager are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Calls**: `/call` for voice calls in DMs and named call rooms in groups, `/mute` and `/hangup`; sound uses SoX, which `/call setup` installs
+- **Pings and sound presets**: `/ping <name>` plays a sound on their machine; Settings > Notifications picks a sound mode (all, pings only, off) and presets for messages and the call ring
+- **Group screen** (`/group members`): people, bots and call rooms in one list, with keys to ping, open a chat, join a room or change a bot
+- **Requests screen** (`/requests`): contact requests, group invites and agent sessions to accept or decline
+- **Bot model and effort**: `/bot model` and `/bot effort`
+
+### Changed
+
+- `/group members` and `/bot list` open the group screen instead of printing to Home; `/accept` with several items pending opens the requests screen
+- The Chime switch became Sounds (all, pings, off); an old "off" stays off
+
 ## [1.6.0] - 2026-10-20
 
 ### Added

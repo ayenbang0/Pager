@@ -283,12 +283,8 @@ test('group: invite, chat across members, leave is permanent', async () => {
   await b.engine.submit('hello team')
   await waitFor(() => texts(a, group).includes('hello team') && texts(c, group).includes('hello team'), 25_000, 'fan-out')
 
-  // `/group members` writes to the home view, so re-activate the group before each use.
-  const members = (p: Peer): string => {
-    p.engine.activate(group)
-    void p.engine.submit('/group members')
-    return p.engine.home().join('\n')
-  }
+  // The group screen's data; `(you)` marks the reader.
+  const members = (p: Peer): string => (p.engine.groupView(group)?.people ?? []).map((m) => `${m.name}${m.me ? ' (you)' : ''}`).join('\n')
   // Names of non-contacts are learned once a direct link to them opens.
   await waitFor(() => /alice/.test(members(c)) && /bob/.test(members(c)) && /carol \(you\)/.test(members(c)), 20_000, 'member names')
 
@@ -481,6 +477,76 @@ test('group bots: added with /bot, pass when their job does not call for it, ans
   assert.deepEqual(a.engine.groupBots(group), [])
   await b.engine.submit('/bot add mine @nope x')
   assert.match(b.toasts.at(-1)?.text ?? '', /No AI backend named "nope"/)
+})
+
+test('calls, pings and the panels: a DM call rings and carries sound both ways, /ping plays a sound in pings-only mode, /requests and /group members open screens, bots take a model', async () => {
+  const file = path.join(tmpDir('pager-n-'), 'alerts.jsonl')
+  process.env.PAGER_NOTIFY_FILE = file
+  const fakeAudio = (heard: Buffer[]) => {
+    const mics: ((pcm: Buffer) => void)[] = []
+    const audio = async () => ({ mic: (onChunk: (pcm: Buffer) => void) => (mics.push(onChunk), { stop: () => undefined }), speaker: () => ({ write: (pcm: Buffer) => void heard.push(pcm), stop: () => undefined }) })
+    return { audio, talk: (pcm: Buffer) => mics.at(-1)?.(pcm) }
+  }
+  const tone = Buffer.alloc(2048)
+  for (let i = 0; i < tone.length; i += 2) tone.writeInt16LE(i % 4 === 0 ? 9000 : -9000, i)
+  const aHeard: Buffer[] = []
+  const bHeard: Buffer[] = []
+  const aIo = fakeAudio(aHeard)
+  const bIo = fakeAudio(bHeard)
+  const a = await boot('alice', undefined, { audio: aIo.audio })
+  const b = await boot('bob', undefined, { audio: bIo.audio })
+  const overlays: string[] = []
+  b.engine.on('overlay', (kind: string) => overlays.push(kind))
+  await befriend(a, b)
+  await b.engine.submit('/requests')
+  assert.deepEqual(overlays, ['requests'])
+  const dm = dmConvId(a.engine.me.pk, b.engine.me.pk)
+  a.engine.activate(dm)
+  await a.engine.submit('/call')
+  await waitFor(() => b.toasts.some((t) => t.text.startsWith('alice is calling')), 20_000, 'bob is rung')
+  assert.equal(b.engine.convs().find((v) => v.id === dm)?.call, 1)
+  b.engine.activate(dm)
+  await b.engine.submit('/call')
+  await waitFor(() => a.engine.myCall()?.people.length === 2, 20_000, 'bob is in alice view')
+  aIo.talk(tone)
+  bIo.talk(tone)
+  await waitFor(() => aHeard.length > 0 && bHeard.length > 0, 20_000, 'sound both ways')
+  assert.deepEqual(bHeard[0], tone)
+  await b.engine.submit('/mute')
+  assert.equal(b.engine.myCall()?.muted, true)
+  await b.engine.submit('/hangup')
+  await waitFor(() => a.engine.myCall()?.people.length === 1, 20_000, 'bob left')
+  assert.equal(b.engine.myCall(), undefined)
+  // pings: bob only wants sounds from pings; an ordinary message stays silent, a ping plays
+  b.engine.setSoundMode('pings')
+  b.engine.setFocused(false, true)
+  const read = () => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l) as { play?: string; sound?: boolean; body?: string })
+  const before = read().length
+  await a.engine.submit('hello bob')
+  await waitFor(() => read().slice(before).some((l) => l.body?.includes('hello bob')), 20_000, 'message alert')
+  await a.engine.submit('/ping')
+  await waitFor(() => b.toasts.some((t) => t.text === '🔔 alice pinged you'), 20_000, 'ping arrives')
+  const lines = read().slice(before)
+  assert.ok(lines.some((l) => l.play === 'chime'), 'the ping played the message sound')
+  assert.ok(lines.filter((l) => l.body?.includes('hello bob')).every((l) => l.sound === false), 'the message alert was silent')
+  b.engine.setSoundPreset('notifySound', 'kazoo')
+  assert.equal(b.toasts.at(-1)?.kind, 'error')
+  // the group screen and a bot's model
+  await a.engine.submit('/group new crew')
+  a.engine.on('overlay', (kind: string) => overlays.push(`a:${kind}`))
+  await a.engine.submit('/group members')
+  assert.equal(overlays.at(-1), 'a:group')
+  const crew = a.engine.active() ?? ''
+  assert.deepEqual(a.engine.groupView(crew)?.people.map((p) => [p.name, p.me, p.creator]), [['alice', true, true]])
+  a.engine.setAi('ollama.model', 'm')
+  await a.engine.submit('/bot add grumpy @ollama argue')
+  await a.engine.submit('/bot model grumpy llama3:8b')
+  await a.engine.submit('/bot effort grumpy high')
+  assert.match(a.toasts.at(-1)?.text ?? '', /Effort is for agent CLIs/)
+  assert.deepEqual(a.engine.groupView(crew)?.bots.map((x) => [x.name, x.model, x.effort]), [['grumpy', 'llama3:8b', 'default']])
+  await a.engine.submit('/bot model grumpy default')
+  assert.equal(a.engine.groupView(crew)?.bots[0]?.model, 'default')
+  delete process.env.PAGER_NOTIFY_FILE
 })
 
 function gitRepo(): string {

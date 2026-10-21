@@ -20,6 +20,11 @@ const body = z.string().max(4000).refine(noControl)
 const rich = (max: number) => z.string().max(max)
 const short = z.string().min(1).max(64)
 const access = z.enum(['view', 'control'])
+/** A call room's name: `call` in a DM; in a group whatever the members named it. */
+export const CALL_ROOM_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/
+const room = z.string().regex(CALL_ROOM_RE)
+/** 16 kHz mono 16-bit PCM, base64; one frame carries well under a second. */
+const pcm = z.string().max(16_000).regex(/^[A-Za-z0-9+/]*={0,2}$/)
 
 /** Drops terminal control characters from text a peer sent, keeping newlines and tabs. */
 export const cleanText = (s: string): string => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
@@ -97,6 +102,11 @@ const frameSchema = z.discriminatedUnion('t', [
     questions: z.array(collabQuestion).max(16).optional(),
     guests: z.array(collabGuest).max(16).optional(),
   }),
+  // Calls. Only sent to peers whose hello lists the 'call' capability, and only about conversations they are in.
+  z.object({ t: z.literal('call'), conv: convId, room, op: z.enum(['join', 'leave']) }),
+  z.object({ t: z.literal('call-audio'), conv: convId, room, d: pcm }),
+  // A nudge that plays a sound on the receiver's machine. Only sent to peers whose hello lists the 'ping' capability.
+  z.object({ t: z.literal('ping'), conv: convId }),
 ])
 
 export type CollabEntry = z.infer<typeof collabEntry>

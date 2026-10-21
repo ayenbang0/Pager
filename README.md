@@ -49,7 +49,10 @@ Plain text + Enter sends to the open conversation. A message starting with `//` 
 | `/group members` | List members of the open group |
 | `/group rename <new name>` | Rename the open group (creator only; every member sees it) |
 | `/group leave` | Leave the open group permanently |
-| `/bot add <name> [@backend] <job>` | Add an AI bot to the open group (also `edit`, `remove`, `list`, `stop`); see Group bots |
+| `/bot add <name> [@backend] <job>` | Add an AI bot to the open group (also `edit`, `model`, `effort`, `remove`, `list`, `stop`); see Group bots |
+| `/call [room]` | Voice call in the open chat (a group can have several named rooms); `/mute`, `/hangup`; `/call setup` installs SoX. See Calls |
+| `/ping <name>` | Play a sound on their machine (also in a DM with no name) |
+| `/requests` | The requests screen: contact requests, group invites and agent sessions waiting for `/accept` (Enter accepts, `d` declines) |
 | `/settings [section]` | Open the Settings tab (Alt+S): name, badge, theme, accent, density, notifications, folders, agents, AI backends, privacy and advanced switches |
 | `/terminal` | Open the built-in Terminal tab (`/terminal new`, `/terminal close`) |
 | `/run [--cwd <dir>] <command>` | Run a command in a new Terminal tab |
@@ -149,6 +152,8 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Reactions.** Click a message and pick an emoji (or `…` for any other). Reactions are events in the same signed log: they never count as unread. About 500 `:shortcodes:` complete with Tab.
 - **Group rename.** The creator's `/group rename <name>` reaches every member; pager 1.4.1 and older show it as one garbled line.
 - **Themes.** Settings > Appearance or Ctrl+P → theme picker. Besides the gradient themes (omp, neon, sunset, aurora, dracula, synthwave, tokyo, rose, forest, matrix…) there are flat ones with no gradients at all (nord, gruvbox, slate, paper). **Custom themes:** Ctrl+P → `New custom theme…` copies the theme in use into `<data dir>/themes.json` with every color spelled out; edit it and run Ctrl+P → `Reload custom themes`. An entry is `{"name": "mine", "base": "nord", "accent": "#ff8800", "flat": true, …}`: `base` is the built-in theme it starts from, any color token (`accent`, `accent2`, `glow`, `border`, `dim`, `text`, `surface`, `success`, `warning`, `error`, `info`, `online`, `badge`, `mine`, `userBubble`) may be `#rrggbb` or a terminal color name, `authors` lists 2+ colors, `gradient` 1-4 colors (one, or `"flat": true`, means no gradient). Custom colors are used exactly as written; broken entries are skipped with a note on Home.
+- **Sounds.** Settings > Notifications: **Sounds** is `all` (messages, notifications and incoming calls), `pings` (only a `/ping` aimed at you makes a sound) or `off`; **Message and ping sound** and **Call ring** each pick a preset (chime, bell, pop, blip, marimba, doorbell, trill, ring), played when you choose it. `/ping <name>` plays your contact's message sound on their machine even when they chose `pings` (at most one per sender every 3 s).
+- **Group screen.** `/group members` (or `/bot list`, or Ctrl+P) lists the group's people (online, creator, call room; Enter opens their chat, `p` pings), its bots (yours with backend, model and effort: Enter model, `e` effort, `j` job, `x` remove; other members' bots as seen in the chat) and its call rooms (Enter joins or hangs up, `m` mutes).
 
 ## Web and AI tabs
 
@@ -163,7 +168,17 @@ If your shell exports `CI`, pager still renders (it forces interactive mode when
 - **Bots talk to bots** when it makes sense; they are told not to spam (no back-and-forth for its own sake, no "I agree" replies). As a backstop, after 6 bot messages in a row no bot reacts until a person writes.
 - **Documents.** A bot sees its group's shared documents (Docs tab) and can rewrite one, append to one or create a new `.md` one; the chat gets a `✎` note and every member sees the change. Not in a secure session (encryption or LAN mode).
 - **Where it runs.** On your machine, only while pager is open, with its own sandbox folder `<data dir>/bots/<group>/<name>/` as the working directory of CLI agents (no repository needed). Its messages are signed by you and show to everyone as `grumpy (yourname)`. Each member's bots run on that member's machine; `/bot list` shows yours, Ctrl+C in the group stops them, `/bot edit grumpy @openai be nicer` changes one, `/bot remove grumpy` deletes it and its folder. Leaving a group removes your bots there.
+- **Model and effort.** `/bot model grumpy` shows the bot's model and the choices its backend offers; `/bot model grumpy <model>` sets it (`default` goes back to the backend's own) and `/bot effort grumpy <level>` sets the thinking level of agent CLI bots. A new backend (`/bot edit grumpy @openai`) resets both.
 - **Trust.** Everyone in the group can steer your bot. A CLI agent runs **with auto-approved tools**; its sandbox sets the working directory but is not an OS sandbox, so a group member could talk it into running commands on your machine. Prefer `ollama`/`openai` (no tools) for groups you do not fully trust. The group's messages are sent to the bot's AI provider, which is why the bot announces itself. Older pager versions show bot messages as one raw line.
+
+## Calls
+
+Voice calls go straight between peers over the same encrypted connections as chat; there is no server and nothing is recorded.
+
+- **DMs.** `/call` in a chat rings the other side (a popup, the **Call ring** sound, a desktop notification); they answer with `/call`. If they are offline they are rung when they come online.
+- **Groups.** `/call` joins the group's room that is going, or `main`; `/call <room>` joins or starts a named room (1-24 lowercase letters, digits, `-` or `_`), so one group can hold several calls at once. Members are told when a room starts. The sidebar shows `☎N` on a chat with people in a call, and the title row lists who is in which room.
+- **In a call.** `/mute` toggles your microphone, `/hangup` leaves; joining another call leaves the current one. Everyone hears everyone in the room (one stream per pair, so large rooms use more upload). Use headphones: there is no echo cancellation.
+- **Sound needs SoX.** Pager uses SoX (`sox -d`) for your default microphone and speakers. `/call setup` installs it with winget (Windows) or Homebrew (macOS) and calls work straight away; on Linux it prints the command to run (it needs `sudo`). SoX is a separate program, so updating pager does not install it. Silence is not sent. Both sides need a pager version with the `call` capability (Settings > Privacy and Network lists capabilities).
 
 ## Privacy and network
 

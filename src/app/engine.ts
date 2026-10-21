@@ -20,6 +20,10 @@ import { runChatTurn, type ChatResult } from '../agents/chat.js'
 import { GroupBots, type BotView } from '../bots/bots.js'
 import type { BotLine } from '../bots/prompt.js'
 import { encodeBotMessage, parseBotMessage } from '../chat/botMessage.js'
+import { findSox, soxAudio, type AudioIo } from '../calls/audio.js'
+import { Calls } from '../calls/calls.js'
+import { installSox, soxInstaller } from '../calls/setup.js'
+import { CALL_ROOM_RE } from '../net/wire.js'
 import { readPage } from '../tools/web/read.js'
 import { searchWeb } from '../tools/web/search.js'
 import { DocStore, DOCS_ID, DOC_PREFIX, type DocInfo } from '../docs/store.js'
@@ -42,7 +46,7 @@ import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
 import { Suggester } from './suggest.js'
 import { buildRecap } from './recap.js'
 import { formatSearch, readRoomLines, searchDocs, SEARCH_SCAN_LIMIT, type SearchDoc } from './search.js'
-import { DENSITIES, isDensity, MAX_FOLDERS, validFolderName, loadLastSeen, loadSettings, parseBadge, saveLastSeen, saveSettings, type Settings } from './settings.js'
+import { DENSITIES, isDensity, MAX_FOLDERS, SOUND_MODES, validFolderName, loadLastSeen, loadSettings, parseBadge, saveLastSeen, saveSettings, type Settings } from './settings.js'
 import { allThemes, findTheme, THEMES } from '../ui/theme/themes.js'
 import { loadCustomThemes, saveCustomTheme, themesFile } from '../ui/theme/customThemes.js'
 import { isNewer, latestVersion } from './update.js'
@@ -51,7 +55,8 @@ import { startDocsServer } from '../web/server.js'
 import { programOf, TermUsageLog } from './usage.js'
 import { VERSION } from './version.js'
 import { parseChain, splitArgs } from '../agents/run/protocol.js'
-import { closeDesktop, desktopNotify, warmDesktop } from '../platform/desktop.js'
+import { closeDesktop, desktopNotify, playSound, warmDesktop } from '../platform/desktop.js'
+import { isSoundName, SOUND_NAMES } from '../platform/sounds.js'
 import type { Frame } from '../net/wire.js'
 
 export type ToastKind = 'info' | 'success' | 'warn' | 'error'
@@ -70,6 +75,26 @@ export interface ConvView {
   unread: number
   /** Groups only: one of my bots there is deciding or writing. */
   thinking?: boolean
+  /** People in this conversation's call rooms (me included), when anyone is in one. */
+  call?: number
+}
+/** The group screen: who is in the group, which bots talk there and who is in which call room. */
+export interface GroupView {
+  id: string
+  title: string
+  people: { pk: string; name: string; me: boolean; creator: boolean; online: boolean; contact: boolean; room?: string }[]
+  /** Mine with their settings; other members' bots as seen in the chat. */
+  bots: { name: string; host: string; mine: boolean; backend?: string; model?: string; effort?: string; job?: string; busy?: boolean }[]
+  rooms: { room: string; people: string[]; mine: boolean }[]
+}
+/** The call I am in. */
+export interface CallView {
+  conv: string
+  /** `alice` for a DM, `#crew · main` for a group room. */
+  label: string
+  room: string
+  muted: boolean
+  people: { name: string; me: boolean; speaking: boolean }[]
 }
 /** Numbers behind the home screen. `week` holds text messages per day, oldest first, today last. */
 export interface HomeStats {
@@ -141,6 +166,8 @@ export interface EngineOptions {
   fetch?: typeof fetch
   /** LAN-only mode: whether this run hosts the local network's DHT, and the address it uses. */
   lan?: { hosting: boolean; address: string }
+  /** Test seam: replaces SoX as the microphone and speakers of calls. */
+  audio?: () => Promise<AudioIo | string>
 }
 
 interface PendingItem {
@@ -170,6 +197,8 @@ const EVENTS_BYTES_PER_FRAME = 200_000
 const AGENT_STATS_TTL_MS = 2000
 
 const AGENTS_OFF = 'Agents are off (Settings > Privacy and Network)'
+/** Pings from one person closer together than this are dropped, so nobody can machine-gun your speakers. */
+const PING_GAP_MS = 3000
 const SETTINGS_SUBCOMMANDS: ReadonlySet<string> = new Set(['new', 'add', 'remove', 'setup', 'color', 'model', 'effort', 'budget', 'review', 'risk', 'goal', 'verify', 'memory', 'check', 'guests', 'kick', 'leave'])
 const PALETTE_SUBCOMMANDS: ReadonlySet<string> = new Set(['compact', 'reset', 'usage', 'commands', 'checkpoints', 'cli'])
 
@@ -204,6 +233,7 @@ export class Engine extends EventEmitter {
   readonly ai: AiChat | undefined
   /** AI bots in groups; absent in a run without agents. */
   private readonly bots: GroupBots | undefined
+  private readonly calls: Calls
   private readonly webFetch: typeof fetch | undefined
   readonly docs: DocStore
   private openDocId: string | null = null
@@ -231,6 +261,10 @@ export class Engine extends EventEmitter {
   private readonly readBy = new Map<string, number>()
   /** `conv:pk` to the highest seq of theirs I have told them I read. */
   private readonly readSent = new Map<string, number>()
+  /** When each peer last pinged me (see PING_GAP_MS). */
+  private readonly pingedAt = new Map<string, number>()
+  /** `/call setup` is installing SoX right now. */
+  private installingSox = false
   private input: string[]
   private readonly suggester = new Suggester()
 
@@ -280,6 +314,7 @@ export class Engine extends EventEmitter {
     this.net.on('frame', (link: PeerLink, frame: Frame) => this.onFrame(link, frame))
     this.net.on('close', (pk: string) => {
       this.share.onClose(pk)
+      this.calls.onClose(pk)
       this.online.delete(pk)
       for (const key of this.sentTo.keys()) if (key.endsWith(`:${pk}`)) this.sentTo.delete(key)
       this.emit('change')
@@ -324,8 +359,8 @@ export class Engine extends EventEmitter {
     this.agents.on('toast', (t: Toast) => this.emit('toast', t))
     this.terms = new Terminals({ cwd: opts.workdir ?? process.cwd(), env: process.env, dir: opts.dir })
     this.terms.on('change', () => this.emit('change'))
-    const runCli = (agent: string, prompt: string, cwd: string, signal: AbortSignal): Promise<ChatResult> =>
-      runChatTurn({ registry: this.agents.registry, ...(opts.agentAdapters === undefined ? {} : { adapters: opts.agentAdapters }) }, { agent, prompt, cwd, signal })
+    const runCli = (agent: string, prompt: string, cwd: string, signal: AbortSignal, want: { model?: string; effort?: string } = {}): Promise<ChatResult> =>
+      runChatTurn({ registry: this.agents.registry, ...(opts.agentAdapters === undefined ? {} : { adapters: opts.agentAdapters }) }, { agent, prompt, cwd, signal, ...want })
     const ai = this.agentsOn ? new AiChat({ dir: opts.dir, readyAgents: () => this.agents.names(), runCli, ...(opts.fetch === undefined ? {} : { fetch: opts.fetch }), user: this.me.name }) : undefined
     this.ai = ai
     this.ai?.on('change', () => this.emit('change'))
@@ -336,7 +371,7 @@ export class Engine extends EventEmitter {
             dir: opts.dir,
             backends: () => ai.backends(),
             runCli,
-            complete: (backend, messages, signal) => ai.complete(backend, messages, signal),
+            complete: (backend, messages, signal, model) => ai.complete(backend, messages, signal, model),
             lines: (conv, limit) => this.store.listMessages(conv, limit).flatMap((e) => this.botLine(e) ?? []),
             group: (convId) => {
               const conv = this.store.getConv(convId)
@@ -350,6 +385,21 @@ export class Engine extends EventEmitter {
             failed: (conv, name, error) => this.toast('warn', `Bot ${name} in ${this.convLabels().get(conv) ?? 'a group'}: ${error}`),
           })
     this.bots?.on('change', () => this.emit('change'))
+    this.calls = new Calls({
+      me: this.me.pk,
+      link: (pk) => {
+        const link = this.net.link(pk)
+        return link?.hello.caps.includes('call') === true ? link : undefined
+      },
+      members: (convId) => {
+        const conv = this.store.getConv(convId)
+        if (!conv || conv.state !== 'active' || (conv.kind === 'dm' && this.store.getPeer(conv.peer ?? '')?.state !== 'accepted')) return undefined
+        return this.otherMembers(conv)
+      },
+      audio: opts.audio ?? soxAudio,
+      ring: (convId, room, pk, started) => this.ringCall(convId, room, pk, started),
+      changed: () => this.emit('change'),
+    })
     this.web = new WebTool(opts.fetch === undefined ? {} : { fetch: opts.fetch })
     this.webFetch = opts.fetch
     this.web.on('change', () => this.emit('change'))
@@ -450,6 +500,7 @@ export class Engine extends EventEmitter {
           peer: peer.pk,
           online: this.net.link(peer.pk) !== undefined,
           unread: this.store.unreadCount(conv.id, this.me.pk),
+          ...this.callCount(conv.id),
         })
       } else if (conv.state === 'active') {
         groups.push({
@@ -460,10 +511,72 @@ export class Engine extends EventEmitter {
           online: null,
           unread: this.store.unreadCount(conv.id, this.me.pk),
           ...(this.bots?.busy(conv.id) === true ? { thinking: true } : {}),
+          ...this.callCount(conv.id),
         })
       }
     }
     return [...dms.sort(byName), ...groups.sort(byName)]
+  }
+
+  private callCount(convId: string): { call?: number } {
+    const n = this.calls.roomsIn(convId).reduce((sum, r) => sum + r.people.length, 0)
+    return n === 0 ? {} : { call: n }
+  }
+
+  /** The call I am in, with who is talking. */
+  myCall(): CallView | undefined {
+    const call = this.calls.current()
+    const conv = call === undefined ? undefined : this.store.getConv(call.conv)
+    if (call === undefined || conv === undefined) return undefined
+    const label = conv.kind === 'dm' ? this.nameOf(conv.peer ?? '') : `#${conv.title} · ${call.room}`
+    return { conv: call.conv, label, room: call.room, muted: call.muted, people: call.people.map((p) => ({ name: this.nameOf(p.pk), me: p.pk === this.me.pk, speaking: p.speaking })) }
+  }
+
+  /** The call rooms of a conversation that someone is in, with names. */
+  callRooms(convId: string): { room: string; people: string[]; mine: boolean }[] {
+    return this.calls.roomsIn(convId).map((r) => ({ ...r, people: r.people.map((pk) => this.nameOf(pk)) }))
+  }
+
+  /** Everything the group screen shows; undefined when `convId` is not an active group. */
+  groupView(convId: string): GroupView | undefined {
+    const conv = this.store.getConv(convId)
+    if (!conv || conv.kind !== 'group' || conv.state !== 'active') return undefined
+    const rooms = this.calls.roomsIn(convId)
+    const people = [...this.store.members(convId).current].map((pk) => {
+      const room = rooms.find((r) => r.people.includes(pk))?.room
+      return {
+        pk,
+        name: this.nameOf(pk),
+        me: pk === this.me.pk,
+        creator: pk === conv.creator,
+        online: pk === this.me.pk || this.net.link(pk) !== undefined,
+        contact: this.store.getPeer(pk)?.state === 'accepted',
+        ...(room === undefined ? {} : { room }),
+      }
+    })
+    const mine: GroupView['bots'] = (this.bots?.list(convId) ?? []).map((b) => ({
+      name: b.name,
+      host: this.me.name,
+      mine: true,
+      backend: b.backend,
+      model: b.model ?? 'default',
+      effort: b.effort ?? 'default',
+      job: b.instructions,
+      busy: b.busy,
+    }))
+    // Other members' bots run on their machines: what the chat shows is all there is to know. A goodbye means it is gone.
+    const seen = new Map<string, { name: string; author: string; gone: boolean }>()
+    for (const e of this.store.listMessages(convId, 300)) {
+      const bot = e.author === this.me.pk ? undefined : parseBotMessage(e.body)
+      if (bot !== undefined) seen.set(`${e.author}:${bot.name}`, { name: bot.name, author: e.author, gone: bot.text === `👋 ${bot.name} left the group.` })
+    }
+    const others = [...seen.values()].filter((b) => !b.gone).map((b) => ({ name: b.name, host: this.nameOf(b.author), mine: false }))
+    return { id: convId, title: conv.title, people, bots: [...mine, ...others], rooms: rooms.map((r) => ({ ...r, people: r.people.map((pk) => this.nameOf(pk)) })) }
+  }
+
+  /** Opens the group screen for the open group. */
+  openGroupPanel(): void {
+    if (this.activeGroup()) this.emit('overlay', 'group')
   }
 
   pending(): PendingView[] {
@@ -1002,6 +1115,7 @@ export class Engine extends EventEmitter {
     this.web.close()
     this.ai?.close()
     this.bots?.close()
+    this.calls.close()
     this.docs.close()
     this.share.close()
     closeDesktop()
@@ -1057,6 +1171,18 @@ export class Engine extends EventEmitter {
         return this.cmdGroup(args[0]?.toLowerCase(), rest.slice((args[0] ?? '').length).trim())
       case 'bot':
         return this.cmdBot(args, rest)
+      case 'call':
+        return this.cmdCall(rest)
+      case 'hangup':
+        return this.toast('info', this.calls.leave() ? 'Left the call' : 'You are not in a call')
+      case 'mute': {
+        const muted = this.calls.toggleMute()
+        return this.toast('info', muted === undefined ? 'You are not in a call' : muted ? 'Muted' : 'Unmuted')
+      }
+      case 'ping':
+        return this.cmdPing(rest)
+      case 'requests':
+        return void this.emit('overlay', 'requests')
       case 'update':
         return this.checkForUpdate()
       case 'changelog':
@@ -1488,9 +1614,60 @@ export class Engine extends EventEmitter {
     }
   }
 
-  setSound(on: boolean): void {
-    this.updateSettings({ sound: on })
-    this.toast('success', `Notification sound: ${on ? 'on' : 'off'}`)
+  /** Which events make a sound: `all`, `pings` (only a /ping aimed at me) or `off`. */
+  setSoundMode(raw: string): void {
+    const mode = SOUND_MODES.find((m) => m === raw.trim().toLowerCase())
+    if (mode === undefined) return this.toast('error', `Sounds: ${SOUND_MODES.join(', ')}`)
+    this.updateSettings({ soundMode: mode })
+    this.toast('success', mode === 'all' ? 'Sounds: on' : mode === 'pings' ? 'Sounds: only when someone does /ping <you>' : 'Sounds: off')
+    if (mode !== 'off') playSound(this.prefs.notifySound)
+  }
+
+  /** Picks the preset for messages and pings (`notifySound`) or incoming calls (`ringSound`), and plays it. */
+  setSoundPreset(kind: 'notifySound' | 'ringSound', raw: string): void {
+    const name = raw.trim().toLowerCase()
+    if (!isSoundName(name)) return this.toast('error', `Sounds: ${SOUND_NAMES.join(', ')}`)
+    this.updateSettings({ [kind]: name })
+    playSound(name)
+  }
+
+  /** `/ping <name>`: a nudge that plays a sound on their machine, even in "pings only" mode. In a group it finds members first, else contacts. */
+  private cmdPing(query: string): void {
+    const active = this.activeId ? this.store.getConv(this.activeId) : undefined
+    const q = query.trim()
+    let target: { conv: Conv; pk: string } | undefined
+    if (q === '' && active?.kind === 'dm' && active.peer) target = { conv: active, pk: active.peer }
+    if (target === undefined && q !== '' && active?.kind === 'group' && active.state === 'active') {
+      const res = this.resolve(this.otherMembers(active), q, (pk) => this.nameOf(pk), (pk) => pk)
+      if (!('error' in res)) target = { conv: active, pk: res.item }
+    }
+    if (target === undefined) {
+      if (q === '') return this.toast('error', 'Usage: /ping <name>')
+      const res = this.resolve(this.store.listPeers().filter((p) => p.state === 'accepted'), q, (p) => p.name || pk8(p.pk), (p) => p.pk)
+      if ('error' in res) return this.toast('error', res.error)
+      const conv = this.store.getConv(dmConvId(this.me.pk, res.item.pk))
+      if (!conv) return this.toast('error', `No chat with ${res.item.name || pk8(res.item.pk)}`)
+      target = { conv, pk: res.item.pk }
+    }
+    const who = this.nameOf(target.pk)
+    const link = this.net.link(target.pk)
+    if (link === undefined) return this.toast('warn', `${who} is offline`)
+    if (!link.hello.caps.includes('ping')) return this.toast('warn', `${who}'s pager is too old for pings`)
+    link.send({ t: 'ping', conv: target.conv.id })
+    this.toast('success', `Pinged ${who}`)
+  }
+
+  private onPing(link: PeerLink, frame: Extract<Frame, { t: 'ping' }>): void {
+    const conv = this.store.getConv(frame.conv)
+    if (!conv || conv.state !== 'active' || !this.entitled(link.pk, conv)) return
+    const now = Date.now()
+    if (now - (this.pingedAt.get(link.pk) ?? 0) < PING_GAP_MS) return
+    this.pingedAt.set(link.pk, now)
+    const who = this.nameOf(link.pk)
+    const text = `🔔 ${who} pinged you${conv.kind === 'group' ? ` in #${conv.title}` : ''}`
+    if (this.prefs.soundMode !== 'off') playSound(this.prefs.notifySound)
+    this.toast('info', text)
+    this.alert(who, text, false, false)
   }
 
   setDensity(raw: string): void {
@@ -1745,8 +1922,7 @@ export class Engine extends EventEmitter {
     let item: PendingItem | undefined
     if (arg === undefined) {
       if (items.length > 1) {
-        this.toast('error', `Several items pending: /${verb} <n>`)
-        return
+        return void this.emit('overlay', 'requests')
       }
       item = items[0]
     } else {
@@ -1812,7 +1988,7 @@ export class Engine extends EventEmitter {
       case 'invite':
         return this.groupInvite(arg)
       case 'members':
-        return this.groupMembers()
+        return this.openGroupPanel()
       case 'rename':
         return this.groupRename(arg)
       case 'leave': {
@@ -1827,7 +2003,7 @@ export class Engine extends EventEmitter {
 
   /** `/bot …` in an open group: add, edit, remove, list or stop the bots that run here. */
   private cmdBot(args: string[], rest: string): void {
-    const usage = 'Usage: /bot add <name> [@backend] <job> | edit <name> [@backend] [job] | remove <name> | list | stop'
+    const usage = 'Usage: /bot add <name> [@backend] <job> | edit <name> [@backend] [job] | model <name> [model] | effort <name> [level] | remove <name> | list | stop'
     if (this.bots === undefined || this.ai === undefined) return this.toast('error', AGENTS_OFF)
     const conv = this.activeGroup()
     if (!conv) return
@@ -1855,18 +2031,77 @@ export class Engine extends EventEmitter {
         if (!this.bots.remove(conv.id, name)) return this.toast('error', `No bot named ${name || '…'} in #${conv.title}. Bots: ${this.bots.list(conv.id).map((b) => b.name).join(', ') || 'none'}`)
         this.postBot(conv.id, name, `👋 ${name} left the group.`)
         return this.toast('info', `Removed ${name} and its sandbox folder`)
-      case 'list': {
-        const bots = this.bots.list(conv.id)
-        return this.setHome([
-          `#${conv.title} bots (yours; others' bots run on their own machines):`,
-          ...(bots.length === 0 ? ['  none yet: /bot add <name> [@backend] <job>'] : bots.map((b) => `  ${b.name.padEnd(14)} ${b.backend.padEnd(10)} ${b.busy ? 'thinking… ' : ''}${b.instructions}`)),
-        ])
-      }
+      case 'model':
+      case 'effort':
+        return this.botSetting(conv, name, sub, args.slice(2).join(' ').trim())
+      case 'list':
+        return this.openGroupPanel()
       case 'stop':
         return this.toast('info', this.bots.stop(conv.id) ? 'Stopped the bots in this group' : 'No bot is busy here')
       default:
         this.toast('error', usage)
     }
+  }
+
+  /** `/bot model|effort <name> [value]`: without a value, what it is and what it can be; `default` goes back to the backend's own. */
+  private botSetting(conv: Conv, name: string, kind: 'model' | 'effort', value: string): void {
+    const bot = this.bots?.list(conv.id).find((b) => b.name === name)
+    if (this.bots === undefined || bot === undefined) return this.toast('error', `Usage: /bot ${kind} <${this.bots?.list(conv.id).map((b) => b.name).join('|') || 'name'}> [${kind}]`)
+    const http = bot.backend === 'ollama' || bot.backend === 'openai'
+    if (kind === 'effort' && http) return this.toast('error', `Effort is for agent CLIs; ${name} runs on ${bot.backend}`)
+    const choices = http ? [] : this.agentChoices(bot.backend, kind)
+    const listed = choices.length === 0 ? 'any name' : `${choices.slice(0, 12).map((c) => c.value).join(', ')}${choices.length > 12 ? ', …' : ''}`
+    if (value === '') return this.toast('info', `${name} ${kind}: ${bot[kind] ?? 'default'}. Set one of: ${listed}, or default`)
+    if (value.length > 100) return this.toast('error', `That ${kind} is too long`)
+    const clear = value.toLowerCase() === 'default'
+    const hit = choices.find((c) => c.value.toLowerCase() === value.toLowerCase() || c.name.toLowerCase() === value.toLowerCase())
+    if (!clear && choices.length > 0 && hit === undefined) return this.toast('error', `Unknown ${kind} "${value.slice(0, 40)}" for ${bot.backend}. Choose: ${listed}`)
+    const next = clear ? null : (hit?.value ?? value)
+    const why = this.bots.edit(conv.id, name, kind === 'model' ? { model: next } : { effort: next })
+    this.toast(why === undefined ? 'success' : 'error', why ?? `${name} ${kind} → ${next ?? 'default'} (applies to its next reply)`)
+  }
+
+  /** `/call setup`: installs SoX with winget or Homebrew, or says what to type where pager cannot (Linux needs sudo). */
+  private async setupCalls(): Promise<void> {
+    if ((await findSox()) !== undefined) return this.toast('success', 'SoX is installed: open a chat and /call')
+    if (this.installingSox) return this.toast('info', 'SoX is already being installed')
+    const plan = await soxInstaller()
+    if ('manual' in plan) return this.toast('info', plan.manual)
+    this.installingSox = true
+    this.toast('info', `Installing SoX with ${plan.via}… this can take a minute`)
+    const { ok, detail } = await installSox(plan)
+    this.installingSox = false
+    this.toast(ok ? 'success' : 'error', ok ? 'SoX is installed: open a chat and /call' : `SoX was not installed: ${detail.slice(0, 160)}`)
+  }
+
+  /** `/call [room]` in the open chat: a DM has one call; a group joins `room`, the one already going, or `main`. `/call setup` installs SoX. */
+  private async cmdCall(arg: string): Promise<void> {
+    if (arg.trim().toLowerCase() === 'setup') return this.setupCalls()
+    const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
+    if (!conv) return this.toast('error', 'Open a chat or a group first, then /call')
+    const going = this.calls.roomsIn(conv.id).filter((r) => !r.mine)
+    const room = conv.kind === 'dm' ? 'call' : (arg.trim().toLowerCase() || (going.length === 1 ? going[0]?.room : undefined) || 'main')
+    if (!CALL_ROOM_RE.test(room)) return this.toast('error', 'A call room name is 1-24 lowercase letters, digits, - or _')
+    const why = await this.calls.join(conv.id, room)
+    if (why !== undefined) return this.toast('error', why)
+    const where = conv.kind === 'dm' ? this.nameOf(conv.peer ?? '') : `#${conv.title} room ${room}`
+    this.toast('success', `In a call with ${where}: /mute, /hangup. Use headphones so they do not hear themselves`)
+    if (conv.kind !== 'dm') return
+    const link = this.net.link(conv.peer ?? '')
+    if (link === undefined) this.toast('info', `${where} is offline: their pager rings when they come online`)
+    else if (!link.hello.caps.includes('call')) this.toast('warn', `${where}'s pager is too old for calls`)
+  }
+
+  private ringCall(convId: string, room: string, pk: string, started: boolean): void {
+    const conv = this.store.getConv(convId)
+    if (!conv) return
+    const who = this.nameOf(pk)
+    // A call rings with its own sound, only when sounds are on for everything; the desktop alert stays silent.
+    const text = conv.kind === 'dm' ? `${who} is calling: open the chat and /call to answer` : started ? `${who} started a call in #${conv.title} (room ${room}): /call ${room} to join` : undefined
+    if (text === undefined) return
+    this.toast('info', text)
+    this.alert(conv.kind === 'dm' ? who : `#${conv.title}`, text, false, false)
+    if (this.prefs.soundMode === 'all') playSound(this.prefs.ringSound)
   }
 
   private activeGroup(): Conv | undefined {
@@ -1935,17 +2170,6 @@ export class Engine extends EventEmitter {
     this.net.link(target.pk)?.send({ t: 'group-invite', conv: conv.id, title: conv.title, creator: this.me.pk })
     this.toast('success', `Invited ${target.name || pk8(target.pk)}`)
     this.emit('change')
-  }
-
-  private groupMembers(): void {
-    const conv = this.activeGroup()
-    if (!conv) return
-    const lines = [`#${conv.title} members:`]
-    for (const pk of this.store.members(conv.id).current) {
-      const marks = pk === this.me.pk ? ' (you)' : this.net.link(pk) ? ' online' : ''
-      lines.push(`  ${this.nameOf(pk)}${marks}`)
-    }
-    this.setHome(lines)
   }
 
   // ---------------------------------------------------------------- contacts
@@ -2057,6 +2281,7 @@ export class Engine extends EventEmitter {
     if (!conv || conv.kind !== 'group' || conv.state === 'left') return
     const event = this.appendEvent(convId, 'member-leave', '')
     this.bots?.forget(convId)
+    this.calls.forget(convId)
     this.store.upsertConv({ ...conv, state: 'left' })
     for (const pk of this.store.members(convId).current) {
       if (pk !== this.me.pk) this.sendEvents(this.net.link(pk), convId, [event])
@@ -2130,6 +2355,7 @@ export class Engine extends EventEmitter {
       }
     }
     this.share.onOpen(link)
+    this.calls.onOpen(link.pk)
     this.sendSync(link)
     this.emit('change')
   }
@@ -2166,6 +2392,11 @@ export class Engine extends EventEmitter {
         // A run without agents never serves or joins an agent session.
         if (!this.agentsOn) return
         return this.share.onFrame(link, frame)
+      case 'call':
+      case 'call-audio':
+        return this.calls.onFrame(link.pk, frame)
+      case 'ping':
+        return this.onPing(link, frame)
       default:
     }
   }
@@ -2334,14 +2565,14 @@ export class Engine extends EventEmitter {
     if (focused && this.activeId !== null) this.sendRead(this.activeId)
   }
 
-  /** A desktop notification (outside the terminal) with a chime; the settings turn either off, and it is skipped while pager has trusted focus unless forced. */
-  private alert(title: string, body: string, force = false): void {
+  /** A desktop notification (outside the terminal), with the message sound when sounds are on for everything; skipped while pager has trusted focus unless forced. */
+  private alert(title: string, body: string, force = false, sound = this.prefs.soundMode === 'all'): void {
     this.emit('notify', title, body)
     if (!this.prefs.notify || (!force && this.focused && this.focusTrusted)) return
-    desktopNotify({ title, body, sound: this.prefs.sound })
+    desktopNotify({ title, body, sound: sound ? this.prefs.notifySound : undefined })
   }
 
-  /** A popup in pager and a desktop alert with a chime. */
+  /** A popup in pager and a desktop alert with a sound. */
   private announce(kind: ToastKind, text: string, title: string): void {
     this.toast(kind, text)
     this.alert(title, text)
