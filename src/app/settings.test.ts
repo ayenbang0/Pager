@@ -14,10 +14,18 @@ test('missing file yields defaults', () => {
 
 test('saved settings round-trip and leave no temp file behind', () => {
   const dir = tmp()
-  const saved: Settings = { theme: 'ocean', sidebar: false, accent: '#ff00aa', badge: '🚀', density: 'roomy', notify: false, sound: false, lastSeenVersion: '1.0.0', reduceMotion: true, mouse: false, alerts: false, updateCheck: false, acp: false, web: false, agents: false, lan: true, folders: [{ name: 'work', ids: ['a', 'b'] }], collapsed: ['direct'] }
+  const saved: Settings = { theme: 'ocean', sidebar: false, accent: '#ff00aa', badge: '🚀', density: 'roomy', notify: false, soundMode: 'pings', notifySound: 'pop', ringSound: 'doorbell', lastSeenVersion: '1.0.0', reduceMotion: true, mouse: false, alerts: false, updateCheck: false, acp: false, web: false, agents: false, lan: true, folders: [{ name: 'work', ids: ['a', 'b'] }], collapsed: ['direct'] }
   saveSettings(dir, saved)
   assert.deepEqual(loadSettings(dir), saved)
   assert.deepEqual(fs.readdirSync(dir), ['settings.json'])
+})
+
+test('the old sound switch becomes a sound mode; unknown presets fall back', () => {
+  const dir = tmp()
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ sound: false, notifySound: 'kazoo' }))
+  assert.deepEqual([loadSettings(dir).soundMode, loadSettings(dir).notifySound], ['off', 'chime'])
+  fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ sound: true }))
+  assert.equal(loadSettings(dir).soundMode, 'all')
 })
 
 test('corrupt JSON yields defaults instead of throwing', () => {

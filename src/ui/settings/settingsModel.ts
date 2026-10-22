@@ -1,6 +1,7 @@
 import type { SettingsView } from '../../app/settingsView.js'
 import { COLOR_WORDS, parseColor } from '../theme/colors.js'
-import { DENSITIES } from '../../app/settings.js'
+import { DENSITIES, SOUND_MODES } from '../../app/settings.js'
+import { SOUND_NAMES } from '../../platform/sounds.js'
 import { SETTINGS_SECTIONS, type SettingsRow, type SettingsSection } from './settingsRows.js'
 
 export const BADGE_CHOICES = ['auto', 'none', '🚀', '🔥', '✨', '👑', '⚡', '💀'] as const
@@ -45,7 +46,9 @@ function appearance(view: SettingsView): SettingsRow[] {
 function notifications(view: SettingsView): SettingsRow[] {
   return [
     { kind: 'toggle', id: 'notify', label: 'Desktop notifications', value: view.settings.notify },
-    { kind: 'toggle', id: 'sound', label: 'Chime', value: view.settings.sound },
+    { kind: 'choice', id: 'soundMode', label: 'Sounds (pings: only /ping makes one)', options: SOUND_MODES, value: view.settings.soundMode },
+    { kind: 'choice', id: 'notifySound', label: 'Message and ping sound', options: SOUND_NAMES, value: view.settings.notifySound },
+    { kind: 'choice', id: 'ringSound', label: 'Call ring', options: SOUND_NAMES, value: view.settings.ringSound },
     toggle(view, 'alerts', 'All notifications (bell, taskbar, desktop)', 'restart to apply'),
   ]
 }

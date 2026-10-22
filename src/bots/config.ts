@@ -4,12 +4,14 @@ import { RESERVED_NAMES } from '../agents/run/registry.js'
 import { BOT_NAME_RE } from '../chat/botMessage.js'
 import { isRecord } from '../util/guards.js'
 
-/** A bot in one group: its name (what `@name` calls), who answers for it (a ready agent, `ollama` or `openai`) and its job. */
+/** A bot in one group: its name (what `@name` calls), who answers for it (a ready agent, `ollama` or `openai`), its job, and optionally the model and effort it asks for. */
 export interface BotConfig {
   conv: string
   name: string
   backend: string
   instructions: string
+  model?: string
+  effort?: string
 }
 
 /** Bots one group may have here. */
@@ -43,11 +45,12 @@ export function loadBots(dir: string): BotConfig[] {
   const out: BotConfig[] = []
   for (const e of isRecord(raw) && Array.isArray(raw.bots) ? raw.bots : []) {
     if (!isRecord(e)) continue
-    const { conv, name, backend, instructions } = e
+    const { conv, name, backend, instructions, model, effort } = e
     if (typeof conv !== 'string' || !/^grp:[0-9a-f]{32}$/.test(conv) || typeof name !== 'string' || botNameProblem(name) !== undefined) continue
     if (typeof backend !== 'string' || backend === '' || typeof instructions !== 'string' || instructionsProblem(instructions) !== undefined) continue
     if (out.some((b) => b.conv === conv && b.name === name)) continue
-    out.push({ conv, name, backend, instructions })
+    const ok = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= 100 && !/\p{Cc}/u.test(v)
+    out.push({ conv, name, backend, instructions, ...(ok(model) ? { model } : {}), ...(ok(effort) ? { effort } : {}) })
   }
   return out
 }

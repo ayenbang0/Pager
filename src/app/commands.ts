@@ -13,7 +13,12 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'open', usage: '/open <name>', summary: 'Open a conversation' },
   { name: 'remove', usage: '/remove <name>', summary: 'Remove a contact' },
   { name: 'group', usage: '/group new|invite|rename|members|leave', summary: 'Manage groups' },
-  { name: 'bot', usage: '/bot add|edit|remove|list|stop', summary: 'AI bots in the open group that reply when relevant' },
+  { name: 'bot', usage: '/bot add|edit|model|effort|list', summary: 'AI bots in the open group that reply when relevant' },
+  { name: 'call', usage: '/call [room|setup]', summary: 'Voice call in the open chat, or a named room in a group' },
+  { name: 'hangup', usage: '/hangup', summary: 'Leave the call' },
+  { name: 'mute', usage: '/mute', summary: 'Mute or unmute your microphone' },
+  { name: 'ping', usage: '/ping <name>', summary: 'Play a sound on their machine' },
+  { name: 'requests', usage: '/requests', summary: 'Requests and invites to accept or decline' },
   { name: 'terminal', usage: '/terminal [new|close]', summary: 'Open the Terminal tab (new: another one, close: this one)' },
   { name: 'run', usage: '/run [--cwd <dir>] <command>', summary: 'Run a command in a new terminal tab' },
   { name: 'docs', usage: '/docs', summary: 'Open the local docs and your usage stats in the browser' },
@@ -31,15 +36,17 @@ export const GROUP_SUBCOMMANDS: readonly CommandSpec[] = [
   { name: 'new', usage: '/group new <name>', summary: 'Create a group' },
   { name: 'invite', usage: '/group invite <name>', summary: 'Invite a contact (creator only)' },
   { name: 'rename', usage: '/group rename <new name>', summary: 'Rename this group (creator only)' },
-  { name: 'members', usage: '/group members', summary: 'List members' },
+  { name: 'members', usage: '/group members', summary: 'People, bots and call rooms' },
   { name: 'leave', usage: '/group leave', summary: 'Leave this group for good' },
 ]
 
 export const BOT_SUBCOMMANDS: readonly CommandSpec[] = [
   { name: 'add', usage: '/bot add <name> [@backend] <job>', summary: 'Add a bot to this group (backend: a ready agent, ollama or openai)' },
   { name: 'edit', usage: '/bot edit <name> [@backend] [job]', summary: "Change a bot's backend or job" },
+  { name: 'model', usage: '/bot model <name> [model|default]', summary: "Set a bot's model (no value lists the choices)" },
+  { name: 'effort', usage: '/bot effort <name> [level|default]', summary: "Set a bot's thinking effort (agent CLIs)" },
   { name: 'remove', usage: '/bot remove <name>', summary: 'Remove a bot and its sandbox folder' },
-  { name: 'list', usage: '/bot list', summary: 'List your bots in this group' },
+  { name: 'list', usage: '/bot list', summary: 'The group screen: people, bots and calls' },
   { name: 'stop', usage: '/bot stop', summary: 'Stop the bots that are thinking here' },
 ]
 

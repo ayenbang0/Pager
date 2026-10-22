@@ -55,6 +55,10 @@ export const KEY_SECTIONS: readonly KeySection[] = [
       ['Ctrl+C', 'Stop the agent working in this tab'],
       ['@bot in a group', 'Call one of the group bots: it always answers (they also chime in when their job calls for it)'],
       ['Ctrl+C in a group', 'Stop the bots that are thinking there'],
+      ['/group members', 'The group screen: people (p pings), bots (Enter model, e effort, j job, x remove) and call rooms (Enter joins)'],
+      ['/call [room]', 'Voice call: a DM rings the other side; a group joins the room (main by default). /mute, /hangup. /call setup installs SoX for sound'],
+      ['/ping <name>', 'Play a sound on their machine, even when their sounds are set to pings only'],
+      ['/requests', 'Everything waiting for /accept: Enter accepts, d declines'],
     ],
   },
   {

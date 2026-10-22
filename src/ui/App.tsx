@@ -10,6 +10,7 @@ import { copyText } from '../platform/clipboard.js'
 import { splitArgs } from '../agents/run/protocol.js'
 import { AgentHeader, HubHeader } from './chrome/AgentHeader.js'
 import { AgentSetup } from './overlays/AgentSetup.js'
+import { ListPanel, type PanelItem } from './overlays/ListPanel.js'
 import { watchCtrlH } from './input/ctrlH.js'
 import { DocsPanel, type DocsCtl } from './docs/DocsPanel.js'
 import { TerminalPanel, type TermCtl } from './terminal/TerminalPanel.js'
@@ -81,7 +82,7 @@ const NOTIFY = process.env.PAGER_NO_NOTIFY !== '1'
 /** OSC 9;4 taskbar progress: Windows Terminal and a few others; elsewhere it could print garbage. */
 const TASKBAR_PROGRESS = process.env.WT_SESSION !== undefined || ['iTerm.app', 'ghostty', 'WezTerm'].includes(process.env.TERM_PROGRAM ?? '')
 
-type Overlay = 'palette' | 'help' | 'agents' | 'model' | 'theme' | null
+type Overlay = 'palette' | 'help' | 'agents' | 'model' | 'theme' | 'group' | 'requests' | null
 
 /** What the Home AGENTS card shows, from the live agents and the recorded stats. */
 function homeData(engine: Engine, agents: readonly AgentView[]): HomeAgents {
@@ -140,7 +141,7 @@ export function App({ engine, onExit }: Props) {
       timers.add(timer)
     }
     const onOverlay = (kind: string, name?: string): void => {
-      if (kind === 'agents') setOverlay('agents')
+      if (kind === 'agents' || kind === 'group' || kind === 'requests') setOverlay(kind)
       else if (kind === 'theme') {
         setPreviewTheme(engine.settings().theme)
         setOverlay('theme')
@@ -477,7 +478,11 @@ export function App({ engine, onExit }: Props) {
   const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inWeb ? '⌕ web' : inAi ? '✦ ai' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
   const groupBots = activeConv?.kind === 'group' && engine.agentsEnabled() ? engine.groupBots(activeConv.id) : []
   const botNote = groupBots.length === 0 ? undefined : `${groupBots.some((b) => b.busy) ? '◆ thinking… · ' : '◆ '}${groupBots.map((b) => `@${b.name}`).join(' ')}`
-  const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : botNote
+  const callNote = activeConv === undefined ? undefined : engine.callRooms(activeConv.id).map((r) => `☎ ${activeConv.kind === 'dm' ? '' : `${r.room}: `}${r.people.join(', ')}`).join(' · ') || undefined
+  const myCall = engine.myCall()
+  const inThisCall = myCall !== undefined && myCall.conv === activeConv?.id
+  const presence = activeConv?.kind === 'dm' ? (activeConv.online ? 'online' : 'offline') : undefined
+  const tabNote = sharedNote !== undefined ? sharedNote : offset > 0 ? 'scrolled · PgDn for newer' : [inThisCall && myCall.muted ? 'muted' : undefined, callNote, presence, botNote].filter(Boolean).join(' · ') || undefined
   const placeholder = field !== null
     ? field.label
     : inAi
@@ -591,6 +596,7 @@ export function App({ engine, onExit }: Props) {
       ? [
           { label: 'Invite to this group…', hint: '/group invite', run: () => fillPrompt('/group invite ') },
           { label: 'Leave this group…', hint: '/group leave', run: () => fillPrompt('/group leave') },
+          { label: 'People, bots and calls in this group', hint: '/group members', run: () => setOverlay('group') },
           ...(engine.agentsEnabled()
             ? [
                 { label: 'Add a bot to this group…', hint: '/bot add', run: () => fillPrompt('/bot add ') },
@@ -602,6 +608,15 @@ export function App({ engine, onExit }: Props) {
             : []),
         ]
       : []),
+    ...(activeConv !== undefined && !inThisCall ? [{ label: activeConv.kind === 'dm' ? `Call ${activeConv.title}` : `Join a call in # ${activeConv.title}…`, hint: '/call', run: () => (activeConv.kind === 'dm' ? void engine.submit('/call') : fillPrompt('/call ')) }] : []),
+    ...(myCall !== undefined
+      ? [
+          { label: myCall.muted ? 'Unmute' : 'Mute', hint: '/mute', run: () => void engine.submit('/mute') },
+          { label: `Hang up (${myCall.label})`, hint: '/hangup', run: () => void engine.submit('/hangup') },
+        ]
+      : []),
+    { label: 'Ping someone…', hint: '/ping <name>', run: () => fillPrompt('/ping ') },
+    { label: `Requests${pending.length > 0 ? ` (${pending.length})` : ''}`, hint: '/requests', run: () => setOverlay('requests') },
     { label: '⚙ Settings', hint: 'Alt+S', run: () => engine.openSettings() },
     { label: settings.sidebar ? 'Hide sidebar' : 'Show sidebar', hint: 'Ctrl+B', run: () => engine.toggleSidebar() },
     { label: 'Keyboard shortcuts', hint: 'Ctrl+G', run: () => setOverlay('help') },
@@ -636,7 +651,72 @@ export function App({ engine, onExit }: Props) {
   if (quitArmed) hint = 'Press Ctrl+C again to quit'
 
   const closeOverlay = (): void => setOverlay(null)
-  
+  // Panel actions that type a command close the panel first, so the prompt they fill is visible.
+  const typeCommand = (text: string): void => {
+    setOverlay(null)
+    fillPrompt(text)
+  }
+  const runCommand = (text: string): void => void engine.submit(text)
+  const groupView = overlay === 'group' && activeId !== null ? engine.groupView(activeId) : undefined
+  const groupItems: PanelItem[] =
+    groupView === undefined
+      ? []
+      : [
+          { header: `PEOPLE (${groupView.people.length})` },
+          ...groupView.people.map((p): PanelItem => {
+            const dm = convs.find((c) => c.peer === p.pk)
+            return {
+              label: `${p.online ? '●' : '○'} ${p.name}${p.me ? ' (you)' : ''}${p.creator ? ' ★' : ''}`,
+              hint: [p.room === undefined ? undefined : `☎ ${p.room}`, p.online ? 'online' : 'offline', p.creator ? 'creator' : undefined].filter(Boolean).join(' · '),
+              ...(dm === undefined || p.me ? {} : { enter: ['open chat', () => (setOverlay(null), engine.activate(dm.id))] as const }),
+              ...(p.me ? {} : { keys: [['p', 'ping', () => runCommand(`/ping ${p.name}`)]] as const }),
+            }
+          }),
+          { header: `BOTS (${groupView.bots.length})` },
+          ...groupView.bots.map(
+            (b): PanelItem =>
+              b.mine
+                ? {
+                    label: `◆ ${b.name}${b.busy === true ? ' · thinking…' : ''}`,
+                    hint: `${b.backend} · model ${b.model} · effort ${b.effort}`,
+                    enter: ['model', () => typeCommand(`/bot model ${b.name} `)],
+                    keys: [
+                      ['e', 'effort', () => typeCommand(`/bot effort ${b.name} `)],
+                      ['j', 'job', () => typeCommand(`/bot edit ${b.name} ${b.job ?? ''}`)],
+                      ['x', 'remove', () => runCommand(`/bot remove ${b.name}`)],
+                    ],
+                  }
+                : { label: `◇ ${b.name}`, hint: `${b.host}'s bot` },
+          ),
+          ...(engine.agentsEnabled() ? [{ label: '+ Add a bot…', hint: '/bot add', enter: ['add', () => typeCommand('/bot add ')] as const }] : []),
+          { header: `CALL ROOMS (${groupView.rooms.length})` },
+          ...groupView.rooms.map(
+            (r): PanelItem => ({
+              label: `☎ ${r.room}`,
+              hint: r.people.join(', '),
+              enter: r.mine ? ['hang up', () => runCommand('/hangup')] : ['join', () => runCommand(`/call ${r.room}`)],
+              ...(r.mine ? { keys: [['m', myCall?.muted === true ? 'unmute' : 'mute', () => runCommand('/mute')]] as const } : {}),
+            }),
+          ),
+          { label: '+ New call room…', hint: '/call <room>', enter: ['name it', () => typeCommand('/call ')] },
+        ]
+  const KINDS = { contact: 'CONTACT REQUESTS', group: 'GROUP INVITES', session: 'AGENT SESSIONS' } as const
+  const requestItems: PanelItem[] = (['contact', 'group', 'session'] as const).flatMap((kind) => {
+    const of = pending.filter((p) => p.type === kind)
+    return of.length === 0
+      ? []
+      : [
+          { header: KINDS[kind] },
+          ...of.map(
+            (p): PanelItem => ({
+              label: `#${p.n} ${p.label}`,
+              hint: p.note === '' ? `/accept ${p.n}` : p.note,
+              enter: ['accept', () => runCommand(`/accept ${p.n}`)],
+              keys: [['d', 'decline', () => runCommand(`/decline ${p.n}`)]],
+            }),
+          ),
+        ]
+  })
 
   return (
     <ThemeContext.Provider value={theme}>
@@ -696,6 +776,10 @@ export function App({ engine, onExit }: Props) {
                   setPreviewTheme(null)
                 }}
               />
+            ) : overlay === 'group' ? (
+              <ListPanel title={groupView === undefined ? 'GROUP' : `# ${groupView.title}`} items={groupItems} empty="open a group first" height={paneRows + 1} onClose={closeOverlay} />
+            ) : overlay === 'requests' ? (
+              <ListPanel title="REQUESTS" items={requestItems} empty="nothing to accept" height={paneRows + 1} onClose={closeOverlay} />
             ) : overlay === 'model' ? (
               <ModelPicker engine={engine} agent={modelAgent} height={paneRows + 1} onClose={closeOverlay} />
             ) : (
