@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { ChatResult } from '../agents/chat.js'
 import type { ChatMessage } from '../ai/http.js'
-import { botNameProblem, instructionsProblem, loadBots, MAX_BOTS_PER_GROUP, saveBots, type BotConfig } from './config.js'
+import { botNameProblem, instructionsProblem, loadBots, MAX_BOTS_PER_CHAT, saveBots, type BotConfig } from './config.js'
 import { docCap } from '../agents/run/protocol.js'
 import { docName } from '../docs/store.js'
 import { botReply, buildBotPrompt, extractDocEdits, mentions, type BotLine } from './prompt.js'
@@ -12,7 +12,7 @@ import { botReply, buildBotPrompt, extractDocEdits, mentions, type BotLine } fro
 const CONTEXT_LINES = 40
 /** Messages older than this when they arrive (a sync catching up after time offline) wake no bot. */
 const FRESH_MS = 10 * 60_000
-/** Bot turns running at once across every group; the rest wait for a slot. */
+/** Bot turns running at once across every chat; the rest wait for a slot. */
 const MAX_CONCURRENT = 3
 /** After this many bot messages in a row nobody but a person can wake the bots again: the backstop against two bots talking forever. */
 export const MAX_BOT_STREAK = 6
@@ -28,15 +28,15 @@ export interface BotDeps {
   runCli(agent: string, prompt: string, cwd: string, signal: AbortSignal, want: { model?: string; effort?: string }): Promise<ChatResult>
   /** One whole reply from Ollama or the OpenAI-compatible API; `model` replaces the configured one. */
   complete(backend: 'ollama' | 'openai', messages: ChatMessage[], signal: AbortSignal, model?: string): Promise<string>
-  /** The newest `limit` chat lines of a group, oldest first. */
+  /** The newest `limit` chat lines of a conversation, oldest first. */
   lines(conv: string, limit: number): BotLine[]
-  /** The group as the bot meets it; undefined once it is gone or left. */
-  group(conv: string): { title: string; host: string; people: string[] } | undefined
-  /** Sends the bot's message to the group, as its host. */
+  /** The conversation (a group or a DM) as the bot meets it; undefined once it is gone, left or the contact removed. */
+  chat(conv: string): { title: string; host: string; people: string[]; dm: boolean } | undefined
+  /** Sends the bot's message to the conversation, as its host. */
   post(conv: string, name: string, text: string): void
-  /** The group's shared documents, or undefined when bots may not see documents (secure session). */
+  /** The conversation's shared documents, or undefined when bots may not see documents (secure session). */
   docs(conv: string): { name: string; text: string }[] | undefined
-  /** Writes (or creates) a group document for a bot; `base` is the text it was shown. Returns a short note of what happened. */
+  /** Writes (or creates) a document of the conversation for a bot; `base` is the text it was shown. Returns a short note of what happened. */
   writeDoc(conv: string, name: string, text: string, append: boolean, base: string | undefined): string
   /** A turn failed. Called once until the bot succeeds again, so a dead backend does not repeat itself on every message. */
   failed(conv: string, name: string, error: string): void
@@ -59,11 +59,11 @@ interface Live {
 const keyOf = (conv: string, name: string): string => `${conv}\n${name}`
 
 /**
- * AI bots in group chats. Every message a group hears is offered to each of its bots; a bot answers when its job makes it
+ * AI bots in chats, groups and DMs alike. Every message a chat hears is offered to each of its bots; a bot answers when its job makes it
  * relevant (else its model says NO_REPLY), and always when a person calls it with `@name`. One bot takes one turn at a
  * time: messages that arrive meanwhile are answered together in its next turn. Events: 'change'.
  */
-export class GroupBots extends EventEmitter {
+export class ChatBots extends EventEmitter {
   private readonly live = new Map<string, Live>()
   private active = 0
   private readonly waiting: (() => void)[] = []
@@ -84,19 +84,25 @@ export class GroupBots extends EventEmitter {
 
   /** The bot's own folder for files and commands (CLI backends work in it). Created on demand. */
   sandbox(conv: string, name: string): string {
-    const dir = path.join(this.deps.dir, 'bots', conv.replace(/^grp:/, '').slice(0, 16), name)
+    const dir = this.folder(conv, name)
     fs.mkdirSync(dir, { recursive: true })
     return dir
   }
 
-  /** Adds a bot to a group. Returns why it could not, or undefined. */
-  add(conv: string, name: string, backend: string, instructions: string): string | undefined {
+  /** `bots/<group hex>/<name>` (the 1.6.0 layout) or `bots/dm-<hex>/<name>`. */
+  private folder(conv: string, name: string): string {
+    const id = conv.startsWith('dm:') ? `dm-${conv.slice(3, 19)}` : conv.replace(/^grp:/, '').slice(0, 16)
+    return path.join(this.deps.dir, 'bots', id, name)
+  }
+
+  /** Adds a bot to a group or a DM; a private one only ever hears its host. Returns why it could not, or undefined. */
+  add(conv: string, name: string, backend: string, instructions: string, isPrivate = false): string | undefined {
     const problem = botNameProblem(name) ?? instructionsProblem(instructions) ?? this.backendProblem(backend)
     if (problem !== undefined) return problem
     const here = this.list(conv)
-    if (here.some((b) => b.name === name)) return `This group already has a bot named ${name}`
-    if (here.length >= MAX_BOTS_PER_GROUP) return `A group can have ${MAX_BOTS_PER_GROUP} bots`
-    this.live.set(keyOf(conv, name), { cfg: { conv, name, backend, instructions }, heard: [], running: false, controller: undefined, failing: false })
+    if (here.some((b) => b.name === name)) return `This chat already has a bot named ${name}`
+    if (here.length >= MAX_BOTS_PER_CHAT) return `A chat can have ${MAX_BOTS_PER_CHAT} bots`
+    this.live.set(keyOf(conv, name), { cfg: { conv, name, backend, instructions, ...(isPrivate ? { private: true } : {}) }, heard: [], running: false, controller: undefined, failing: false })
     this.save()
     this.sandbox(conv, name)
     this.emit('change')
@@ -104,16 +110,18 @@ export class GroupBots extends EventEmitter {
   }
 
   /**
-   * Changes a bot's backend, job, model or effort (null puts model or effort back to the backend's default); it applies from its
-   * next turn. A new backend drops the model and effort, which belonged to the old one. Returns why it could not, or undefined.
+   * Changes a bot's backend, job, model, effort or privacy (null puts model or effort back to the backend's default); it applies from
+   * its next turn. A new backend drops the model and effort, which belonged to the old one. Returns why it could not, or undefined.
    */
-  edit(conv: string, name: string, change: { backend?: string; instructions?: string; model?: string | null; effort?: string | null }): string | undefined {
+  edit(conv: string, name: string, change: { backend?: string; instructions?: string; model?: string | null; effort?: string | null; private?: boolean }): string | undefined {
     const bot = this.live.get(keyOf(conv, name))
-    if (bot === undefined) return `No bot named ${name} in this group`
+    if (bot === undefined) return `No bot named ${name} in this chat`
     const problem = (change.instructions === undefined ? undefined : instructionsProblem(change.instructions)) ?? (change.backend === undefined ? undefined : this.backendProblem(change.backend))
     if (problem !== undefined) return problem
-    const { model, effort, ...rest } = change
+    const { model, effort, private: priv, ...rest } = change
     const next: BotConfig = { ...bot.cfg, ...rest }
+    if (priv === true) next.private = true
+    else if (priv === false) delete next.private
     if (change.backend !== undefined && change.backend !== bot.cfg.backend) {
       delete next.model
       delete next.effort
@@ -137,21 +145,22 @@ export class GroupBots extends EventEmitter {
     this.halt(bot)
     this.live.delete(key)
     this.save()
-    fs.rmSync(path.join(this.deps.dir, 'bots', conv.replace(/^grp:/, '').slice(0, 16), name), { recursive: true, force: true })
+    fs.rmSync(this.folder(conv, name), { recursive: true, force: true })
     this.emit('change')
     return true
   }
 
-  /** Removes every bot of a group (it was left). */
+  /** Removes every bot of a chat (the group was left or the contact removed). */
   forget(conv: string): void {
     for (const b of this.list(conv)) this.remove(conv, b.name)
   }
 
-  /** A new chat line in `conv`: each of its bots (but the one that wrote it) gets to react. */
+  /** A new chat line in `conv`: each of its bots (but the one that wrote it) gets to react; a private bot only to its host's own messages. */
   hear(conv: string, line: BotLine): void {
     if (Date.now() - line.ts > FRESH_MS) return
     for (const bot of this.live.values()) {
-      if (bot.cfg.conv !== conv || (line.bot?.mine === true && line.bot.name === bot.cfg.name)) continue
+      if (bot.cfg.conv !== conv || (line.mine && line.bot?.name === bot.cfg.name)) continue
+      if (bot.cfg.private === true && !(line.mine && line.bot === undefined)) continue
       bot.heard.push(line)
       if (bot.heard.length > MAX_HEARD) bot.heard.splice(0, bot.heard.length - MAX_HEARD)
       void this.drain(bot)
@@ -218,31 +227,38 @@ export class GroupBots extends EventEmitter {
     try {
       if (controller.signal.aborted) return
       const { conv, name, backend, instructions } = bot.cfg
-      const group = this.deps.group(conv)
-      if (group === undefined) return
-      const lines = this.deps.lines(conv, CONTEXT_LINES + heard.length)
+      const chatInfo = this.deps.chat(conv)
+      if (chatInfo === undefined) return
+      const all = this.deps.lines(conv, CONTEXT_LINES + heard.length)
       let streak = 0
-      while (streak < lines.length && lines[lines.length - 1 - streak]?.bot !== undefined) streak++
+      while (streak < all.length && all[all.length - 1 - streak]?.bot !== undefined) streak++
       if (streak >= MAX_BOT_STREAK) return
+      // A private bot reads only its host and itself: nobody else's text reaches its prompt.
+      const isPrivate = bot.cfg.private === true
+      const lines = isPrivate ? all.filter((l) => l.mine && (l.bot === undefined || l.bot.name === name)) : all
       const fresh = new Set(heard.map((l) => l.key))
       const others = new Map<string, string>()
-      for (const b of this.list(conv)) if (b.name !== name) others.set(`${b.name}\n${group.host}`, `${b.name} (${group.host}'s bot)`)
-      for (const l of lines) if (l.bot !== undefined && !(l.bot.mine && l.bot.name === name)) others.set(`${l.bot.name}\n${l.from}`, `${l.bot.name} (${l.from}'s bot)`)
+      if (!isPrivate) {
+        for (const b of this.list(conv)) if (b.name !== name) others.set(`${b.name}\n${chatInfo.host}`, `${b.name} (${chatInfo.host}'s bot)`)
+        for (const l of lines) if (l.bot !== undefined && !(l.mine && l.bot.name === name)) others.set(`${l.bot.name}\n${l.from}`, `${l.bot.name} (${l.from}'s bot)`)
+      }
       const http = backend === 'ollama' || backend === 'openai'
       const cwd = this.sandbox(conv, name)
       const docs = this.deps.docs(conv)
       const { system, chat } = buildBotPrompt({
         name,
-        host: group.host,
+        host: chatInfo.host,
         instructions,
-        title: group.title,
-        people: group.people,
+        title: chatInfo.title,
+        dm: chatInfo.dm,
+        people: chatInfo.people,
         bots: [...others.values()],
         ...(http ? {} : { cwd }),
         history: lines.filter((l) => !fresh.has(l.key)).slice(-CONTEXT_LINES),
         news: heard,
         called: heard.some((l) => l.bot === undefined && mentions(l.text, name)) ? 'person' : heard.some((l) => mentions(l.text, name)) ? 'bot' : undefined,
         streak,
+        private: isPrivate,
         ...(docs === undefined ? {} : { docs }),
       })
       if (!this.deps.backends().includes(backend)) throw new Error(`${backend} is not ready (Settings > Agents)`)

@@ -441,7 +441,7 @@ test('the AI tab: /open ai, text reaches a ready agent headless, settings round-
   fs.rmSync(repo, { recursive: true, force: true })
 })
 
-test('group bots: added with /bot, pass when their job does not call for it, answer @name, and every member sees them under their own name', async () => {
+test('bots: added with /bot in a group or a DM, pass when their job does not call for it, answer @name, and everyone sees them under their own name', async () => {
   const fetch: typeof globalThis.fetch = async (_input, init) => {
     const body = JSON.parse(String(init?.body ?? '{}')) as { messages?: { content: string }[] }
     const news = body.messages?.at(-1)?.content.split('--- NEW MESSAGES ---\n')[1] ?? ''
@@ -475,6 +475,25 @@ test('group bots: added with /bot, pass when their job does not call for it, ans
   assert.ok(b.engine.messages(group, 50).some((m) => m.text === 'Done.\n\n_✎ created notes.md_'))
   await a.engine.submit('/bot remove grumpy')
   assert.deepEqual(a.engine.groupBots(group), [])
+  // the same works in a DM: both people talk to the bot, and the chat screen lists it
+  const dm = dmConvId(a.engine.me.pk, b.engine.me.pk)
+  a.engine.activate(dm)
+  await a.engine.submit('/bot add grumpy @ollama argue with everything')
+  b.engine.activate(dm)
+  await b.engine.submit('really @grumpy?')
+  await waitFor(() => b.engine.messages(dm, 50).some((m) => m.authorName === 'grumpy (alice)' && m.text === wrong), 20_000, 'the DM bot answers bob')
+  assert.deepEqual(a.engine.groupView(dm)?.bots.map((x) => [x.name, x.mine]), [['grumpy', true]])
+  assert.deepEqual(b.engine.groupView(dm)?.bots.map((x) => [x.name, x.host]), [['grumpy', 'alice']])
+  // private: bob can no longer wake it, alice still can
+  await a.engine.submit('/bot private grumpy')
+  assert.equal(a.engine.groupView(dm)?.bots[0]?.private, true)
+  await waitFor(() => b.engine.messages(dm, 50).some((m) => m.text.startsWith('🔒 grumpy now only reads')), 20_000, 'bob is told')
+  await b.engine.submit('@grumpy are you there?')
+  await waitFor(() => texts(a, dm).includes('@grumpy are you there?'), 20_000, 'bob message reaches alice')
+  await a.engine.submit('@grumpy and for me?')
+  const answers = (): number => a.engine.messages(dm, 50).filter((m) => m.authorName === 'grumpy' && m.text === wrong).length
+  await waitFor(() => answers() === 2, 20_000, 'grumpy answers alice')
+  assert.equal(answers(), 2, 'one reply to bob before it went private, one to alice after; none to bob')
   await b.engine.submit('/bot add mine @nope x')
   assert.match(b.toasts.at(-1)?.text ?? '', /No AI backend named "nope"/)
 })

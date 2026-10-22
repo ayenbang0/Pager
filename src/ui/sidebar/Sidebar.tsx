@@ -81,6 +81,7 @@ export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, a
         label: conv.title,
         labelColor: online ? theme.text : theme.dim,
         badge: [...callBadge(conv), ...unreadBadge(conv.unread, theme)],
+        ...(conv.thinking === true ? { spinner: true } : {}),
       }
       return <Row key={id} spec={spec} active={active} />
     }

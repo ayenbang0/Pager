@@ -13,7 +13,7 @@ export const COMMANDS: readonly CommandSpec[] = [
   { name: 'open', usage: '/open <name>', summary: 'Open a conversation' },
   { name: 'remove', usage: '/remove <name>', summary: 'Remove a contact' },
   { name: 'group', usage: '/group new|invite|rename|members|leave', summary: 'Manage groups' },
-  { name: 'bot', usage: '/bot add|edit|model|effort|list', summary: 'AI bots in the open group that reply when relevant' },
+  { name: 'bot', usage: '/bot add|edit|model|effort|list', summary: 'AI bots in the open chat or group that reply when relevant' },
   { name: 'call', usage: '/call [room|setup]', summary: 'Voice call in the open chat, or a named room in a group' },
   { name: 'hangup', usage: '/hangup', summary: 'Leave the call' },
   { name: 'mute', usage: '/mute', summary: 'Mute or unmute your microphone' },
@@ -41,12 +41,13 @@ export const GROUP_SUBCOMMANDS: readonly CommandSpec[] = [
 ]
 
 export const BOT_SUBCOMMANDS: readonly CommandSpec[] = [
-  { name: 'add', usage: '/bot add <name> [@backend] <job>', summary: 'Add a bot to this group (backend: a ready agent, ollama or openai)' },
+  { name: 'add', usage: '/bot add <name> [@backend] [--private] <job>', summary: 'Add a bot to this chat or group (backend: a ready agent, ollama or openai; --private: only you can talk to it)' },
   { name: 'edit', usage: '/bot edit <name> [@backend] [job]', summary: "Change a bot's backend or job" },
   { name: 'model', usage: '/bot model <name> [model|default]', summary: "Set a bot's model (no value lists the choices)" },
   { name: 'effort', usage: '/bot effort <name> [level|default]', summary: "Set a bot's thinking effort (agent CLIs)" },
+  { name: 'private', usage: '/bot private <name> [on|off]', summary: 'Let only you talk to a bot, or everyone again' },
   { name: 'remove', usage: '/bot remove <name>', summary: 'Remove a bot and its sandbox folder' },
-  { name: 'list', usage: '/bot list', summary: 'The group screen: people, bots and calls' },
+  { name: 'list', usage: '/bot list', summary: 'The chat screen: people, bots and calls' },
   { name: 'stop', usage: '/bot stop', summary: 'Stop the bots that are thinking here' },
 ]
 
