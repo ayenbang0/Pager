@@ -74,7 +74,7 @@ let flash = '' // shown once after a save re-renders the form
 
 const blank = () => ({ create: true, conv: state.groups[0] ? state.groups[0].id : '', name: '', backend: state.backends[0] || '', instructions: '', ...state.defaults })
 const field = (label, input, hint) => h('label', { class: 'f' }, h('span', {}, label), input, hint && h('small', {}, hint))
-const text = (key, props) => h('input', { type: 'text', value: draft[key], autocomplete: 'off', spellcheck: 'false', ...props, on: { input: (e) => { draft[key] = e.target.value } } })
+const text = (key, props) => h('input', { type: 'text', value: draft[key] ?? '', autocomplete: 'off', spellcheck: 'false', ...props, on: { input: (e) => { draft[key] = e.target.value } } })
 const num = (key, lo, hi) => h('input', { type: 'number', min: lo, max: hi, step: 1, value: draft[key], on: { input: (e) => { draft[key] = e.target.value === '' ? NaN : Number(e.target.value) } } })
 const area = (key, rows) => h('textarea', { rows, spellcheck: 'false', on: { input: (e) => { draft[key] = e.target.value } } }, draft[key])
 const check = (key, label) => h('label', { class: 'chk' }, h('input', { type: 'checkbox', checked: draft[key], on: { change: (e) => { draft[key] = e.target.checked } } }), label)
@@ -154,6 +154,8 @@ function render() {
       field('Group', choose('conv', groups, !create)),
       field('Name', text('name', { disabled: !create, placeholder: 'grumpy' }), 'What @name calls. 2-24 lowercase letters, digits, - or _.'),
       field('Backend', choose('backend', backends), 'Who answers: a ready agent, ollama or openai.'),
+      field('Model', text('model', { placeholder: 'backend default' }), 'Optional. Changing the backend resets it.'),
+      field('Effort', text('effort', { placeholder: 'backend default' }), 'Optional: low, medium, high or what the backend takes.'),
       field('Mode', choose('mode', [['auto', 'Auto: decides when to speak'], ['mention', 'Only when called']]), 'Only when called = @name or a keyword.'),
       h('div', { class: 'wide' }, field('Job', area('instructions', 5), 'What the bot does, in plain words (up to ' + state.limits.instructions + ' characters).')),
       h('div', { class: 'wide' }, field('Persona', area('persona', 3), 'How it talks: tone, voice, quirks. Style only; it cannot change the job or the rules.')),

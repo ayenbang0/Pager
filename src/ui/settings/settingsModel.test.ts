@@ -25,7 +25,7 @@ test('rows are grouped under section headers in order', () => {
   assert.deepEqual(sections.slice(0, 3), ['profile', 'appearance', 'notifications'])
   assert.ok(sections.includes('updates') && sections.includes('advanced'))
   const ids = rows.flatMap((r) => ('id' in r ? [r.id] : []))
-  for (const id of ['name', 'code', 'badge', 'theme', 'accent', 'density', 'sidebar', 'notify', 'sound', 'alerts', 'update.check', 'updateCheck', 'changelog', 'reduceMotion', 'mouse', 'acp']) {
+  for (const id of ['name', 'code', 'badge', 'theme', 'accent', 'density', 'sidebar', 'notify', 'soundMode', 'notifySound', 'ringSound', 'alerts', 'update.check', 'updateCheck', 'changelog', 'reduceMotion', 'mouse', 'acp']) {
     assert.ok(ids.includes(id), id)
   }
   assert.equal(new Set(ids).size, ids.length)

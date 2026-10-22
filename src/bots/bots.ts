@@ -24,10 +24,10 @@ export interface BotDeps {
   dir: string
   /** Backends that can answer now: ready agents, then `ollama` and `openai`. */
   backends(): string[]
-  /** One headless turn of a teammate's CLI in `cwd`. */
-  runCli(agent: string, prompt: string, cwd: string, signal: AbortSignal): Promise<ChatResult>
-  /** One whole reply from Ollama or the OpenAI-compatible API. */
-  complete(backend: 'ollama' | 'openai', messages: ChatMessage[], signal: AbortSignal): Promise<string>
+  /** One headless turn of a teammate's CLI in `cwd`, with the bot's own model and effort when it has them. */
+  runCli(agent: string, prompt: string, cwd: string, signal: AbortSignal, want: { model?: string; effort?: string }): Promise<ChatResult>
+  /** One whole reply from Ollama or the OpenAI-compatible API; `model` replaces the configured one. */
+  complete(backend: 'ollama' | 'openai', messages: ChatMessage[], signal: AbortSignal, model?: string): Promise<string>
   /** The newest `limit` chat lines of a group, oldest first. */
   lines(conv: string, limit: number): BotLine[]
   /** The group as the bot meets it; undefined once it is gone or left. */
@@ -61,7 +61,7 @@ interface Live {
 const live = (cfg: BotConfig): Live => ({ cfg, heard: [], running: false, controller: undefined, failing: false, lastReply: 0 })
 
 /** What a bot may be changed to: everything but where it lives and what it is called. */
-export type BotChange = Partial<Omit<BotConfig, 'conv' | 'name'>>
+export type BotChange = Partial<Omit<BotConfig, 'conv' | 'name' | 'model' | 'effort'>> & { model?: string | null; effort?: string | null }
 
 /** How a dry run meets the model: a made-up group, so the prompt can be read and tried before the bot joins a real one. */
 const SAMPLE_GROUP = { title: '#studio', host: 'you', people: ['you', 'friend'] }
@@ -114,14 +114,27 @@ export class GroupBots extends EventEmitter {
     return undefined
   }
 
-  /** Changes a bot's backend, job and/or settings; it applies from its next turn. Returns why it could not, or undefined. */
+  /**
+   * Changes a bot's backend, job, settings, model or effort (null puts model or effort back to the backend's default); it applies from
+   * its next turn. A new backend drops the model and effort, which belonged to the old one. Returns why it could not, or undefined.
+   */
   edit(conv: string, name: string, change: BotChange): string | undefined {
     const bot = this.live.get(keyOf(conv, name))
     if (bot === undefined) return `No bot named ${name} in this group`
-    const settings = settingsFrom({ ...bot.cfg, ...change })
+    const { model, effort, ...rest } = change
+    const settings = settingsFrom({ ...bot.cfg, ...rest })
     const problem = (change.instructions === undefined ? undefined : instructionsProblem(change.instructions)) ?? (change.backend === undefined ? undefined : this.backendProblem(change.backend)) ?? (typeof settings === 'string' ? settings : undefined)
     if (problem !== undefined || typeof settings === 'string') return problem
-    bot.cfg = { ...bot.cfg, ...(change.backend === undefined ? {} : { backend: change.backend }), ...(change.instructions === undefined ? {} : { instructions: change.instructions }), ...settings }
+    const next: BotConfig = { ...bot.cfg, ...(rest.backend === undefined ? {} : { backend: rest.backend }), ...(rest.instructions === undefined ? {} : { instructions: rest.instructions }), ...settings }
+    if (change.backend !== undefined && change.backend !== bot.cfg.backend) {
+      delete next.model
+      delete next.effort
+    }
+    if (model === null) delete next.model
+    else if (model !== undefined) next.model = model
+    if (effort === null) delete next.effort
+    else if (effort !== undefined) next.effort = effort
+    bot.cfg = next
     bot.failing = false
     this.save()
     this.emit('change')
@@ -261,9 +274,9 @@ export class GroupBots extends EventEmitter {
     const heard: BotLine[] = [{ key: 'f:1', ts: Date.now(), from: 'friend', text: message }]
     const { system, chat } = this.compose(cfg, SAMPLE_GROUP, [...lines, ...heard], heard, http ? undefined : cwd, cfg.docs ? [] : undefined)
     let raw: string
-    if (http) raw = await this.deps.complete(cfg.backend as 'ollama' | 'openai', [{ role: 'system', content: system }, { role: 'user', content: chat }], signal)
+    if (http) raw = await this.deps.complete(cfg.backend as 'ollama' | 'openai', [{ role: 'system', content: system }, { role: 'user', content: chat }], signal, cfg.model)
     else {
-      const res = await this.deps.runCli(cfg.backend, `${system}\n${chat}`, cwd, signal)
+      const res = await this.deps.runCli(cfg.backend, `${system}\n${chat}`, cwd, signal, { ...(cfg.model === undefined ? {} : { model: cfg.model }), ...(cfg.effort === undefined ? {} : { effort: cfg.effort }) })
       if (!res.ok) throw new Error(res.error)
       raw = res.text
     }
@@ -294,9 +307,10 @@ export class GroupBots extends EventEmitter {
       if (!this.deps.backends().includes(backend)) throw new Error(`${backend} is not ready (Settings > Agents)`)
       let raw: string
       if (backend === 'ollama' || backend === 'openai') {
-        raw = await this.deps.complete(backend, [{ role: 'system', content: system }, { role: 'user', content: chat }], controller.signal)
+        raw = await this.deps.complete(backend, [{ role: 'system', content: system }, { role: 'user', content: chat }], controller.signal, bot.cfg.model)
       } else {
-        const res = await this.deps.runCli(backend, `${system}\n${chat}`, cwd, controller.signal)
+        const want = { ...(bot.cfg.model === undefined ? {} : { model: bot.cfg.model }), ...(bot.cfg.effort === undefined ? {} : { effort: bot.cfg.effort }) }
+        const res = await this.deps.runCli(backend, `${system}\n${chat}`, cwd, controller.signal, want)
         if (!res.ok) throw new Error(res.error)
         raw = res.text
       }

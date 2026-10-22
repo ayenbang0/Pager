@@ -55,7 +55,14 @@ export function parseBotInput(raw: unknown): BotConfig | string {
   if (job !== undefined) return job
   const settings = settingsFrom(raw)
   if (typeof settings === 'string') return settings
-  return { conv, name, backend, instructions, ...settings }
+  const want: { model?: string; effort?: string } = {}
+  for (const key of ['model', 'effort'] as const) {
+    const v = raw[key]
+    if (v === undefined || v === '') continue
+    if (typeof v !== 'string' || v.length > 100 || /\p{Cc}/u.test(v)) return `${key} is a short word or name`
+    want[key] = v
+  }
+  return { conv, name, backend, instructions, ...want, ...settings }
 }
 
 export const STUDIO_DEFAULTS: Readonly<BotSettings> = DEFAULT_SETTINGS

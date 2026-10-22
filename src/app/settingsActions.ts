@@ -15,7 +15,6 @@ const TOGGLES: readonly string[] = ['sidebar', 'reduceMotion', 'mouse', 'alerts'
 export function applySettingSet(engine: Engine, id: string, value: boolean | string): void {
   if (typeof value === 'boolean') {
     if (id === 'notify') return engine.setNotify(value)
-    if (id === 'sound') return engine.setSound(value)
     if (id === 'agents.review') return engine.setAgentReview(value)
     if (id === 'agents.risk') return engine.setAgentRisk(value)
     if (TOGGLES.includes(id)) return engine.setSetting(id as ToggleKey, value)
@@ -32,6 +31,11 @@ export function applySettingSet(engine: Engine, id: string, value: boolean | str
       return engine.setBadge(value)
     case 'density':
       return engine.setDensity(value)
+    case 'soundMode':
+      return engine.setSoundMode(value)
+    case 'notifySound':
+    case 'ringSound':
+      return engine.setSoundPreset(id, value)
     default:
       throw new Error(`unknown setting ${id}`)
   }

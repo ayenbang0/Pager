@@ -104,9 +104,10 @@ export class AiChat extends EventEmitter {
     return { backend: this.sticky ?? this.defaultBackend(), text }
   }
 
-  /** One whole reply from Ollama or the OpenAI-compatible API, outside this tab's history (group bots ask through it). */
-  async complete(backend: 'ollama' | 'openai', messages: ChatMessage[], signal: AbortSignal): Promise<string> {
+  /** One whole reply from Ollama or the OpenAI-compatible API, outside this tab's history (group bots ask through it); `model` replaces the configured one. */
+  async complete(backend: 'ollama' | 'openai', messages: ChatMessage[], signal: AbortSignal, model?: string): Promise<string> {
     const { config } = this.effective()
+    if (model !== undefined) config[backend].model = model
     let text = ''
     const onChunk = (chunk: string): void => {
       text += chunk

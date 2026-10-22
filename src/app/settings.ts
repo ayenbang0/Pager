@@ -3,6 +3,7 @@ import path from 'node:path'
 import { parseColor } from '../ui/theme/colors.js'
 import { isRecord } from '../util/guards.js'
 import { DEFAULT_THEME, findTheme } from '../ui/theme/themes.js'
+import { isSoundName, type SoundName } from '../platform/sounds.js'
 
 /** Spacing between messages: compact is one row per message, cozy gives each speaker a header row, roomy adds a blank row between speakers. */
 export const DENSITIES = ['compact', 'cozy', 'roomy'] as const
@@ -32,8 +33,12 @@ export interface Settings {
   density: Density
   /** `/notify`: desktop notifications (outside the terminal) for messages, agents, invites and presence. */
   notify: boolean
-  /** `/sound`: the chime that goes with a notification. */
-  sound: boolean
+  /** Which events make a sound: everything, only `/ping`s aimed at me, or nothing. */
+  soundMode: SoundMode
+  /** The preset for messages and pings. */
+  notifySound: SoundName
+  /** The preset for an incoming call. */
+  ringSound: SoundName
   /** The last pager version the user saw a changelog for; empty means "show on next launch". */
   lastSeenVersion: string
   /** Restart-to-apply switches. Each maps to a PAGER_* variable (see envSettings.ts). */
@@ -51,7 +56,10 @@ export interface Settings {
   collapsed: string[]
 }
 
-export const DEFAULT_SETTINGS: Settings = { theme: DEFAULT_THEME.name, sidebar: true, accent: '', badge: 'auto', density: 'cozy', notify: true, sound: true, lastSeenVersion: '', reduceMotion: false, mouse: true, alerts: true, updateCheck: true, acp: true, web: true, agents: true, lan: false, folders: [], collapsed: [] }
+export const SOUND_MODES = ['all', 'pings', 'off'] as const
+export type SoundMode = (typeof SOUND_MODES)[number]
+
+export const DEFAULT_SETTINGS: Settings = { theme: DEFAULT_THEME.name, sidebar: true, accent: '', badge: 'auto', density: 'cozy', notify: true, soundMode: 'all', notifySound: 'chime', ringSound: 'ring', lastSeenVersion: '', reduceMotion: false, mouse: true, alerts: true, updateCheck: true, acp: true, web: true, agents: true, lan: false, folders: [], collapsed: [] }
 
 /** A badge is `auto`, `none`, or one symbol or emoji (one grapheme, not a letter or digit). Returns the stored form or undefined. */
 export function parseBadge(input: string): string | undefined {
@@ -115,7 +123,10 @@ export function loadSettings(dir: string): Settings {
     badge: (typeof parsed.badge === 'string' ? parseBadge(parsed.badge) : undefined) ?? DEFAULT_SETTINGS.badge,
     density: isDensity(parsed.density) ? parsed.density : DEFAULT_SETTINGS.density,
     notify: typeof parsed.notify === 'boolean' ? parsed.notify : DEFAULT_SETTINGS.notify,
-    sound: typeof parsed.sound === 'boolean' ? parsed.sound : DEFAULT_SETTINGS.sound,
+    // Before sound modes there was one switch: off stays off.
+    soundMode: (SOUND_MODES as readonly unknown[]).includes(parsed.soundMode) ? (parsed.soundMode as SoundMode) : parsed.sound === false ? 'off' : DEFAULT_SETTINGS.soundMode,
+    notifySound: isSoundName(parsed.notifySound) ? parsed.notifySound : DEFAULT_SETTINGS.notifySound,
+    ringSound: isSoundName(parsed.ringSound) ? parsed.ringSound : DEFAULT_SETTINGS.ringSound,
     lastSeenVersion: typeof parsed.lastSeenVersion === 'string' ? parsed.lastSeenVersion : DEFAULT_SETTINGS.lastSeenVersion,
     reduceMotion: flag(parsed.reduceMotion, DEFAULT_SETTINGS.reduceMotion),
     mouse: flag(parsed.mouse, DEFAULT_SETTINGS.mouse),

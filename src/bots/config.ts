@@ -26,12 +26,14 @@ export interface BotSettings {
   enabled: boolean
 }
 
-/** A bot in one group: its name (what `@name` calls), who answers for it (a ready agent, `ollama` or `openai`), its job and its settings. */
+/** A bot in one group: its name (what `@name` calls), who answers for it (a ready agent, `ollama` or `openai`), its job, its settings, and optionally the model and effort it asks for. */
 export interface BotConfig extends BotSettings {
   conv: string
   name: string
   backend: string
   instructions: string
+  model?: string
+  effort?: string
 }
 
 export const DEFAULT_SETTINGS: Readonly<BotSettings> = { persona: '', mode: 'auto', keywords: [], maxChars: 0, cooldownSec: 0, contextLines: 40, docs: true, talkToBots: true, enabled: true }
@@ -111,12 +113,13 @@ export function loadBots(dir: string): BotConfig[] {
   const out: BotConfig[] = []
   for (const e of isRecord(raw) && Array.isArray(raw.bots) ? raw.bots : []) {
     if (!isRecord(e)) continue
-    const { conv, name, backend, instructions } = e
+    const { conv, name, backend, instructions, model, effort } = e
     if (typeof conv !== 'string' || !/^grp:[0-9a-f]{32}$/.test(conv) || typeof name !== 'string' || botNameProblem(name) !== undefined) continue
     if (typeof backend !== 'string' || backend === '' || typeof instructions !== 'string' || instructionsProblem(instructions) !== undefined) continue
     if (out.some((b) => b.conv === conv && b.name === name)) continue
     const settings = settingsFrom(e)
-    out.push({ conv, name, backend, instructions, ...(typeof settings === 'string' ? DEFAULT_SETTINGS : settings) })
+    const ok = (v: unknown): v is string => typeof v === 'string' && v !== '' && v.length <= 100 && !/\p{Cc}/u.test(v)
+    out.push({ conv, name, backend, instructions, ...(ok(model) ? { model } : {}), ...(ok(effort) ? { effort } : {}), ...(typeof settings === 'string' ? DEFAULT_SETTINGS : settings) })
   }
   return out
 }

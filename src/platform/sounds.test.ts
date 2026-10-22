@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { chimeWav } from './chime.js'
+import { SOUND_NAMES, soundWav } from './sounds.js'
 
 const RATE = 44_100
 const NOTE_HZ = [783.99, 1174.66, 1567.98]
@@ -20,8 +20,8 @@ function magnitude(samples: readonly number[], hz: number): number {
   return Math.hypot(re, im)
 }
 
-test('the chime is a soft, unclipped triangle-wave melody', () => {
-  const wav = chimeWav()
+test('the chime preset is a soft, unclipped triangle-wave melody', () => {
+  const wav = soundWav('chime')
   assert.equal(wav.toString('ascii', 0, 4), 'RIFF')
   assert.equal(wav.toString('ascii', 8, 12), 'WAVE')
   assert.equal(wav.readUInt32LE(40), wav.length - 44)
@@ -54,4 +54,17 @@ test('the chime is a soft, unclipped triangle-wave melody', () => {
   assert.ok(third >= 0.06 && third <= 0.2, `3rd harmonic ratio ${third}`)
   const second = magnitude(first, 2 * f0) / base
   assert.ok(second < 0.05, `2nd harmonic ratio ${second}`)
+})
+
+test('every preset is a valid, normalised, unclipped WAV of a sensible length', () => {
+  for (const name of SOUND_NAMES) {
+    const wav = soundWav(name)
+    assert.equal(wav.toString('ascii', 0, 4), 'RIFF', name)
+    const count = wav.readUInt32LE(40) / 2
+    const seconds = count / RATE
+    assert.ok(seconds >= 0.1 && seconds <= 3, `${name} lasts ${seconds}s`)
+    let peak = 0
+    for (let i = 0; i < count; i++) peak = Math.max(peak, Math.abs(wav.readInt16LE(44 + i * 2)))
+    assert.ok(peak >= 0.9 * 32767 && peak <= 32767, `${name} peak ${peak}`)
+  }
 })

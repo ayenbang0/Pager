@@ -17,6 +17,9 @@ export interface ChatTurn {
   prompt: string
   cwd: string
   signal: AbortSignal
+  /** Replace the teammate's own model and effort for this turn (group bots set their own). */
+  model?: string
+  effort?: string
 }
 
 export type ChatResult = { ok: true; text: string } | { ok: false; error: string }
@@ -64,7 +67,7 @@ export async function runChatTurn(deps: ChatDeps, turn: ChatTurn): Promise<ChatR
       prompt: turn.prompt,
       cwd: turn.cwd,
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0', TERM: 'dumb' },
-      want: { model: cfg.model, effort: cfg.effort },
+      want: { model: turn.model ?? cfg.model, effort: turn.effort ?? cfg.effort },
       timeoutMs: CHAT_TIMEOUT_MS,
       isCancelled: () => turn.signal.aborted,
       onChild: (c) => {

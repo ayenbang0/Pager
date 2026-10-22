@@ -68,6 +68,7 @@ export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, a
   const theme = useTheme()
   const byId = new Map(convs.map((c) => [c.id, c]))
   const byName = new Map(room.agents.map((a) => [a.name, a]))
+  const callBadge = (conv: ConvView) => (conv.call === undefined ? [] : [pillSeg(`☎${conv.call}`, theme.pill.success)])
   const tabRow = (id: string | null) => {
     const active = activeId === id
     if (id === null) return <Row key="home" spec={{ glyph: '⌂', glyphColor: theme.accent, label: 'home' }} active={active} />
@@ -79,11 +80,11 @@ export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, a
         glyphColor: online ? theme.online : theme.dim,
         label: conv.title,
         labelColor: online ? theme.text : theme.dim,
-        badge: unreadBadge(conv.unread, theme),
+        badge: [...callBadge(conv), ...unreadBadge(conv.unread, theme)],
       }
       return <Row key={id} spec={spec} active={active} />
     }
-    if (conv) return <Row key={id} spec={{ glyph: '#', glyphColor: theme.accent2, label: conv.title, badge: unreadBadge(conv.unread, theme), ...(conv.thinking === true ? { spinner: true } : {}) }} active={active} />
+    if (conv) return <Row key={id} spec={{ glyph: '#', glyphColor: theme.accent2, label: conv.title, badge: [...callBadge(conv), ...unreadBadge(conv.unread, theme)], ...(conv.thinking === true ? { spinner: true } : {}) }} active={active} />
     if (id === ROOM_ID) return <Row key={id} spec={{ glyph: '⌁', glyphColor: theme.accent2, label: 'agents', badge: unreadBadge(room.unread, theme) }} active={active} />
     if (id === AI_ID) return <Row key={id} spec={{ glyph: '✦', glyphColor: theme.accent2, spinner: aiBusy, label: 'ai' }} active={active} />
     if (isTermTab(id)) {
