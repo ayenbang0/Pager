@@ -476,7 +476,7 @@ export function App({ engine, onExit }: Props) {
   const sharedNote =
     sharedRoom === undefined ? undefined : [sharedRoom.access, sharedRoom.connected ? undefined : 'host offline', sharedHere.length === 0 ? undefined : `with ${sharedHere.join(', ')}`].filter(Boolean).join(' · ')
   const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inWeb ? '⌕ web' : inAi ? '✦ ai' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
-  const groupBots = activeConv?.kind === 'group' && engine.agentsEnabled() ? engine.groupBots(activeConv.id) : []
+  const groupBots = activeConv !== undefined && engine.agentsEnabled() ? engine.groupBots(activeConv.id) : []
   const botNote = groupBots.length === 0 ? undefined : `${groupBots.some((b) => b.busy) ? '◆ thinking… · ' : '◆ '}${groupBots.map((b) => `@${b.name}`).join(' ')}`
   const callNote = activeConv === undefined ? undefined : engine.callRooms(activeConv.id).map((r) => `☎ ${activeConv.kind === 'dm' ? '' : `${r.room}: `}${r.people.join(', ')}`).join(' · ') || undefined
   const myCall = engine.myCall()
@@ -597,15 +597,17 @@ export function App({ engine, onExit }: Props) {
           { label: 'Invite to this group…', hint: '/group invite', run: () => fillPrompt('/group invite ') },
           { label: 'Leave this group…', hint: '/group leave', run: () => fillPrompt('/group leave') },
           { label: 'People, bots and calls in this group', hint: '/group members', run: () => setOverlay('group') },
-          ...(engine.agentsEnabled()
-            ? [
-                { label: 'Add a bot to this group…', hint: '/bot add', run: () => fillPrompt('/bot add ') },
-                ...groupBots.flatMap((b): PaletteItem[] => [
-                  { label: `Bot ${b.name}: edit…`, hint: b.backend, run: () => fillPrompt(`/bot edit ${b.name} `) },
-                  { label: `Bot ${b.name}: remove`, hint: '/bot remove', run: () => void engine.submit(`/bot remove ${b.name}`) },
-                ]),
-              ]
-            : []),
+        ]
+      : []),
+    ...(activeConv !== undefined && engine.agentsEnabled()
+      ? [
+          { label: `Add a bot to this ${activeConv.kind === 'dm' ? 'chat' : 'group'}…`, hint: '/bot add', run: () => fillPrompt('/bot add ') },
+          ...(activeConv.kind === 'dm' && groupBots.length > 0 ? [{ label: 'Bots in this chat', hint: '/bot list', run: () => setOverlay('group') }] : []),
+          ...groupBots.flatMap((b): PaletteItem[] => [
+            { label: `Bot ${b.name}: edit…`, hint: b.backend, run: () => fillPrompt(`/bot edit ${b.name} `) },
+            { label: `Bot ${b.name}: ${b.private === true ? 'listen to everyone' : 'only listen to me'}`, hint: '/bot private', run: () => void engine.submit(`/bot private ${b.name}`) },
+            { label: `Bot ${b.name}: remove`, hint: '/bot remove', run: () => void engine.submit(`/bot remove ${b.name}`) },
+          ]),
         ]
       : []),
     ...(activeConv !== undefined && !inThisCall ? [{ label: activeConv.kind === 'dm' ? `Call ${activeConv.title}` : `Join a call in # ${activeConv.title}…`, hint: '/call', run: () => (activeConv.kind === 'dm' ? void engine.submit('/call') : fillPrompt('/call ')) }] : []),
@@ -677,12 +679,13 @@ export function App({ engine, onExit }: Props) {
             (b): PanelItem =>
               b.mine
                 ? {
-                    label: `◆ ${b.name}${b.busy === true ? ' · thinking…' : ''}`,
-                    hint: `${b.backend} · model ${b.model} · effort ${b.effort}`,
+                    label: `◆ ${b.name}${b.private === true ? ' 🔒' : ''}${b.busy === true ? ' · thinking…' : ''}`,
+                    hint: `${b.private === true ? 'private · ' : ''}${b.backend} · model ${b.model} · effort ${b.effort}`,
                     enter: ['model', () => typeCommand(`/bot model ${b.name} `)],
                     keys: [
                       ['e', 'effort', () => typeCommand(`/bot effort ${b.name} `)],
                       ['j', 'job', () => typeCommand(`/bot edit ${b.name} ${b.job ?? ''}`)],
+                      ['p', b.private === true ? 'open' : 'private', () => runCommand(`/bot private ${b.name}`)],
                       ['x', 'remove', () => runCommand(`/bot remove ${b.name}`)],
                     ],
                   }
@@ -698,7 +701,7 @@ export function App({ engine, onExit }: Props) {
               ...(r.mine ? { keys: [['m', myCall?.muted === true ? 'unmute' : 'mute', () => runCommand('/mute')]] as const } : {}),
             }),
           ),
-          { label: '+ New call room…', hint: '/call <room>', enter: ['name it', () => typeCommand('/call ')] },
+          ...(groupView.dm ? [] : [{ label: '+ New call room…', hint: '/call <room>', enter: ['name it', () => typeCommand('/call ')] as const }]),
         ]
   const KINDS = { contact: 'CONTACT REQUESTS', group: 'GROUP INVITES', session: 'AGENT SESSIONS' } as const
   const requestItems: PanelItem[] = (['contact', 'group', 'session'] as const).flatMap((kind) => {
@@ -777,7 +780,7 @@ export function App({ engine, onExit }: Props) {
                 }}
               />
             ) : overlay === 'group' ? (
-              <ListPanel title={groupView === undefined ? 'GROUP' : `# ${groupView.title}`} items={groupItems} empty="open a group first" height={paneRows + 1} onClose={closeOverlay} />
+              <ListPanel title={groupView === undefined ? 'CHAT' : groupView.dm ? groupView.title : `# ${groupView.title}`} items={groupItems} empty="open a chat or a group first" height={paneRows + 1} onClose={closeOverlay} />
             ) : overlay === 'requests' ? (
               <ListPanel title="REQUESTS" items={requestItems} empty="nothing to accept" height={paneRows + 1} onClose={closeOverlay} />
             ) : overlay === 'model' ? (

@@ -17,7 +17,7 @@ import { isTermTab, TERM_ID, Terminals } from '../tools/terminal/sessions.js'
 import { WebTool, WEB_ID, formatResults } from '../tools/web/tool.js'
 import { AiChat, AI_ID } from '../ai/chat.js'
 import { runChatTurn, type ChatResult } from '../agents/chat.js'
-import { GroupBots, type BotView } from '../bots/bots.js'
+import { ChatBots, type BotView } from '../bots/bots.js'
 import type { BotLine } from '../bots/prompt.js'
 import { encodeBotMessage, parseBotMessage } from '../chat/botMessage.js'
 import { findSox, soxAudio, type AudioIo } from '../calls/audio.js'
@@ -73,18 +73,20 @@ export interface ConvView {
   /** DM only. */
   online: boolean | null
   unread: number
-  /** Groups only: one of my bots there is deciding or writing. */
+  /** One of my bots in this chat is deciding or writing. */
   thinking?: boolean
   /** People in this conversation's call rooms (me included), when anyone is in one. */
   call?: number
 }
-/** The group screen: who is in the group, which bots talk there and who is in which call room. */
+/** The chat screen (groups and DMs): who is in it, which bots talk there and who is in which call room. */
 export interface GroupView {
   id: string
+  /** The group's title, or the other person's name in a DM. */
   title: string
+  dm: boolean
   people: { pk: string; name: string; me: boolean; creator: boolean; online: boolean; contact: boolean; room?: string }[]
   /** Mine with their settings; other members' bots as seen in the chat. */
-  bots: { name: string; host: string; mine: boolean; backend?: string; model?: string; effort?: string; job?: string; busy?: boolean }[]
+  bots: { name: string; host: string; mine: boolean; backend?: string; model?: string; effort?: string; job?: string; busy?: boolean; private?: boolean }[]
   rooms: { room: string; people: string[]; mine: boolean }[]
 }
 /** The call I am in. */
@@ -231,8 +233,8 @@ export class Engine extends EventEmitter {
   readonly web: WebTool
   /** The AI tab; absent in a run without agents. */
   readonly ai: AiChat | undefined
-  /** AI bots in groups; absent in a run without agents. */
-  private readonly bots: GroupBots | undefined
+  /** AI bots in groups and DMs; absent in a run without agents. */
+  private readonly bots: ChatBots | undefined
   private readonly calls: Calls
   private readonly webFetch: typeof fetch | undefined
   readonly docs: DocStore
@@ -367,22 +369,23 @@ export class Engine extends EventEmitter {
     this.bots =
       ai === undefined
         ? undefined
-        : new GroupBots({
+        : new ChatBots({
             dir: opts.dir,
             backends: () => ai.backends(),
             runCli,
             complete: (backend, messages, signal, model) => ai.complete(backend, messages, signal, model),
             lines: (conv, limit) => this.store.listMessages(conv, limit).flatMap((e) => this.botLine(e) ?? []),
-            group: (convId) => {
+            chat: (convId) => {
               const conv = this.store.getConv(convId)
-              if (!conv || conv.kind !== 'group' || conv.state !== 'active') return undefined
-              return { title: `#${conv.title}`, host: this.me.name, people: [...this.store.members(convId).current].map((pk) => this.nameOf(pk)) }
+              if (!this.writable(conv)) return undefined
+              if (conv.kind === 'dm') return { title: this.nameOf(conv.peer ?? ''), host: this.me.name, people: [this.me.name, this.nameOf(conv.peer ?? '')], dm: true }
+              return { title: `#${conv.title}`, host: this.me.name, people: [...this.store.members(convId).current].map((pk) => this.nameOf(pk)), dm: false }
             },
             post: (conv, name, text) => this.postBot(conv, name, text),
             // A secure session keeps documents out of every agent, bots included.
             docs: (conv) => (this.secure ? undefined : this.docs.list(conv).map((d) => ({ name: d.name, text: this.docs.text(d.id) }))),
             writeDoc: (conv, name, text, append, base) => this.botDocWrite(conv, name, text, append, base),
-            failed: (conv, name, error) => this.toast('warn', `Bot ${name} in ${this.convLabels().get(conv) ?? 'a group'}: ${error}`),
+            failed: (conv, name, error) => this.toast('warn', `Bot ${name} in ${this.convLabels().get(conv) ?? 'a chat'}: ${error}`),
           })
     this.bots?.on('change', () => this.emit('change'))
     this.calls = new Calls({
@@ -393,7 +396,7 @@ export class Engine extends EventEmitter {
       },
       members: (convId) => {
         const conv = this.store.getConv(convId)
-        if (!conv || conv.state !== 'active' || (conv.kind === 'dm' && this.store.getPeer(conv.peer ?? '')?.state !== 'accepted')) return undefined
+        if (!this.writable(conv)) return undefined
         return this.otherMembers(conv)
       },
       audio: opts.audio ?? soxAudio,
@@ -501,6 +504,7 @@ export class Engine extends EventEmitter {
           online: this.net.link(peer.pk) !== undefined,
           unread: this.store.unreadCount(conv.id, this.me.pk),
           ...this.callCount(conv.id),
+          ...(this.bots?.busy(conv.id) === true ? { thinking: true } : {}),
         })
       } else if (conv.state === 'active') {
         groups.push({
@@ -537,12 +541,13 @@ export class Engine extends EventEmitter {
     return this.calls.roomsIn(convId).map((r) => ({ ...r, people: r.people.map((pk) => this.nameOf(pk)) }))
   }
 
-  /** Everything the group screen shows; undefined when `convId` is not an active group. */
+  /** Everything the chat screen shows; undefined when `convId` is not an active group or DM. */
   groupView(convId: string): GroupView | undefined {
     const conv = this.store.getConv(convId)
-    if (!conv || conv.kind !== 'group' || conv.state !== 'active') return undefined
+    if (!this.writable(conv)) return undefined
+    const pks = conv.kind === 'dm' ? [this.me.pk, conv.peer ?? ''] : [...this.store.members(convId).current]
     const rooms = this.calls.roomsIn(convId)
-    const people = [...this.store.members(convId).current].map((pk) => {
+    const people = pks.map((pk) => {
       const room = rooms.find((r) => r.people.includes(pk))?.room
       return {
         pk,
@@ -563,15 +568,17 @@ export class Engine extends EventEmitter {
       effort: b.effort ?? 'default',
       job: b.instructions,
       busy: b.busy,
+      private: b.private === true,
     }))
     // Other members' bots run on their machines: what the chat shows is all there is to know. A goodbye means it is gone.
     const seen = new Map<string, { name: string; author: string; gone: boolean }>()
     for (const e of this.store.listMessages(convId, 300)) {
       const bot = e.author === this.me.pk ? undefined : parseBotMessage(e.body)
-      if (bot !== undefined) seen.set(`${e.author}:${bot.name}`, { name: bot.name, author: e.author, gone: bot.text === `👋 ${bot.name} left the group.` })
+      if (bot !== undefined) seen.set(`${e.author}:${bot.name}`, { name: bot.name, author: e.author, gone: bot.text === `👋 ${bot.name} left the group.` || bot.text === `👋 ${bot.name} left the chat.` })
     }
     const others = [...seen.values()].filter((b) => !b.gone).map((b) => ({ name: b.name, host: this.nameOf(b.author), mine: false }))
-    return { id: convId, title: conv.title, people, bots: [...mine, ...others], rooms: rooms.map((r) => ({ ...r, people: r.people.map((pk) => this.nameOf(pk)) })) }
+    const title = conv.kind === 'dm' ? this.nameOf(conv.peer ?? '') : conv.title
+    return { id: convId, title, dm: conv.kind === 'dm', people, bots: [...mine, ...others], rooms: rooms.map((r) => ({ ...r, people: r.people.map((pk) => this.nameOf(pk)) })) }
   }
 
   /** Opens the group screen for the open group. */
@@ -692,7 +699,7 @@ export class Engine extends EventEmitter {
     })
   }
 
-  /** My bots in a group, for the palette and the tab header. */
+  /** My bots in a chat, for the palette and the tab header. */
   groupBots(convId: string): BotView[] {
     return this.bots?.list(convId) ?? []
   }
@@ -1975,6 +1982,7 @@ export class Engine extends EventEmitter {
     const dm = this.store.getConv(dmConvId(this.me.pk, peer.pk))
     if (dm && this.activeId === dm.id) this.activeId = null
     this.store.deletePeer(peer.pk)
+    if (dm) this.bots?.forget(dm.id)
     this.net.link(peer.pk)?.close()
     this.net.refresh()
     this.toast('info', `Removed ${peer.name || pk8(peer.pk)}`)
@@ -2001,26 +2009,33 @@ export class Engine extends EventEmitter {
     }
   }
 
-  /** `/bot …` in an open group: add, edit, remove, list or stop the bots that run here. */
+  /** `/bot …` in an open group or DM: add, edit, remove, list or stop the bots that run here. */
   private cmdBot(args: string[], rest: string): void {
-    const usage = 'Usage: /bot add <name> [@backend] <job> | edit <name> [@backend] [job] | model <name> [model] | effort <name> [level] | remove <name> | list | stop'
+    const usage = 'Usage: /bot add <name> [@backend] [--private] <job> | edit <name> [@backend] [job] | private <name> [on|off] | model <name> [model] | effort <name> [level] | remove <name> | list | stop'
     if (this.bots === undefined || this.ai === undefined) return this.toast('error', AGENTS_OFF)
-    const conv = this.activeGroup()
-    if (!conv) return
+    const conv = this.activeId ? this.store.getConv(this.activeId) : undefined
+    if (!this.writable(conv)) return this.toast('error', 'Open a chat or a group first')
+    const where = this.chatLabel(conv)
     const sub = (args[0] ?? 'list').toLowerCase()
     const name = (args[1] ?? '').toLowerCase()
-    const words = rest.split(/\s+/).slice(2)
+    const all = rest.split(/\s+/).slice(2)
+    const isPrivate = sub === 'add' && all.includes('--private')
+    const words = sub === 'add' ? all.filter((w) => w !== '--private') : all
     const backend = words[0]?.startsWith('@') === true ? words[0].slice(1).toLowerCase() : undefined
     const job = (backend === undefined ? words : words.slice(1)).join(' ')
     switch (sub) {
       case 'add': {
-        if (name === '') return this.toast('error', 'Usage: /bot add <name> [@backend] <job>, e.g. /bot add grumpy @claude argue with every point anyone makes')
+        if (name === '') return this.toast('error', 'Usage: /bot add <name> [@backend] [--private] <job>, e.g. /bot add grumpy @claude argue with every point anyone makes')
         const chosen = backend ?? this.ai.defaultBackend()
-        const why = this.bots.add(conv.id, name, chosen, job)
+        const why = this.bots.add(conv.id, name, chosen, job, isPrivate)
         if (why !== undefined) return this.toast('error', why)
-        this.toast('success', `${name} joined #${conv.title} (${chosen}): it answers when its job calls for it, or when someone writes @${name}`)
-        if (chosen !== 'ollama' && chosen !== 'openai') this.toast('warn', `Everyone in #${conv.title} can steer ${name}: ${chosen} runs with auto-approved tools in ${this.bots.sandbox(conv.id, name)}`)
-        return this.postBot(conv.id, name, `👋 Hi, I'm ${name}, ${this.me.name}'s bot (${chosen}). I read this group and reply when it fits my job, or when someone writes @${name}.`)
+        if (isPrivate) {
+          this.toast('success', `${name} joined ${where} (${chosen}, private): only you can talk to it`)
+          return this.postBot(conv.id, name, `👋 Hi, I'm ${name}, ${this.me.name}'s private bot (${chosen}). I only read and answer ${this.me.name}.`)
+        }
+        this.toast('success', `${name} joined ${where} (${chosen}): it answers when its job calls for it, or when someone writes @${name}`)
+        if (chosen !== 'ollama' && chosen !== 'openai') this.toast('warn', `Everyone in ${where} can steer ${name}: ${chosen} runs with auto-approved tools in ${this.bots.sandbox(conv.id, name)}. /bot private ${name} lets only you talk to it`)
+        return this.postBot(conv.id, name, `👋 Hi, I'm ${name}, ${this.me.name}'s bot (${chosen}). I read this chat and reply when it fits my job, or when someone writes @${name}.`)
       }
       case 'edit': {
         if (name === '' || (backend === undefined && job === '')) return this.toast('error', 'Usage: /bot edit <name> [@backend] [job]')
@@ -2028,16 +2043,26 @@ export class Engine extends EventEmitter {
         return this.toast(why === undefined ? 'success' : 'error', why ?? `${name} updated (applies from its next turn)`)
       }
       case 'remove':
-        if (!this.bots.remove(conv.id, name)) return this.toast('error', `No bot named ${name || '…'} in #${conv.title}. Bots: ${this.bots.list(conv.id).map((b) => b.name).join(', ') || 'none'}`)
-        this.postBot(conv.id, name, `👋 ${name} left the group.`)
+        if (!this.bots.remove(conv.id, name)) return this.toast('error', `No bot named ${name || '…'} in ${where}. Bots: ${this.bots.list(conv.id).map((b) => b.name).join(', ') || 'none'}`)
+        this.postBot(conv.id, name, `👋 ${name} left the ${conv.kind === 'dm' ? 'chat' : 'group'}.`)
         return this.toast('info', `Removed ${name} and its sandbox folder`)
+      case 'private': {
+        const bot = this.bots.list(conv.id).find((b) => b.name === name)
+        const want = (args[2] ?? '').toLowerCase()
+        if (bot === undefined || !['', 'on', 'off'].includes(want)) return this.toast('error', `Usage: /bot private <${this.bots.list(conv.id).map((b) => b.name).join('|') || 'name'}> [on|off]`)
+        const on = want === '' ? bot.private !== true : want === 'on'
+        if (on === (bot.private === true)) return this.toast('info', `${name} is already ${on ? 'private' : 'open to everyone'}`)
+        this.bots.edit(conv.id, name, { private: on })
+        this.toast('success', on ? `${name} is private: only you can talk to it` : `${name} listens to everyone in ${where} again`)
+        return this.postBot(conv.id, name, on ? `🔒 ${name} now only reads and answers ${this.me.name}.` : `🔓 ${name} listens to everyone here again.`)
+      }
       case 'model':
       case 'effort':
         return this.botSetting(conv, name, sub, args.slice(2).join(' ').trim())
       case 'list':
-        return this.openGroupPanel()
+        return void this.emit('overlay', 'group')
       case 'stop':
-        return this.toast('info', this.bots.stop(conv.id) ? 'Stopped the bots in this group' : 'No bot is busy here')
+        return this.toast('info', this.bots.stop(conv.id) ? `Stopped the bots in ${where}` : 'No bot is busy here')
       default:
         this.toast('error', usage)
     }
@@ -2623,7 +2648,7 @@ export class Engine extends EventEmitter {
       this.toast('warn', 'Open a conversation first (Ctrl+P) or /add a contact')
       return
     }
-    if (conv.state !== 'active' || (conv.kind === 'dm' && this.store.getPeer(conv.peer ?? '')?.state !== 'accepted')) {
+    if (!this.writable(conv)) {
       this.toast('error', 'This conversation is not active')
       return
     }
@@ -2650,13 +2675,23 @@ export class Engine extends EventEmitter {
     return `${append ? 'added to' : 'rewrote'} ${doc.name}`
   }
 
-  /** One of my bots speaks in a group: an event signed by me that every member shows under the bot's name. */
+  /** An active conversation I can write in: a group I am in, or a DM with an accepted contact. */
+  private writable(conv: Conv | undefined): conv is Conv {
+    return conv !== undefined && conv.state === 'active' && (conv.kind === 'group' || this.store.getPeer(conv.peer ?? '')?.state === 'accepted')
+  }
+
+  /** `#crew` for a group, the contact's name for a DM. */
+  private chatLabel(conv: Conv): string {
+    return conv.kind === 'group' ? `#${conv.title}` : this.nameOf(conv.peer ?? '')
+  }
+
+  /** One of my bots speaks in a group or DM: an event signed by me that every member shows under the bot's name. */
   private postBot(convId: string, name: string, text: string): void {
     const conv = this.store.getConv(convId)
-    if (!conv || conv.kind !== 'group' || conv.state !== 'active') return
+    if (!this.writable(conv)) return
     const event = this.appendEvent(convId, 'text', encodeBotMessage(name, text))
     if (this.activeId === convId) this.store.markRead(convId, event.ts)
-    else this.toast('info', `#${conv.title} ${name}: ${text.slice(0, 60)}`)
+    else this.toast('info', `${this.chatLabel(conv)} ${name}: ${text.slice(0, 60)}`)
     this.emit('change')
     this.deliver(conv, event)
     this.hearBots(event)
@@ -2665,11 +2700,11 @@ export class Engine extends EventEmitter {
   /** A chat or bot message as the bots read it; undefined for documents, renames, reactions and membership. */
   private botLine(e: PagerEvent): BotLine | undefined {
     if (e.kind !== 'text') return undefined
-    const base = { key: `${e.author}:${e.seq}`, ts: e.ts, from: this.nameOf(e.author) }
+    const base = { key: `${e.author}:${e.seq}`, ts: e.ts, from: this.nameOf(e.author), mine: e.author === this.me.pk }
     const op = opOf(e.body)
     if (op === null) return { ...base, text: e.body }
     const bot = op === 'bot' ? parseBotMessage(e.body) : undefined
-    return bot === undefined ? undefined : { ...base, bot: { name: bot.name, mine: e.author === this.me.pk }, text: bot.text }
+    return bot === undefined ? undefined : { ...base, bot: { name: bot.name }, text: bot.text }
   }
 
   /** Offers a new chat line to the bots of its group. */

@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Group screen** (`/group members`): people, bots and call rooms in one list, with keys to ping, open a chat, join a room or change a bot
 - **Requests screen** (`/requests`): contact requests, group invites and agent sessions to accept or decline
 - **Bot model and effort**: `/bot model` and `/bot effort`
+- **Bots in DMs**: `/bot add` works in a direct chat too; both people talk to the bot, and `/bot list` opens the chat screen
+- **Private bots**: `/bot add … --private` or `/bot private <name>` lets only you talk to a bot; nobody else's messages wake it or reach it
 
 ### Changed
 

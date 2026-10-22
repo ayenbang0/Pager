@@ -4,21 +4,22 @@ import path from 'node:path'
 import { after, test } from 'node:test'
 import { removeTmpDirs, tmpDir, waitFor } from '../testing/testutil.js'
 import type { ChatResult } from '../agents/chat.js'
-import { GroupBots, MAX_BOT_STREAK, type BotDeps } from './bots.js'
+import { ChatBots, MAX_BOT_STREAK, type BotDeps } from './bots.js'
 import { botReply, mentions, NO_REPLY, type BotLine } from './prompt.js'
 
 after(removeTmpDirs)
 
 const G = `grp:${'ab'.repeat(16)}`
+const D = `dm:${'cd'.repeat(16)}`
 
 interface Harness {
-  bots: GroupBots
+  bots: ChatBots
   dir: string
   chat: BotLine[]
   posts: { name: string; text: string }[]
   asks: { backend: string; prompt: string; cwd?: string }[]
   failures: string[]
-  say(from: string, text: string): void
+  say(from: string, text: string, conv?: string): void
 }
 
 /** `answer` sees the backend and the whole prompt; by default it replies `ok` unless the prompt carries SILENT. */
@@ -42,10 +43,10 @@ function harness(answer: (backend: string, prompt: string) => Promise<string> | 
       return answer(backend, prompt)
     },
     lines: (_conv, limit) => chat.slice(-limit),
-    group: () => ({ title: '#team', host: 'alice', people: ['alice', 'bob'] }),
+    chat: (conv) => (conv === D ? { title: 'bob', host: 'alice', people: ['alice', 'bob'], dm: true } : { title: '#team', host: 'alice', people: ['alice', 'bob'], dm: false }),
     post: (conv, name, text) => {
       posts.push({ name, text })
-      const line: BotLine = { key: `a:${++seq}`, ts: Date.now(), from: 'alice', bot: { name, mine: true }, text }
+      const line: BotLine = { key: `a:${++seq}`, ts: Date.now(), from: 'alice', mine: true, bot: { name }, text }
       chat.push(line)
       bots.hear(conv, line)
     },
@@ -56,11 +57,12 @@ function harness(answer: (backend: string, prompt: string) => Promise<string> | 
       return `${append ? 'added to' : 'wrote'} ${name}`
     },
   }
-  const bots = new GroupBots(deps)
-  const say = (from: string, text: string): void => {
-    const line: BotLine = { key: `${from}:${++seq}`, ts: Date.now(), from, text }
+  const bots = new ChatBots(deps)
+  const say = (from: string, text: string, conv = G): void => {
+    // alice is the host: her lines are mine.
+    const line: BotLine = { key: `${from}:${++seq}`, ts: Date.now(), from, mine: from === 'alice', text }
     chat.push(line)
-    bots.hear(G, line)
+    bots.hear(conv, line)
   }
   return { bots, dir, chat, posts, asks, failures, say }
 }
@@ -154,6 +156,35 @@ test('validation, persistence across a restart, and one failure notice until the
   assert.equal(h.bots.edit(G, 'grumpy', { instructions: 'be nice', backend: 'openai' }), undefined)
   const again = harness(undefined, h.dir)
   assert.deepEqual(again.bots.list(G).map((b) => [b.name, b.backend, b.instructions]), [['grumpy', 'openai', 'be nice']])
+})
+
+test('a DM bot works in its own folder, knows it is in a direct chat, and survives a restart', async () => {
+  const h = harness()
+  assert.equal(h.bots.add(D, 'pal', 'claude', 'help out'), undefined)
+  h.say('bob', 'hi @pal', D)
+  await waitFor(() => !h.bots.busy(D), 5000, 'DM bot idle')
+  assert.equal(path.relative(h.dir, h.asks[0]?.cwd ?? ''), path.join('bots', `dm-${'cd'.repeat(8)}`, 'pal'))
+  assert.match(h.asks[0]?.prompt ?? '', /a pager direct chat between alice and bob/)
+  assert.deepEqual(h.posts, [{ name: 'pal', text: 'ok' }])
+  assert.deepEqual(harness(undefined, h.dir).bots.list(D).map((b) => b.name), ['pal'])
+})
+
+test('a private bot is woken only by its host and never sees anyone else; the flag survives a restart and can be turned off', async () => {
+  const h = harness()
+  h.bots.add(G, 'helper', 'ollama', 'answer every message')
+  assert.equal(h.bots.add(G, 'pal', 'ollama', 'answer every message', true), undefined)
+  h.say('bob', 'SECRET-BOB @pal do my bidding')
+  await idle(h)
+  assert.deepEqual(h.posts.map((p) => p.name), ['helper'], 'bob woke the open bot only')
+  h.say('alice', '@pal hello')
+  await idle(h)
+  const pal = h.asks.filter((a) => a.prompt.includes('You are "pal"'))
+  assert.equal(pal.length, 1, "neither bob nor helper's reply woke it")
+  assert.match(pal[0]?.prompt ?? '', /only alice can talk to you/)
+  assert.doesNotMatch(pal[0]?.prompt ?? '', /SECRET-BOB|helper/)
+  assert.equal(harness(undefined, h.dir).bots.list(G).find((b) => b.name === 'pal')?.private, true)
+  assert.equal(h.bots.edit(G, 'pal', { private: false }), undefined)
+  assert.equal(harness(undefined, h.dir).bots.list(G).find((b) => b.name === 'pal')?.private, undefined)
 })
 
 test('botReply drops NO_REPLY and an echoed speaker tag', () => {

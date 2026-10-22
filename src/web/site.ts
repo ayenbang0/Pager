@@ -58,7 +58,7 @@ const ENV: Row[] = [
 ]
 const FEATURES = [
   ['Peer-to-peer chat', 'Contacts and groups talk directly over a DHT. No server holds your messages; history is stored locally and can be encrypted with a passphrase.'],
-  ['Group bots', 'Add AI bots to a group with /bot add. They answer when called with @name and chime in when their job calls for it. Backends: a ready agent, Ollama or OpenAI.'],
+  ['Bots', 'Add AI bots to a DM or a group with /bot add. They answer when called with @name and chime in when their job calls for it. Backends: a ready agent, Ollama or OpenAI.'],
   ['Terminal tabs', 'A real shell on a pseudo-terminal, up to six tabs. Commands become blocks with exit status and timing; select a block to explain it or run a lens over its output.'],
   ['Run from anywhere', '`pager run` and /run open a Terminal tab in a folder and type a command, even from another process. The desktop window forwards its own command line the same way.'],
   ['Coding agents', 'Run agents in isolated git worktrees with /agent: chains, reviews, merge, undo, and a shared room contacts can watch or control.'],
