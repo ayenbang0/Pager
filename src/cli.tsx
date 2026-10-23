@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import './platform/env.js'
 import fs from 'node:fs'
+import path from 'node:path'
 import type { Engine } from './app/engine.js'
 import type { LanHandle } from './net/lan.js'
 import { acquireLock, AlreadyRunningError } from './platform/lock.js'
@@ -14,22 +15,36 @@ import { loadSettings } from './app/settings.js'
 import { promptSecret } from './platform/secretPrompt.js'
 import { startError } from './platform/appControl.js'
 import { sendControl, startControl } from './app/control.js'
-import { openUrl } from './platform/openUrl.js'
+import { openInApp } from './platform/appBrowser.js'
 import type { Secrets } from './chat/secrets.js'
 
 const USAGE = `pager: a simpler way to chat
 
-Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | docs | desktop | update | lock | unlock | -h | --help | -v | --version]
+Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | docs | studio | desktop | daemon | split | capture | send | ls | events | open | update | lock | unlock | -h | --help | -v | --version]
 
   --cwd DIR          start with the Terminal tab in DIR
   --lan [host:port]  chat over the local network only: find (or start) the network's DHT, or join the one at host:port
   --no-agents        turn off the agents room, the AI tab and the agent tool server
 
-  docs             open the local docs and your usage stats (a running pager serves them; opens in your browser)
+  docs             open the local docs and your usage stats (a running pager serves them; shown in the desktop window's browser pane)
+  studio           open the local bot studio: shape bots in fine detail, preview their prompt, try them
   run [--cwd DIR] [--] <command...>
                    run a command in a new Terminal tab of the running pager (or start pager with it)
   desktop install|uninstall|launch|status
                    Windows only: a glass window host for pager (Windows Terminal), Start menu entry, "Open Pager here"
+  daemon start|stop|status
+                   the session daemon that keeps the desktop window's programs alive between windows
+  split right|down [--pane ID] [--kind K] [--cwd DIR] [-- COMMAND...]
+                   a pane beside this one (or the focused one) in the desktop window
+  capture [--pane ID] [--lines N] [--ansi] [--json]
+                   print what a pane shows
+  send [--pane ID] [--no-enter] TEXT...
+                   type TEXT (and Enter) into a pane
+  ls [--json]      sessions, tabs and panes
+  events [--filter KIND,...]
+                   JSON lines of what happens, until interrupted
+  open [--pane ID] [--split right|down] [--tab] PATH[:LINE[:COL]]... | URL
+                   show files in a files block, or a page in the browser pane
   update           install the latest release (npm install -g pager-cli@latest)
   lock             protect your identity key and encrypt history, group titles and contact names with a passphrase
   unlock           remove that protection again
@@ -55,18 +70,22 @@ if (parsed.command === 'version') {
   process.exit(0)
 }
 if (parsed.command === 'update') process.exit(await runUpdate(dataDir(), VERSION))
-if (parsed.command === 'docs') {
-  const sent = await sendControl(dataDir(), { type: 'docs' })
+if (parsed.command === 'docs' || parsed.command === 'studio') {
+  const sent = await sendControl(dataDir(), parsed.command === 'studio' ? { type: 'docs', page: 'studio' } : { type: 'docs' })
   if (sent.kind === 'none' || !sent.reply.ok || sent.reply.url === undefined) {
-    process.stderr.write(sent.kind === 'ok' && !sent.reply.ok ? `${sent.reply.error}\n` : 'pager is not running: start it, then run pager docs (or press F1 in the desktop window)\n')
+    process.stderr.write(sent.kind === 'ok' && !sent.reply.ok ? `${sent.reply.error}\n` : 'pager is not running: start it, then run pager ${parsed.command} (or press F1 / F2 in the desktop window)\n')
     process.exit(1)
   }
-  if (!openUrl(sent.reply.url)) process.stdout.write(`${sent.reply.url}\n`)
+  if (!(await openInApp(sent.reply.url))) process.stdout.write(`${sent.reply.url}\n(the browser pane lives in the Pager desktop window: pager desktop install)\n`)
   process.exit(0)
 }
 if (parsed.command === 'desktop') {
   const { runDesktop } = await import('./host/cli.js') // only the desktop commands pay for loading it
   process.exit(await runDesktop(parsed.desktop!, dataDir()))
+}
+if (parsed.command === 'daemon') {
+  const { runDaemonCommand } = await import('./daemon/cli.js') // only the daemon commands pay for loading it
+  process.exit(await runDaemonCommand(parsed.daemon!, dataDir()))
 }
 if (parsed.cwd !== undefined) {
   let isDir = false
@@ -85,6 +104,17 @@ let startup: { cwd: string; command?: string } | undefined
 if (parsed.command === 'exec') {
   const command = parsed.words?.join(' ')
   const request = { cwd: process.cwd(), ...(command === undefined ? {} : { command }) }
+  if (process.env.PAGER_PANE !== undefined) {
+    // Inside a desktop pane the daemon lays the new shell out beside this pane; a daemon that is gone falls through to the control pipe.
+    const { runInDaemon } = await import('./daemon/cli.js')
+    try {
+      await runInDaemon(dataDir(), request)
+      process.stdout.write('sent to pager\n')
+      process.exit(0)
+    } catch {
+      // no daemon behind this pane: the usual way below
+    }
+  }
   let sent
   try {
     sent = await sendControl(dataDir(), { type: 'run', ...request })
@@ -194,7 +224,7 @@ if (process.env.PAGER_NO_UPDATE_CHECK !== '1') {
 
 let control: { close(): void } | undefined
 try {
-  control = await startControl(dir, (r) => (r.type === 'docs' ? engine.docsUrl().then((url) => ({ ok: true as const, url })) : engine.runInTerminal(r)))
+  control = await startControl(dir, (r) => (r.type === 'docs' ? engine.docsUrl(r.page).then((url) => ({ ok: true as const, url })) : engine.runInTerminal(r)))
 } catch {
   // No control channel (name taken, pipes unavailable): pager still works, `pager run` just starts its own.
 }
@@ -229,8 +259,48 @@ const app = render(createElement(App, { engine, onExit: () => void shutdown(0) }
 })
 
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) process.on(signal, () => void shutdown(0))
-process.on('uncaughtException', (err) => void shutdown(1, err))
-process.on('unhandledRejection', (err) => void shutdown(1, err))
+// Ink ends on its own when the UI throws while rendering (its exit promise rejects): that is a real crash, so leave with its error.
+void app.waitUntilExit().then(
+  () => void shutdown(0),
+  (err: unknown) => {
+    recordCrash('ui', err)
+    void shutdown(1, err)
+  },
+)
+
+// Last resort: a stray error in a background task must not take the whole session down with it. Errors that leave the process unsound
+// (the terminal is gone, out of memory) or that keep coming still end the run; any other is logged to crash.log and shown as a toast.
+const crashLog = path.join(dir, 'crash.log')
+const FATAL_CODES = new Set(['EPIPE', 'EIO', 'ENOMEM', 'ERR_WORKER_OUT_OF_MEMORY', 'ERR_STREAM_WRITE_AFTER_END', 'ERR_USE_AFTER_CLOSE'])
+const STORM = { count: 20, windowMs: 10_000 }
+const recent: number[] = []
+function errorText(err: unknown): string {
+  return err instanceof Error ? (err.stack ?? err.message) : String(err)
+}
+function recordCrash(kind: string, err: unknown): void {
+  try {
+    fs.appendFileSync(crashLog, `[${new Date().toISOString()}] ${kind} (pager ${VERSION}): ${errorText(err)}\n`)
+  } catch {
+    // The data directory may be what is broken; the toast and stderr path below still run.
+  }
+}
+function survive(kind: string, err: unknown): void {
+  recordCrash(kind, err)
+  const code = typeof err === 'object' && err !== null && 'code' in err ? String(err.code) : ''
+  const now = Date.now()
+  recent.push(now)
+  while (recent.length > 0 && now - recent[0]! > STORM.windowMs) recent.shift()
+  if (shuttingDown) return
+  if (FATAL_CODES.has(code) || recent.length >= STORM.count) return void shutdown(1, err)
+  try {
+    const why = err instanceof Error ? err.message : String(err)
+    engine.toast('error', `Pager hit an error and kept going: ${why.slice(0, 200)} (details: ${crashLog})`)
+  } catch {
+    // No toast: the log has it.
+  }
+}
+process.on('uncaughtException', (err) => survive('uncaughtException', err))
+process.on('unhandledRejection', (err) => survive('unhandledRejection', err))
 
 // `pager run` found no running pager: this one starts with the request.
 if (startup !== undefined) {

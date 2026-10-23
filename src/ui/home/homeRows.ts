@@ -3,16 +3,16 @@ import { gradientAt, mix } from '../theme/colors.js'
 import type { HomeStats } from '../../app/engine.js'
 import type { Theme } from '../theme/themes.js'
 import { chipPillKind, ctxTone, stateColor, stateWord } from '../chrome/agentChrome.js'
-import { LOGO, LOGO_WIDTH, REVEAL_FRAMES, sparkline, tagline, TAGLINE } from './banner.js'
+import { REVEAL_FRAMES, sparkline, tagline, TAGLINE, WORDMARK } from './banner.js'
 import type { HomeAgentRow, HomeAgents } from './homeAgents.js'
 import { agentTint, type Look } from '../theme/look.js'
 import { bandLabel, clipSegs, fitSegs, gradientRule, gradientText, keycap, mergeSegs, pillSeg, segsWidth, type Seg } from '../kit/segs.js'
 
 /** Fewest pane rows the banner is worth drawing in: the mark, the greeting and a wrapped contact code. */
 export const BANNER_ROWS = 6
-/** The five-letter block logo needs this much pane width and height; below either, a one-line mark. */
-export const BIG_LOGO_MIN_WIDTH = 60
-export const BIG_LOGO_MIN_ROWS = 24
+/** The wordmark with its wings and tagline needs this much pane width and height; below either, a one-line mark. */
+export const ROOMY_HEADER_MIN_WIDTH = 60
+export const ROOMY_HEADER_MIN_ROWS = 24
 /** Two columns of cards from this pane width; narrower panes stack them. */
 export const TWO_COLUMN_MIN_WIDTH = 84
 /** The cards never spread wider than this, however wide the pane. */
@@ -142,77 +142,23 @@ export function bandTitleSegs(title: string, width: number, theme: Theme): Seg[]
   return clipSegs([...left, { text: ' ' }, ...gradientRule(rule, theme.gradient, '━')], width)
 }
 
-/** A glitch burst starts this often (in frames) after the logo has been revealed, and lasts GLITCH_FRAMES. About every 2.5 s at 70 ms a frame. */
-export const GLITCH_EVERY = 36
-export const GLITCH_FRAMES = 2
-/** Cells that flicker to a pixel glyph in one burst, and how far a sliced strip slides. Small on purpose: a hint of static, not a show. */
-const GLITCH_CELLS = 5
-const GLITCH_SLIDE = 1
-const PIXEL_GLYPHS = ['▀', '▄', '▌', '▐', '░', '▒', '▖', '▗', '▘', '▝'] as const
-
-/** A repeatable pseudo-random number in [0, 1) for `seed`, so a given frame always glitches the same way. */
-export function rand01(seed: number): number {
-  let x = (seed ^ 0x9e3779b9) >>> 0
-  x = Math.imul(x ^ (x >>> 16), 0x85ebca6b)
-  x = Math.imul(x ^ (x >>> 13), 0xc2b2ae35)
-  return ((x ^ (x >>> 16)) >>> 0) / 2 ** 32
-}
-
-/** The burst number and step within it for `frame`, or undefined while the logo is calm (or still being revealed). */
-export function glitchAt(frame: number): { burst: number; step: number } | undefined {
-  const since = frame - REVEAL_FRAMES
-  if (since < 0 || since % GLITCH_EVERY >= GLITCH_FRAMES) return undefined
-  return { burst: Math.floor(since / GLITCH_EVERY), step: since % GLITCH_EVERY }
-}
-
 /** Frames after which the tagline is fully typed. */
 const TYPED_FRAMES = REVEAL_FRAMES + 14
 
 /**
- * The frame number that draws exactly what `frame` draws. Once the logo is revealed and the tagline typed, only the cursor's blink
- * phase and a glitch burst change the picture, so every other frame maps onto one of two calm ones and the banner need not re-render.
+ * The frame number that draws exactly what `frame` draws. Once the wordmark is revealed and the tagline typed, only the cursor's blink
+ * phase changes the picture, so every other frame maps onto one of two calm ones and the banner need not re-render.
  */
 export function visualFrame(frame: number): number {
-  if (frame < TYPED_FRAMES || glitchAt(frame) !== undefined) return frame
+  if (frame < TYPED_FRAMES) return frame
   return Math.floor(frame / 6) % 2 === 0 ? TYPED_FRAMES + 10 : TYPED_FRAMES + 4
 }
 
-/**
- * The block logo in the theme gradient, revealed left to right. Afterwards it sits still except for a rare, brief glitch: one thin strip
- * slides a column sideways and a few cells flicker to pixel glyphs in the second brand color. `animate: false` is the calm final frame.
- */
-export function logoRows(frame: number, theme: Theme, animate: boolean): Seg[][] {
-  const revealed = animate ? Math.floor(LOGO_WIDTH * Math.min(1, frame / REVEAL_FRAMES)) : LOGO_WIDTH
-  const chars = LOGO.map((row) => [...row])
-  const flicker = new Map<string, string>()
-  const g = animate ? glitchAt(frame) : undefined
-  if (g !== undefined) {
-    const seed = g.burst * 131 + g.step * 17
-    const row = Math.floor(rand01(seed) * chars.length)
-    const from = Math.floor(rand01(seed + 1) * (LOGO_WIDTH - 14))
-    const strip = chars[row]?.slice(from, from + 12) ?? []
-    const slide = rand01(seed + 2) < 0.5 ? -GLITCH_SLIDE : GLITCH_SLIDE
-    const shifted = strip.map((_, i) => strip[(i - slide + strip.length) % strip.length] ?? ' ')
-    chars[row]?.splice(from, shifted.length, ...shifted)
-    for (let k = 0; k < GLITCH_CELLS; k++) {
-      const r = Math.floor(rand01(seed + 10 + k * 3) * chars.length)
-      const c = Math.floor(rand01(seed + 11 + k * 3) * LOGO_WIDTH)
-      if (chars[r]?.[c] !== undefined && chars[r]?.[c] !== ' ') flicker.set(`${r}:${c}`, PIXEL_GLYPHS[Math.floor(rand01(seed + 12 + k * 3) * PIXEL_GLYPHS.length)] ?? '▒')
-    }
-  }
-  return chars.map((row, r) =>
-    mergeSegs(
-      row.map((ch, c): Seg => {
-        if (c >= revealed || ch === ' ') return { text: ' ' }
-        const base = gradientAt(theme.gradient, c / Math.max(1, LOGO_WIDTH - 1))
-        const pixel = flicker.get(`${r}:${c}`)
-        if (pixel !== undefined) return { text: pixel, color: theme.accent2, bold: true }
-        const edge = animate && frame < REVEAL_FRAMES && c === revealed - 1
-        if (ch === '█') return { text: ch, color: edge ? theme.text : base, bold: true }
-        return { text: ch, color: mix(base, theme.surface, 0.45), dim: !base.startsWith('#') }
-      }),
-    ),
-  )
+/** The wordmark `P A G E R` in the theme gradient, revealed letter by letter. `animate: false` is the settled frame. Its width never changes. */
+export function wordmarkRow(frame: number, theme: Theme, animate: boolean): Seg[] {
+  const revealed = animate ? Math.ceil(WORDMARK.length * Math.min(1, frame / REVEAL_FRAMES)) : WORDMARK.length
+  const chars = [...WORDMARK].map((ch, i) => (i < revealed ? ch : ' ')).join('')
+  return gradientText(chars, theme.gradient, { bold: true })
 }
 
 /** The one-line mark: `◆ P A G E R ◆` in the gradient, then the tagline when it fits. */
@@ -249,17 +195,17 @@ export function codeRows(code: string, width: number, theme: Theme): Seg[][] {
   return centerBlock(rows, width)
 }
 
-export const bigLogo = (width: number, height: number): boolean => width >= BIG_LOGO_MIN_WIDTH && height >= BIG_LOGO_MIN_ROWS
+export const roomyHeader = (width: number, height: number): boolean => width >= ROOMY_HEADER_MIN_WIDTH && height >= ROOMY_HEADER_MIN_ROWS
 
-/** Logo (or one-line mark), tagline, greeting, contact code and a spacer, all centered. */
+/** Wordmark between two gradient rules (or the one-line mark), tagline, greeting, contact code and a spacer, all centered. */
 export function headerRows(i: HomeInput, info: HomeInfo): Seg[][] {
   const { theme, width } = i
   const rows: Seg[][] = []
-  if (bigLogo(width, i.height)) {
-    rows.push(...centerBlock(logoRows(i.frame, theme, i.animate), width))
+  if (roomyHeader(width, i.height)) {
+    const wing = gradientRule(8, theme.gradient, '━')
+    rows.push(...centerBlock([[...wing, { text: '  ' }, ...wordmarkRow(i.frame, theme, i.animate), { text: '  ' }, ...wing]], width))
     const tag = gradientText(tagline(i.frame, i.animate).padEnd(TAGLINE.length + 1), theme.gradient, { italic: true })
-    const wing = gradientRule(6, theme.gradient, '━')
-    rows.push(...centerBlock([[...wing, { text: ' ' }, ...tag, { text: ' ' }, ...wing]], width))
+    rows.push(...centerBlock([tag], width))
   } else {
     rows.push(...centerBlock([markRow(i.frame, theme, i.animate, width)], width))
   }

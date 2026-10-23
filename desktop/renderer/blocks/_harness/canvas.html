@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>Canvas block harness</title>
+<!-- Mounts the Canvas block with a stub ctx. rpc goes to canvas-server.cjs (the real handler); events arrive over SSE.
+     ?theme=light|dark  ?id=<canvas id>  ?ephemeral=1  ?path=<abs file>  -->
+<link rel="stylesheet" href="../../ui/tokens.css">
+<link rel="stylesheet" href="../../ui/kit.css">
+<style>
+  @font-face { font-family: 'Geist'; src: url('../../fonts/Geist.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
+  @font-face { font-family: 'Geist Mono'; src: url('../../fonts/GeistMono.woff2') format('woff2'); font-weight: 100 900; font-display: swap; }
+  html, body { background: var(--page); }
+  body { font-family: var(--sans); color: var(--t1); }
+  #host { position: fixed; inset: 0; }
+</style>
+</head>
+<body>
+<div id="host"></div>
+<script type="module">
+const q = new URLSearchParams(location.search)
+if (q.get('theme')) document.documentElement.dataset.theme = q.get('theme')
+const listeners = new Set()
+const es = new EventSource('/events')
+es.addEventListener('block', (e) => {
+  const { event, payload } = JSON.parse(e.data)
+  for (const fn of listeners) fn(event, payload)
+})
+const rpc = async (method, args) => {
+  const r = await fetch('/rpc/' + method, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(args ?? null) })
+  const j = await r.json()
+  if (!j.ok) throw Object.assign(new Error(j.error), { code: j.code })
+  return j.result
+}
+const toasts = []
+const ctx = {
+  rpc,
+  onEvent: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
+  args: { id: q.get('id') || undefined, path: q.get('path') || undefined, ephemeral: q.get('ephemeral') === '1' || undefined },
+  cwd: '/',
+  setTitle: (t) => { document.title = t + ' - Canvas harness' },
+  toast: (level, text) => toasts.push({ level, text }),
+  close() {},
+  openBlock() {},
+  openPath() {},
+}
+window.__ctx = ctx
+window.__toasts = toasts
+window.__rpc = rpc
+await new Promise((r) => es.addEventListener('open', r, { once: true }))
+const mod = await import('../canvas.js')
+window.__mod = mod.default
+window.__block = mod.default.mount(document.getElementById('host'), ctx)
+window.__ready = true
+</script>
+</body>
+</html>

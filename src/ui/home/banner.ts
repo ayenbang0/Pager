@@ -1,15 +1,7 @@
-/** Logo letters, tagline and sparkline for the Home screen; the colored rows are built in homeRows.ts. */
+/** Wordmark, tagline and sparkline for the Home screen; the colored rows are built in homeRows.ts. */
 
-const LETTERS: readonly (readonly string[])[] = [
-  ['██████╗ ', '██╔══██╗', '██████╔╝', '██╔═══╝ ', '██║     ', '╚═╝     '],
-  [' █████╗ ', '██╔══██╗', '███████║', '██╔══██║', '██║  ██║', '╚═╝  ╚═╝'],
-  [' ██████╗ ', '██╔════╝ ', '██║  ███╗', '██║   ██║', '╚██████╔╝', ' ╚═════╝ '],
-  ['███████╗', '██╔════╝', '█████╗  ', '██╔══╝  ', '███████╗', '╚══════╝'],
-  ['██████╗ ', '██╔══██╗', '██████╔╝', '██╔══██╗', '██║  ██║', '╚═╝  ╚═╝'],
-]
-
-export const LOGO: readonly string[] = Array.from({ length: 6 }, (_, row) => LETTERS.map((l) => l[row] ?? '').join(''))
-export const LOGO_WIDTH = LOGO[0]?.length ?? 0
+/** The Pager wordmark: plain letters, spaced out, drawn in the theme gradient. */
+export const WORDMARK = 'P A G E R'
 /** Frames the left-to-right reveal takes. */
 export const REVEAL_FRAMES = 24
 export const TAGLINE = 'a simpler way to chat'

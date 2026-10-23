@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>notebook block harness</title>
+<link rel="stylesheet" href="../../ui/tokens.css">
+<link rel="stylesheet" href="../../ui/kit.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--page); color: var(--t1); font: 13.5px var(--sans); }
+  .stage { position: fixed; inset: 0; padding: 6px; background:
+    radial-gradient(900px 500px at 10% -10%, var(--glow-a), transparent 60%), radial-gradient(700px 400px at 90% 110%, var(--glow-b), transparent 60%), var(--page); }
+  #host { height: 100%; background: var(--card); border-radius: 12px; box-shadow: 0 0 0 1px var(--l2); overflow: hidden; }
+</style>
+</head>
+<body>
+<div class="stage"><div id="host"></div></div>
+<div id="overlay"></div>
+<div id="toasts"></div>
+<script type="module">
+import notebook from '../notebook.js'
+import { makeCtx } from './notebook-shim.js'
+
+const q = new URLSearchParams(location.search)
+document.documentElement.dataset.theme = q.get('theme') || 'dark'
+const info = await (await fetch('/info')).json()
+const ctx = makeCtx({ args: { path: q.get('path') || (q.get('new') ? null : info.tour), settings: q.get('settings') ? JSON.parse(q.get('settings')) : undefined }, cwd: info.dir })
+window.__nb = notebook.mount(document.getElementById('host'), ctx)
+window.__ctx = ctx
+</script>
+</body>
+</html>

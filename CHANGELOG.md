@@ -5,7 +5,39 @@ All notable changes to pager are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.11.0] - 2026-10-22
+
+### Added
+
+- **Crash log**: an error nothing caught (a failed background task, a rejected promise) is written with a timestamp to `crash.log` in the data directory and shown as an error toast; pager keeps running instead of closing the window
+- **Desktop Board block** (`Alt+Mod+K`): the pane's `TODO.md` as a kanban. `##` headings are lanes, `- [ ]` items are cards, `#tags` are labels, `📅 2025-01-31` (also `@{…}` and `due:`) is a due date, indented checkboxes are subtasks with a counter. Board and List views, drag between lanes, quick add, a card editor, and live reload when the file changes on disk. Edits rewrite only the lines they change and are written atomically, so front matter, prose, other lists, CRLF/BOM and Obsidian Kanban files (archive lane, settings footer) are kept byte for byte
+- **Desktop Task manager block**: processes with CPU, memory and GPU as a sortable list or a parent/child tree, a detail card (owner, path, command line), and Stop (close its windows), Force Quit (optionally with its children) and Pause behind a confirmation. Pager's own processes, the session daemon and critical Windows processes can never be ended from it. Sampling runs only while the pane is visible and the sampler exits 30 s after the last request
+- **Desktop Screen block**: view this machine's displays (nothing is captured until you pick one), Fit or Actual size, a LIVE/REC indicator, optional recording to a `.webm`. Driving a display is a separate per-session opt-in behind a red banner (Esc three times stops it); it ends when the pane is hidden or after 10 idle minutes, and every held key and button is released. Sharing a screen with another machine is not included
+- **Session daemon** (`pager daemon`, see `desktop/DAEMON.md`): one background process owns every program of the desktop window, so closing the window only detaches and agents, bots, chat and calls keep running (the first pane is the Pager TUI itself). Windows and the CLI start it on demand on `\\.\pipe\pager-<USERNAME>` (`PAGER_DAEMON_SOCKET` overrides); an explicit Quit or `pager daemon stop` ends it. Several windows show the same output live, a window that falls behind is resynced from a replay, and `daemon.state` (layout, folders, newest 2 MiB of output per pane, written atomically and debounced) brings every pane back in its folder after a reboot or crash, agents resuming with `--continue`
+- **Scripting the daemon**: `pager daemon start|stop|status`, `pager split right|down`, `pager send`, `pager capture`, `pager ls`, `pager events` (JSON lines) and `pager open PATH[:LINE[:COL]] | URL`; inside a desktop pane `pager run` opens the command in a new shell beside it
+
+### Changed
+
+- A stray error still ends pager when it is not safe to go on: the terminal is gone (EPIPE, EIO), memory ran out, or twenty errors arrive within ten seconds
+- If the interface itself throws while rendering, pager exits non-zero with the error and records it in `crash.log`
+- **One smooth look, no pixel art.** The pager logo is a single rounded P stroke (blue to indigo) instead of the pixel P: the app tile is the docs and bot studio favicon and sidebar mark (`logo.svg`; `logo-mark.svg` is the tile-less mark), and heads the README
+- The Home screen in the terminal shows a plain `P A G E R` wordmark in the theme gradient between two rules, instead of the big block-letter logo, and no longer glitches into block glyphs
+- Terminal spinners are the standard braille dots (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`), the same frames the window title uses
+- The docs, stats and bot studio site is restyled: Geist and Geist Mono (SIL OFL, served by pager itself behind the site's random token, so no network), a pitch-black page by default with glass cards on a 1px ring, 1.45-stroke vector icons and an Appearance control (dark, light, system)
+- The README no longer describes the desktop window as pixel-styled or the Departure Mono pixel font
+
+### Fixed
+
+- `/bot remove` no longer closes pager when Windows keeps the bot's sandbox folder open (EPERM): the folder is retried for half a second, and if it still will not go the bot is removed anyway and a warning names the folder left behind
+- Leaving a group warns about bot sandbox folders that could not be deleted instead of failing
+- Clearing the AI chat and clearing the agents' memory report a locked file instead of throwing, and `Agents: check installs` and `/agent commands` no longer fail on a locked temporary folder
+- The lock file is removed with the same care at start and exit: a stale one that is held open no longer aborts startup, and a failed delete on exit is ignored
+
+### Removed
+
+- The `⌕ web` tab in the sidebar's TOOLS section, its `⌕ Web` palette entry, `/open web`, and its labels in the status bar, breadcrumb and window title. Agents keep `web_search` and `web_read` (Settings > AI chat and Web, `PAGER_NO_WEB=1`)
+
+## [1.10.0] - 2026-10-22
 
 ### Added
 
@@ -13,12 +45,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Pings and sound presets**: `/ping <name>` plays a sound on their machine; Settings > Notifications picks a sound mode (all, pings only, off) and presets for messages and the call ring
 - **Group screen** (`/group members`): people, bots and call rooms in one list, with keys to ping, open a chat, join a room or change a bot
 - **Requests screen** (`/requests`): contact requests, group invites and agent sessions to accept or decline
-- **Bot model and effort**: `/bot model` and `/bot effort`
+- **Bot model and effort**: `/bot model` and `/bot effort`, and Model and Effort fields in the bot studio
 
 ### Changed
 
 - `/group members` and `/bot list` open the group screen instead of printing to Home; `/accept` with several items pending opens the requests screen
 - The Chime switch became Sounds (all, pings, off); an old "off" stays off
+
+## [1.9.0] - 2026-10-21
+
+### Added
+
+- **Browser pane (desktop window)**: a real browser docked beside the terminal, toggled with Ctrl+Shift+B or the `web` button: tabs, address bar with search, back, forward, reload, a draggable divider, pages in a sandboxed session with no permissions and no downloads
+- Ctrl+click a link in the terminal output to read it in the pane
+- Pages open links in new tabs; Ctrl+L, Ctrl+T, Ctrl+W, Ctrl+Tab, F5 and Alt+Left/Right work while a page has focus
+
+### Changed
+
+- `/docs`, `/studio`, `pager docs`, `pager studio`, F1, F2 and the web tool's `open <n>` show their page in the pane; pager no longer starts your default browser. Outside the desktop window they print the address instead
+- Chromium switches such as `--remote-debugging-port` are no longer passed on to pager by the desktop window
+
+### Fixed
+
+- A taskbar button pinned from the desktop window kept Electron's icon: the window now declares the pager icon for pins and relaunch, not only in the exe (unpin the old button and pin again)
+
+## [1.8.0] - 2026-10-21
+
+### Added
+
+- **Bot studio**: `/studio`, `pager studio`, or F2 / the `bots` button in the desktop window open a local page (127.0.0.1, random token in the URL, changes only by a POST that carries a header a foreign web page cannot send) to shape bots in detail: persona, keywords, only-when-called mode, reply cap, cooldown, history length, document access, ignoring other bots, pausing
+- **Bot preview and test**: the studio shows the exact prompt a bot is sent and tries the bot on a pretend message without posting anything
+- Bots keep working as before: `/bot` bots get the defaults, `bots.json` entries from older versions load unchanged, and a bot's job may now be up to 4000 characters and several lines
+- `scripts/install.ps1` (`irm … | iex`): per-user install of the desktop window from a GitHub release, verified by SHA-256; `npm run desktop:pack` writes the `.sha256`, and a tag workflow publishes both
+- Local docs and usage stats: `/docs`, `pager docs`, or F1 / the `docs` button in the desktop window open a read-only site on 127.0.0.1 (random token in the URL) with every command, key binding and feature, plus your messages, agent turns, tokens and terminal commands (programs only, never arguments) computed from your data directory
+
+### Fixed
+
+- The desktop window's taskbar button, a pinned shortcut, Alt+Tab and Task Manager showed Electron's icon; `Pager.exe` now carries the pager icon and version info (stamped by `npm run desktop:pack`)
+
+### Changed
+
+- The app icon is the plain pixel P, in the window, the Windows Terminal profile and the docs
 
 ## [1.6.0] - 2026-10-20
 
@@ -32,8 +99,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Output lenses**: `ping`, `dig`, `curl -i/-I/-v`, `traceroute` and `tracert` output shows as a compact card; anything unrecognised stays as plain output
 - **Desktop window (Windows)**: `pager desktop install` adds a glass-and-pixel window host (Windows Terminal profile in pitch black with clean Cascadia Mono text (plus a 55% acrylic `Pager Glass` profile)), a Start menu entry and an "Open Pager here" folder menu, all per-user without administrator rights; `desktop launch`, `status` and `uninstall` manage it. An own-window Electron host (`npm run desktop:pack`, unsigned unless `PAGER_SIGN_CMD` is set) is used instead when it can start on the PC
 - **Run from outside**: `pager run [--cwd DIR] [--] <command>` and `/run [--cwd <dir>] <command>` open a new Terminal tab and type the command into it; `pager run` hands the request to the running pager or starts one with it, and `pager --cwd DIR` starts in a folder
-- `scripts/install.ps1` (`irm … | iex`): per-user install of the desktop window from a GitHub release, verified by SHA-256; `npm run desktop:pack` writes the `.sha256`, and a tag workflow publishes both
-- Local docs and usage stats: `/docs`, `pager docs`, or F1 / the `docs` button in the desktop window open a read-only site on 127.0.0.1 (random token in the URL) with every command, key binding and feature, plus your messages, agent turns, tokens and terminal commands (programs only, never arguments) computed from your data directory
 - `Ctrl+H` jumps to Home and replays the logo animation, even after a command replaced the welcome screen
 - A start-up failure caused by Windows Smart App Control blocking a native file now names the file and says why
 

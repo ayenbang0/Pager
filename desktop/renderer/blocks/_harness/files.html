@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>files block harness</title>
+<link rel="stylesheet" href="../../ui/tokens.css">
+<style>
+  @font-face { font-family: 'Geist'; src: url('../../fonts/Geist.woff2') format('woff2'); font-weight: 100 900; }
+  @font-face { font-family: 'Geist Mono'; src: url('../../fonts/GeistMono.woff2') format('woff2'); font-weight: 100 900; }
+  @font-face { font-family: 'Geist Mono'; src: url('../../fonts/GeistMono-Italic.woff2') format('woff2'); font-weight: 100 900; font-style: italic; }
+  html, body { height: 100%; }
+  body { background: var(--page); color: var(--t1); font: 13.5px var(--sans); }
+  .stage { position: fixed; inset: 0; display: flex; gap: 6px; padding: 6px; background:
+    radial-gradient(900px 500px at 10% -10%, var(--glow-a), transparent 60%), radial-gradient(700px 400px at 90% 110%, var(--glow-b), transparent 60%), var(--page); }
+  .card { position: relative; flex: 1; background: var(--panel); border-radius: 12px; box-shadow: 0 0 0 1px var(--l2); overflow: hidden; min-width: 0; min-height: 0; }
+  .card.focus::before { content: ''; position: absolute; left: 0; right: 0; top: 0; height: 1px; background: var(--accent); z-index: 5; }
+  #toasts { position: fixed; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 6px; z-index: 99; align-items: center; }
+  .toast { padding: 9px 14px; border-radius: 12px; background: var(--pop-bg); box-shadow: 0 0 0 1px var(--l2), 0 18px 40px -14px rgba(0,0,0,.5); font-size: 13px; }
+  .toast.error { box-shadow: 0 0 0 1px color-mix(in srgb, var(--bad) 45%, transparent); }
+</style>
+</head>
+<body>
+<div class="stage" id="stage"></div>
+<div id="toasts"></div>
+<script type="module">
+import files from '../files.js'
+
+const q = new URLSearchParams(location.search)
+document.documentElement.dataset.theme = q.get('theme') || 'dark'
+const info = await (await fetch('/info')).json()
+const listeners = new Set()
+const es = new EventSource('/events')
+es.onmessage = (m) => { const { event, payload } = JSON.parse(m.data); for (const l of listeners) l(event, payload) }
+
+async function rpc(method, args) {
+  const r = await (await fetch('/rpc', { method: 'POST', body: JSON.stringify({ method, args }) })).json()
+  if (!r.ok) throw new Error(r.error)
+  return r.result
+}
+function toast(level, text) {
+  const t = document.createElement('div')
+  t.className = `toast ${level}`
+  t.textContent = text
+  document.getElementById('toasts').append(t)
+  setTimeout(() => t.remove(), 3500)
+}
+// ?path=a.md&path=b.ts shows several panes side by side; paths are relative to the fixture repo.
+const paths = q.getAll('path')
+if (!paths.length) paths.push('CHANGELOG.md')
+window.__blocks = []
+for (const p of paths) {
+  const card = document.createElement('div')
+  card.className = 'card' + (window.__blocks.length === 0 ? ' focus' : '')
+  document.getElementById('stage').append(card)
+  const abs = /^[A-Za-z]:|^\//.test(p) ? p : info.repo + '/' + p
+  const ctx = {
+    rpc, toast, cwd: info.repo, args: { path: abs, mode: q.get('mode') || undefined },
+    onEvent: (fn) => (listeners.add(fn), () => listeners.delete(fn)),
+    setTitle: (t) => (document.title = t),
+    openBlock: (name, args) => { console.log('openBlock', name, args); window.__opened = { name, args } },
+    openPath: (x) => console.log('openPath', x),
+    settings: q.get('autosave') ? async () => ({ files: { auto_save: { after_delay: +q.get('autosave') } } }) : undefined,
+  }
+  window.__blocks.push(files.mount(card, ctx))
+}
+window.__rpc = rpc
+window.__info = info
+</script>
+</body>
+</html>

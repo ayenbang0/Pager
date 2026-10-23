@@ -17,7 +17,6 @@ import { resetDesktopState } from '../platform/desktop.js'
 import { DEFAULT_SETTINGS } from './settings.js'
 import { VERSION } from './version.js'
 import { SETTINGS_ID } from './settingsView.js'
-import { WEB_ID } from '../tools/web/tool.js'
 import { AI_ID } from '../ai/chat.js'
 import { sharedTabId } from '../agents/ids.js'
 import { DatabaseSync } from 'node:sqlite'
@@ -375,33 +374,6 @@ test('reactions: add, repeat removes, relay to a third member, never unread, nev
   b.engine.react(gt.key, '🎉')
   await waitFor(() => (c.engine.messages(group, 10).find((m) => m.key === gt.key)?.reactions ?? []).length === 1, 25_000, 'carol sees it')
   assert.deepEqual(c.engine.messages(group, 10).find((m) => m.key === gt.key)?.reactions, [{ emoji: '🎉', count: 1, mine: false }])
-})
-
-test('the web tab: text searches, open and read follow, results show as messages, and it can be switched off', async () => {
-  const page = (body: string): Response => new Response(body, { headers: { 'content-type': 'text/html' } })
-  const results = '<a class="result__a" href="https://example.org/one">First hit</a><a class="result__snippet" href="#">about one</a>'
-  const a = await boot('alice', undefined, { fetch: async (input) => (String(input).includes('duckduckgo') ? page(results) : page('<p>hello page</p>')) })
-  const file = path.join(tmpDir('pager-open-'), 'open.txt')
-  process.env.PAGER_OPEN_FILE = file
-  try {
-    await a.engine.submit('/open web')
-    assert.equal(a.engine.active(), WEB_ID)
-    await a.engine.submit('one two')
-    await waitFor(() => a.engine.messages(WEB_ID, 20).some((m) => m.text.startsWith('1. First hit')), 10_000, 'results')
-    assert.deepEqual(a.engine.messages(WEB_ID, 20).map((m) => [m.mine, m.authorKey]), [[true, 'web'], [false, 'web-out']])
-    await a.engine.submit('open 1')
-    await waitFor(() => fs.existsSync(file), 5000, 'browser seam')
-    assert.equal(fs.readFileSync(file, 'utf8'), 'https://example.org/one\n')
-    await a.engine.submit('read 1')
-    await waitFor(() => a.engine.messages(WEB_ID, 20).some((m) => m.text === 'hello page'), 10_000, 'page text')
-    assert.equal(a.engine.webBusy(), false)
-    process.env.PAGER_NO_WEB = '1'
-    await a.engine.submit('again')
-    await waitFor(() => a.engine.messages(WEB_ID, 50).at(-1)?.text === 'Web search is off (Settings > AI chat and Web)', 5000, 'off')
-  } finally {
-    delete process.env.PAGER_OPEN_FILE
-    delete process.env.PAGER_NO_WEB
-  }
 })
 
 test('the AI tab: /open ai, text reaches a ready agent headless, settings round-trip, and clearing empties it', async () => {

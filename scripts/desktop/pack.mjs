@@ -44,6 +44,14 @@ console.log('3/6 stage electron')
 rmSync(path.join(root, 'release'), { recursive: true, force: true })
 cpSync(must(path.join(desk, 'node_modules', 'electron', 'dist')), out, { recursive: true })
 renameSync(path.join(out, 'electron.exe'), path.join(out, 'Pager.exe'))
+// The exe's own resources are what the taskbar, a pinned shortcut, Alt+Tab and Task Manager show: without this they stay Electron's.
+const stamp = [
+  '--set-icon', must(path.join(desk, 'assets', 'pager.ico')),
+  '--set-file-version', pkg.version,
+  '--set-product-version', pkg.version,
+  ...Object.entries({ ProductName: 'Pager', FileDescription: 'Pager', InternalName: 'Pager', OriginalFilename: 'Pager.exe', CompanyName: 'Pager' }).flatMap(([k, v]) => ['--set-version-string', k, v]),
+]
+run(must(path.join(desk, 'node_modules', 'rcedit', 'bin', 'rcedit-x64.exe')), [path.join(out, 'Pager.exe'), ...stamp])
 rmSync(path.join(out, 'resources', 'default_app.asar'), { force: true })
 const locales = path.join(out, 'locales')
 for (const f of readdirSync(locales)) if (f !== 'en-US.pak') rmSync(path.join(locales, f))
@@ -63,8 +71,6 @@ cpSync(must(path.join(nm, 'xterm', 'lib', 'xterm.js')), path.join(vendor, 'xterm
 cpSync(must(path.join(nm, 'xterm', 'css', 'xterm.css')), path.join(vendor, 'xterm.css'))
 cpSync(must(path.join(nm, 'addon-fit', 'lib', 'addon-fit.js')), path.join(vendor, 'addon-fit.js'))
 cpSync(must(path.join(nm, 'addon-webgl', 'lib', 'addon-webgl.js')), path.join(vendor, 'addon-webgl.js'))
-mkdirSync(path.join(renderer, 'fonts'), { recursive: true })
-cpSync(must(path.join(desk, 'assets', 'DepartureMono-Regular.otf')), path.join(renderer, 'fonts', 'DepartureMono-Regular.otf'))
 cpSync(must(path.join(desk, 'assets', 'pager.png')), path.join(renderer, 'pager.png'))
 
 // The pty child: a real node.exe (Microsoft/OpenJS-signed), not Electron acting as node.

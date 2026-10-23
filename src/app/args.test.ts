@@ -61,3 +61,20 @@ test('pager desktop: actions, their flags and the errors', () => {
   assert.deepEqual(parseArgs(['desktop', 'launch', '--exe']), { error: 'pager desktop launch does not take --exe' })
   assert.deepEqual(parseArgs(['desktop', 'install', '--exe']), { error: '--exe needs a path' })
 })
+
+test('daemon commands: daemon, split, capture, open, send, events', () => {
+  const base = { command: 'daemon', lan: false, noAgents: false }
+  assert.deepEqual(parseArgs(['daemon', 'start']), { ...base, daemon: { verb: 'daemon', action: 'start' } })
+  assert.deepEqual(parseArgs(['daemon']), { ...base, daemon: { verb: 'daemon', action: 'serve' } })
+  assert.ok('error' in parseArgs(['daemon', 'nope']))
+  assert.deepEqual(parseArgs(['split', 'down', '--pane', '3', '--cwd', 'd', '--', 'npm', 'test']), { ...base, daemon: { verb: 'split', dir: 'col', pane: '3', cwd: 'd', words: ['npm', 'test'] } })
+  assert.deepEqual(parseArgs(['split', 'right']), { ...base, daemon: { verb: 'split', dir: 'row', words: [] } })
+  assert.ok('error' in parseArgs(['split', 'sideways']))
+  assert.deepEqual(parseArgs(['capture', '--lines', '20', '--ansi']), { ...base, daemon: { verb: 'capture', ansi: true, json: false, lines: 20 } })
+  assert.ok('error' in parseArgs(['capture', '--lines', 'x']))
+  assert.deepEqual(parseArgs(['events', '--filter', 'pane_spawned,bell']), { ...base, daemon: { verb: 'events', filter: ['pane_spawned', 'bell'] } })
+  assert.deepEqual(parseArgs(['open', '--tab', 'a.ts:3:4', 'https://x.dev']), { ...base, daemon: { verb: 'open', tab: true, targets: ['a.ts:3:4', 'https://x.dev'] } })
+  assert.ok('error' in parseArgs(['open']))
+  assert.deepEqual(parseArgs(['send', '--no-enter', 'ls', '-la']), { ...base, daemon: { verb: 'send', enter: false, text: 'ls -la' } })
+  assert.deepEqual(parseArgs(['ls', '--json']), { ...base, daemon: { verb: 'ls', json: true } })
+})

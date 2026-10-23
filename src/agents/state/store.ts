@@ -221,8 +221,14 @@ export class Memory {
     }
   }
 
-  clear(root: string): void {
-    fs.rmSync(this.file(root), { force: true })
+  /** Deletes the memory file. Returns why it could not (a Windows lock), or undefined. */
+  clear(root: string): string | undefined {
+    try {
+      fs.rmSync(this.file(root), { force: true, maxRetries: 4, retryDelay: 50 })
+      return undefined
+    } catch (err) {
+      return errMsg(err)
+    }
   }
 }
 

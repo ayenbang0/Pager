@@ -1,0 +1,8 @@
+/* Harness chrome only: a page with a Tiles-style card so a block can be looked at on its own. */
+html, body { height: 100%; }
+body { background: radial-gradient(900px 500px at 12% -10%, var(--glow-a), transparent 60%), radial-gradient(800px 500px at 100% 110%, var(--glow-b), transparent 60%), var(--page); display: grid; place-items: center; }
+#host { width: min(1180px, calc(100vw - 24px)); height: min(680px, calc(100vh - 24px)); background: var(--card); border-radius: 12px; box-shadow: 0 0 0 1px var(--l1), 0 18px 50px -18px rgba(0, 0, 0, .5); overflow: hidden; position: relative; display: flex; flex-direction: column; }
+#host > * { flex: 1; min-height: 0; }
+#toasts { position: fixed; right: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 8px; z-index: 99999; }
+.toast { background: var(--pop-bg); box-shadow: 0 0 0 1px var(--l2), var(--tip-shadow); border-radius: 10px; padding: 8px 12px; font-size: 12.5px; animation: toastIn .25s var(--out); }
+.toast.error { box-shadow: 0 0 0 1px color-mix(in srgb, var(--bad) 40%, transparent), var(--tip-shadow); }

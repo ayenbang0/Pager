@@ -67,3 +67,8 @@ export async function searchWeb(query: string, opts: WebOptions = {}): Promise<W
   if (!res.ok) throw new Error(`search answered ${res.status}`)
   return parseResults(body)
 }
+
+/** Numbered result blocks: `1. Title`, the address, then the snippet. */
+export function formatResults(results: readonly WebResult[]): string[] {
+  return results.flatMap((r, i) => [`${i + 1}. ${r.title}`, `   ${r.url}`, ...(r.snippet === '' ? [] : [`   ${r.snippet}`])])
+}

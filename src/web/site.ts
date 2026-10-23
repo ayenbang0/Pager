@@ -59,13 +59,14 @@ const ENV: Row[] = [
 const FEATURES = [
   ['Peer-to-peer chat', 'Contacts and groups talk directly over a DHT. No server holds your messages; history is stored locally and can be encrypted with a passphrase.'],
   ['Group bots', 'Add AI bots to a group with /bot add. They answer when called with @name and chime in when their job calls for it. Backends: a ready agent, Ollama or OpenAI.'],
+  ['Bot studio', 'Open /studio (F2 in the desktop window) to shape bots in detail: persona, keywords, only-when-called mode, reply cap, cooldown, history length, document access. Preview the exact prompt and try a bot on a pretend message before it speaks in a real group.'],
   ['Terminal tabs', 'A real shell on a pseudo-terminal, up to six tabs. Commands become blocks with exit status and timing; select a block to explain it or run a lens over its output.'],
   ['Run from anywhere', '`pager run` and /run open a Terminal tab in a folder and type a command, even from another process. The desktop window forwards its own command line the same way.'],
   ['Coding agents', 'Run agents in isolated git worktrees with /agent: chains, reviews, merge, undo, and a shared room contacts can watch or control.'],
   ['Shared documents', 'Markdown documents shared with a chat (/doc new), edited together with a CRDT, with a built-in Vim mode.'],
   ['Themes', 'Flat and visual themes, accent and density settings, and custom themes you define yourself. All under Settings > Appearance.'],
-  ['Desktop window', 'Windows: a pitch-black window with an opt-in glass material, Departure Mono pixel glyphs for the logo and spinners, per-user install without admin.'],
-  ['Web and AI tabs', 'Open pages and talk to a local or hosted model without leaving pager.'],
+  ['Desktop window', 'Windows: a window drawn in one smooth style (Geist, a pitch-black or light page, glass cards, a vector Pager mark) with an opt-in glass material, per-user install, no admin.'],
+  ['AI tab and web tools', 'Talk to a local or hosted model without a repository; agents can search the web and read pages.'],
   ['Usage stats', 'This site: messages, agent turns, tokens and terminal commands, all computed from files in your data directory. Nothing leaves your machine.'],
 ].map(([title, body]) => ({ title: title!, body: body! }))
 

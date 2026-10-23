@@ -6,7 +6,6 @@ import { fileable } from '../../app/folders.js'
 import type { Folder } from '../../app/settings.js'
 import { SETTINGS_ID } from '../../app/settingsView.js'
 import { DOCS_ID } from '../../docs/store.js'
-import { WEB_ID } from '../../tools/web/tool.js'
 
 export type SectionKey = 'pending' | 'direct' | 'groups' | 'agents' | 'tools' | `folder:${string}`
 
@@ -61,7 +60,7 @@ export function sidebarEntries(input: SidebarInput): SidebarEntry[] {
     const ids = [...[ROOM_ID, AI_ID].filter(unfiled), ...input.agentNames.map(agentTabId), ...input.shared.map(sharedTabId)]
     section('agents', 'AGENTS', ids)
   }
-  section('tools', 'TOOLS', [...terminals, ...[DOCS_ID].filter(unfiled), WEB_ID, SETTINGS_ID])
+  section('tools', 'TOOLS', [...terminals, ...[DOCS_ID].filter(unfiled), SETTINGS_ID])
   return out
 }
 

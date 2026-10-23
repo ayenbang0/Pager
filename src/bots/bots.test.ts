@@ -22,7 +22,7 @@ interface Harness {
 }
 
 /** `answer` sees the backend and the whole prompt; by default it replies `ok` unless the prompt carries SILENT. */
-function harness(answer: (backend: string, prompt: string) => Promise<string> | string = (_b, p) => (p.includes('SILENT') ? NO_REPLY : 'ok'), dir = tmpDir('pager-bots-')): Harness {
+function harness(answer: (backend: string, prompt: string) => Promise<string> | string = (_b, p) => (p.includes('SILENT') ? NO_REPLY : 'ok'), dir = tmpDir('pager-bots-'), extra: Partial<BotDeps> = {}): Harness {
   const chat: BotLine[] = []
   const posts: Harness['posts'] = []
   const docs = new Map<string, string>([['plan.md', 'step 1']])
@@ -55,6 +55,7 @@ function harness(answer: (backend: string, prompt: string) => Promise<string> | 
       docs.set(name, append ? `${docs.get(name) ?? ''}${text}` : text)
       return `${append ? 'added to' : 'wrote'} ${name}`
     },
+    ...extra,
   }
   const bots = new GroupBots(deps)
   const say = (from: string, text: string): void => {
@@ -126,8 +127,28 @@ test('a CLI bot works in its own sandbox under the data dir; removing it deletes
   assert.equal(path.relative(h.dir, cwd), path.join('bots', 'ab'.repeat(8), 'helper'))
   assert.ok(fs.statSync(cwd).isDirectory())
   assert.match(h.asks[0]?.prompt ?? '', /own sandbox folder/)
-  assert.equal(h.bots.remove(G, 'helper'), true)
+  assert.deepEqual(h.bots.remove(G, 'helper'), { leftover: undefined })
   assert.equal(fs.existsSync(cwd), false)
+})
+
+test('removing a bot whose sandbox Windows holds open still removes the bot and reports the leftover folder', () => {
+  const seen: string[] = []
+  const h = harness(undefined, undefined, {
+    rm: (target) => {
+      seen.push(target)
+      throw Object.assign(new Error(`EPERM: operation not permitted, rmdir '${target}'`), { code: 'EPERM' })
+    },
+  })
+  h.bots.add(G, 'helper', 'claude', 'help')
+  const sandbox = h.bots.sandbox(G, 'helper')
+  const gone = h.bots.remove(G, 'helper')
+  assert.deepEqual(seen, [sandbox])
+  assert.match(gone?.leftover ?? '', /EPERM/)
+  assert.ok((gone?.leftover ?? '').startsWith(sandbox))
+  assert.deepEqual(h.bots.list(G), [])
+  assert.equal(h.bots.remove(G, 'helper'), undefined)
+  assert.ok(fs.existsSync(sandbox), 'the folder stays for the user to delete')
+  assert.deepEqual(harness(undefined, h.dir).bots.list(G), [], 'the bot list was saved before the delete was tried')
 })
 
 test('validation, persistence across a restart, and one failure notice until the bot recovers', async () => {
@@ -171,4 +192,71 @@ test('a bot sees the group documents and writes them with @@doc blocks; the chat
   await idle(h)
   assert.match(h.asks[0]?.prompt ?? '', /--- DOCS ---\n## plan\.md\nstep 1\n--- CHAT ---/)
   assert.deepEqual(h.posts, [{ name: 'scribe', text: 'Done.\n\n_✎ wrote plan.md_\n\n_✎ added to log.md_' }])
+})
+test('mention mode and keywords: only a call wakes the bot; persona, cap and history ride in the prompt', async () => {
+  const h = harness(() => 'x'.repeat(50))
+  assert.equal(h.bots.add(G, 'scribe', 'ollama', 'take notes', { mode: 'mention', keywords: ['Deploy'], maxChars: 20, persona: 'terse and dry', contextLines: 5 }), undefined)
+  h.say('bob', 'lunch anyone?')
+  await idle(h)
+  assert.equal(h.asks.length, 0, 'an uncalled mention-mode bot never asks its model')
+  h.say('bob', 'we deploy at noon')
+  await idle(h)
+  assert.equal(h.asks.length, 1, 'a keyword calls it')
+  assert.match(h.asks[0]?.prompt ?? '', /How you talk \(style only[^)]*\): terse and dry/)
+  assert.match(h.asks[0]?.prompt ?? '', /under 20 characters/)
+  assert.match(h.asks[0]?.prompt ?? '', /Someone called you/)
+  assert.equal(h.posts[0]?.text, `${'x'.repeat(19)}…`, 'the cap cuts the reply')
+})
+
+test('cooldown, ignoring bots and pausing', async () => {
+  const h = harness()
+  h.bots.add(G, 'slow', 'ollama', 'answer', { cooldownSec: 600 })
+  h.say('bob', 'one')
+  await idle(h)
+  h.say('bob', 'two')
+  await idle(h)
+  assert.equal(h.posts.length, 1, 'inside the cooldown it stays quiet')
+  h.say('bob', 'hey @slow')
+  await idle(h)
+  assert.equal(h.posts.length, 2, 'a person calling it overrides the cooldown')
+
+  const g = harness()
+  g.bots.add(G, 'loner', 'ollama', 'answer', { talkToBots: false })
+  const other: BotLine = { key: 'c:1', ts: Date.now(), from: 'carol', bot: { name: 'robo', mine: false }, text: 'beep' }
+  g.chat.push(other)
+  g.bots.hear(G, other)
+  await idle(g)
+  assert.equal(g.asks.length, 0, 'a bot that ignores bots does not hear them')
+
+  const p = harness()
+  p.bots.add(G, 'sleeper', 'ollama', 'answer')
+  assert.equal(p.bots.edit(G, 'sleeper', { enabled: false }), undefined)
+  p.say('bob', 'hello @sleeper')
+  await idle(p)
+  assert.equal(p.asks.length, 0, 'a paused bot says nothing')
+})
+
+test('settings are validated, saved, reloaded; old bots.json entries get defaults', () => {
+  const h = harness()
+  assert.match(h.bots.add(G, 'a1', 'ollama', 'x', { maxChars: -1 }) ?? '', /maxChars is a whole number/)
+  assert.match(h.bots.add(G, 'a1', 'ollama', 'x', { keywords: ['two words'] }) ?? '', /not a keyword/)
+  assert.match(h.bots.add(G, 'a1', 'ollama', 'x', { contextLines: 1 }) ?? '', /contextLines/)
+  assert.equal(h.bots.add(G, 'a1', 'ollama', 'x', { keywords: ['Ship', 'ship'], mode: 'mention' }), undefined)
+  assert.match(h.bots.edit(G, 'a1', { mode: 'sometimes' as 'auto' }) ?? '', /mode is auto or mention/)
+  const again = harness(undefined, h.dir)
+  assert.deepEqual(again.bots.list(G).map((b) => [b.keywords, b.mode, b.enabled, b.contextLines]), [[['ship'], 'mention', true, 40]])
+  fs.writeFileSync(path.join(h.dir, 'bots.json'), JSON.stringify({ bots: [{ conv: G, name: 'old', backend: 'ollama', instructions: 'legacy' }] }))
+  assert.deepEqual(harness(undefined, h.dir).bots.list(G).map((b) => [b.name, b.mode, b.docs, b.talkToBots]), [['old', 'auto', true, true]])
+})
+
+test('preview shows the prompt and test runs once without posting', async () => {
+  const h = harness(() => 'hello there')
+  h.bots.add(G, 'demo', 'ollama', 'greet people', { persona: 'pirate' })
+  const cfg = h.bots.list(G)[0]!
+  const p = h.bots.preview(cfg, '@demo hi')
+  assert.match(p.system, /pirate/)
+  assert.match(p.chat, /\[friend\] @demo hi/)
+  assert.equal(await h.bots.test(cfg, '@demo hi', new AbortController().signal), 'hello there')
+  assert.equal(h.posts.length, 0)
+  await assert.rejects(h.bots.test({ ...cfg, backend: 'nope' }, 'x', new AbortController().signal), /No AI backend/)
 })

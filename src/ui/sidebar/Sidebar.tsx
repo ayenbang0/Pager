@@ -7,7 +7,6 @@ import type { AgentView } from '../../agents/types.js'
 import { AI_ID } from '../../ai/chat.js'
 import { SETTINGS_ID } from '../../app/settingsView.js'
 import { isTermTab, TERM_ID } from '../../tools/terminal/sessions.js'
-import { WEB_ID } from '../../tools/web/tool.js'
 import { DOCS_ID } from '../../docs/store.js'
 import { SegLine } from '../kit/SegLine.js'
 import { useBlink } from '../kit/Spinner.js'
@@ -60,11 +59,10 @@ interface Props {
   shared: SharedView[]
   activeId: string | null
   terminalRunning: boolean
-  webBusy: boolean
   aiBusy: boolean
 }
 
-export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, activeId, terminalRunning, webBusy, aiBusy }: Props) {
+export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, activeId, terminalRunning, aiBusy }: Props) {
   const theme = useTheme()
   const byId = new Map(convs.map((c) => [c.id, c]))
   const byName = new Map(room.agents.map((a) => [a.name, a]))
@@ -91,9 +89,6 @@ export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, a
       return <Row key={id} spec={{ glyph: '▸', glyphColor: theme.accent, label: id === TERM_ID ? 'terminal' : `terminal ${id.slice(9)}`, ...(terminalRunning ? { badge: [pillSeg('● run', theme.pill.success)] } : {}) }} active={active} />
     }
     if (id === DOCS_ID) return <Row key={id} spec={{ glyph: '▤', glyphColor: theme.accent, label: 'docs' }} active={active} />
-    if (id === WEB_ID) {
-      return <Row key={id} spec={{ glyph: '⌕', glyphColor: theme.accent, label: 'web', ...(webBusy ? { badge: [pillSeg('● …', theme.pill.info)] } : {}) }} active={active} />
-    }
     if (id === SETTINGS_ID) return <Row key={id} spec={{ glyph: '⚙', glyphColor: theme.accent, label: 'settings' }} active={active} />
     const session = shared.find((s) => s.pk === parseSharedTab(id))
     if (session !== undefined) return <Row key={id} spec={sharedRowSpec(session, theme)} active={active} />

@@ -32,9 +32,25 @@ test('the site serves docs and stats only under its token, and stats come from t
     assert.equal(home.status, 200)
     assert.match(home.body, /<title>pager docs<\/title>/)
 
-    const logo = await fetch(`${site.url}logo.png`)
-    assert.equal(logo.headers.get('content-type'), 'image/png')
-    assert.deepEqual([...new Uint8Array(await logo.arrayBuffer()).slice(0, 4)], [0x89, 0x50, 0x4e, 0x47])
+    const logo = await fetch(`${site.url}logo.svg`)
+    assert.equal(logo.headers.get('content-type'), 'image/svg+xml')
+    assert.match(await logo.text(), /^<svg [^>]*viewBox="0 0 64 64"/)
+    assert.equal((await fetch(`${site.url}logo.png`)).status, 404, 'the pixel icon is gone')
+    const mark = await fetch(`${site.url}logo-mark.svg`)
+    assert.equal(mark.headers.get('content-type'), 'image/svg+xml')
+    const markSvg = await mark.text()
+    assert.match(markSvg, /^<svg [^>]*viewBox="0 0 64 64"/)
+    assert.doesNotMatch(markSvg, /<rect width="64"/, 'the mark has no tile')
+
+    for (const name of ['geist', 'geist-mono']) {
+      const font = await fetch(`${site.url}fonts/${name}.woff2`)
+      assert.equal(font.headers.get('content-type'), 'font/woff2')
+      assert.match(font.headers.get('content-security-policy') ?? '', /font-src 'self'/)
+      assert.deepEqual([...new Uint8Array(await font.arrayBuffer()).slice(0, 4)], [0x77, 0x4f, 0x46, 0x32], `${name} is woff2`)
+    }
+    const css = (await get(`${site.url}app.css`)).body + (await get(`${site.url}studio.css`)).body
+    assert.match(css, /font-family:"Geist"/)
+    assert.doesNotMatch(css, /pixelated|crisp-edges|steps\(/, 'one smooth style: no pixel rendering')
 
     const docs = JSON.parse((await get(`${site.url}api/docs`)).body) as { version: string; commands: { usage: string }[] }
     assert.equal(docs.version, '9.9.9')
@@ -51,9 +67,64 @@ test('the site serves docs and stats only under its token, and stats come from t
 
     const origin = new URL(site.url).origin
     assert.equal((await get(`${origin}/${'0'.repeat(36)}/api/stats`)).status, 404, 'a wrong token is refused')
+    assert.equal((await fetch(`${origin}/${'0'.repeat(36)}/fonts/geist.woff2`)).status, 404, 'the fonts are behind the token too')
+    assert.equal((await fetch(`${origin}/fonts/geist.woff2`)).status, 404, 'no token, no font')
     assert.equal((await get(`${origin}/api/stats`)).status, 404, 'no token is refused')
     assert.equal((await get(`${site.url}api/stats`, { host: 'evil.example' })).status, 403, 'a foreign Host header (DNS rebinding) is refused')
   } finally {
     site.close()
+  }
+})
+
+test('the studio changes bots only on a POST that carries the header, a JSON body and the token', async () => {
+  const dir = tmpDir('pager-web-')
+  const saved: { create: boolean; name: string; keywords: string[] }[] = []
+  const conv = `grp:${'cd'.repeat(16)}`
+  const studio = {
+    state: () => ({ groups: [{ id: conv, title: '#t' }], backends: ['ollama'], bots: [], defaults: {}, limits: {} }) as never,
+    save: (b: { name: string; keywords: string[] }, create: boolean) => {
+      saved.push({ create, name: b.name, keywords: b.keywords })
+      return b.name === 'taken' ? 'This group already has a bot named taken' : undefined
+    },
+    remove: () => true,
+    preview: () => ({ system: 'S', chat: 'C' }),
+    test: async () => ({ reply: 'hi' }),
+  }
+  const site = await startDocsServer({ dir, version: '1', chat: () => chat, agentUsages: () => [] }, studio)
+  const post = (route: string, body: unknown, headers: Record<string, string> = { 'x-pager': 'studio', 'content-type': 'application/json' }): Promise<Response> =>
+    fetch(`${site.url}${route}`, { method: 'POST', headers, body: JSON.stringify(body) })
+  const bot = { conv, name: 'scribe', backend: 'ollama', instructions: 'take notes', keywords: ['ship'], mode: 'mention' }
+  try {
+    assert.match((await get(`${site.url}studio/`)).body, /pager bot studio/)
+    assert.equal((await post('api/studio/save', bot, { 'content-type': 'application/json' })).status, 403, 'no header: refused')
+    assert.equal((await post('api/studio/save', bot, { 'x-pager': 'studio', 'content-type': 'text/plain' })).status, 403, 'not JSON: refused')
+    assert.deepEqual(saved, [])
+    assert.equal((await post('api/studio/save', { ...bot, create: true })).status, 200)
+    assert.deepEqual(saved, [{ create: true, name: 'scribe', keywords: ['ship'] }])
+    const bad = await post('api/studio/save', { ...bot, name: 'Bad Name' })
+    assert.equal(bad.status, 400)
+    assert.match(((await bad.json()) as { error: string }).error, /not a valid bot name/)
+    const taken = await post('api/studio/save', { ...bot, name: 'taken' })
+    assert.match(((await taken.json()) as { error: string }).error, /already has a bot/)
+    assert.deepEqual(await (await post('api/studio/preview', bot)).json(), { system: 'S', chat: 'C' })
+    assert.deepEqual(await (await post('api/studio/test', { ...bot, message: 'hello' })).json(), { reply: 'hi' })
+    assert.equal((await post('api/studio/remove', { conv, name: 'scribe' })).status, 200)
+    const rebinding = Promise.withResolvers<number>()
+    const req = http.request(`${site.url}api/studio/save`, { method: 'POST', headers: { host: 'evil.example', 'x-pager': 'studio', 'content-type': 'application/json' } }, (res) => {
+      res.resume()
+      rebinding.resolve(res.statusCode ?? 0)
+    })
+    req.on('error', rebinding.reject)
+    req.end('{}')
+    assert.equal(await rebinding.promise, 403, 'a foreign Host header is refused on POST too')
+    assert.equal(JSON.parse((await get(`${site.url}api/studio`)).body).groups[0].id, conv)
+  } finally {
+    site.close()
+  }
+  const off = await startDocsServer({ dir, version: '1', chat: () => chat, agentUsages: () => [] })
+  try {
+    assert.equal((await get(`${off.url}api/studio`)).status, 503, 'no agents, no studio')
+  } finally {
+    off.close()
   }
 })

@@ -1,0 +1,215 @@
+/* Design tokens. Dark (pitch black, the default) lives on :root; light is html[data-theme="light"]; an omp theme writes the same
+   properties inline on <html> (class tn-themed, see ui/appearance.js). Every colour in the app reads from these. */
+:root {
+  color-scheme: dark;
+  --page: #000;
+  --panel: #09090b;
+  --card: #111114;
+  --raise: #19191d;
+  --l1: rgba(255, 255, 255, .07);
+  --l2: rgba(255, 255, 255, .10);
+  --l3: rgba(255, 255, 255, .15);
+  --l4: rgba(255, 255, 255, .24);
+  --t1: #ededed;
+  --t2: #a1a1a1;
+  --t3: #8a8a92;
+  --t4: #55555c;
+  --ink: #ededed;
+  --ink2: rgba(237, 237, 237, .7);
+  --ink3: rgba(237, 237, 237, .42);
+  --ink4: rgba(237, 237, 237, .14);
+  --a1: #44cfff;
+  --a2: #3b6cff;
+  --grad: linear-gradient(135deg, var(--a1), var(--a2));
+  --grad-ink: #05070b;
+  --accent: #5a8cff;
+  --accent-ink: #9dbcff;
+  --accent-fill: #2a5fe0;
+  --live: #a86af4;
+  --ok: #3ecf8e;
+  --warn: #f5a524;
+  --bad: #ff6166;
+  --ink-pen: #ff7040;
+  --ok-fill: #137348;
+  --bad-fill: #b52c35;
+  --live-fill: #6d37b5;
+  --ink-pen-fill: #a9391b;
+  --topbar-bg: rgba(0, 0, 0, .56);
+  --sheet-a: var(--card);
+  --sheet-b: var(--card);
+  --fog: #0f0f12;
+  --well: rgba(255, 255, 255, .035);
+  --well-line: rgba(255, 255, 255, .075);
+  --chip-bg: rgba(255, 255, 255, .07);
+  --pop-bg: rgba(28, 28, 32, .94);
+  --glass-hi: rgba(255, 255, 255, .05);
+  --dim: rgba(0, 0, 0, .55);
+  --code-bg: #0c0c0d;
+  --tbl-head: #111113;
+  --rail: rgb(110, 150, 255);
+  --glow-a: rgba(60, 100, 255, .10);
+  --glow-b: rgba(40, 200, 150, .07);
+  --sheet-drop: 0 1px 2px rgba(0, 0, 0, .5), 0 16px 40px -18px rgba(0, 0, 0, .7);
+  --tip-shadow: 0 10px 28px -10px rgba(0, 0, 0, .7);
+  --pane-shadow: 0 0 0 1px var(--l2), 0 18px 50px -12px rgba(0, 0, 0, .55);
+
+  /* Terminal */
+  --tv-bg: #060607;
+  --tv-fg: #e4e4e7;
+  --tv-cur: #e4e4e7;
+  --tv-cur-ink: #060607;
+  --tv-sel: rgba(90, 140, 255, .32);
+  --tv-m1: rgba(245, 177, 61, .34);
+  --tv-hit: rgba(245, 177, 61, .60);
+  --ansi0: #50525a; --ansi1: #ff6166; --ansi2: #3ecf8e; --ansi3: #f5b13d; --ansi4: #5b8dff; --ansi5: #b98cff; --ansi6: #35c7e6; --ansi7: #c9cad0;
+  --ansi8: #7a7c85; --ansi9: #ff8a8e; --ansi10: #6fe3b0; --ansi11: #ffd27a; --ansi12: #8fb6ff; --ansi13: #d2b3ff; --ansi14: #7fdcf0; --ansi15: #f7f7f8;
+
+  /* Shape, type, motion (identical in every mode) */
+  --r-chip: 6px;
+  --r-ctl: 8px;
+  --r-card: 12px;
+  --r-panel: 16px;
+  --sans: 'Geist', -apple-system, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'Geist Mono', 'Symbols Nerd Font Mono', 'Cascadia Mono', ui-monospace, Consolas, monospace;
+  --ease: cubic-bezier(.2, .7, .2, 1);
+  --out: cubic-bezier(.16, 1, .3, 1);
+  --spring: cubic-bezier(.34, 1.32, .64, 1);
+  --ui-size: 13.5px;
+
+  /* Window metrics (layouts.css overrides --tn-bar per layout) */
+  --tint: .8; /* window background coverage: Settings > Appearance > opacity */
+  --tn-bar: 40px;
+  --tn-zoom: 1;
+  --gap: 4px;
+  --status-h: 26px;
+  --wco: 138px; /* space the native window-control overlay takes at the right of the bar */
+}
+
+html[data-theme="light"] {
+  color-scheme: light;
+  --page: #efefec;
+  --panel: #fbfbfa;
+  --card: #ffffff;
+  --raise: #f4f4f2;
+  --l1: rgba(24, 26, 44, .06);
+  --l2: rgba(24, 26, 44, .09);
+  --l3: rgba(24, 26, 44, .14);
+  --l4: rgba(24, 26, 44, .22);
+  --t1: #1b1c20;
+  --t2: #55575f;
+  --t3: #6a6c74;
+  --t4: #b3b5bb;
+  --ink: #1b1c20;
+  --ink2: rgba(27, 28, 32, .66);
+  --ink3: rgba(27, 28, 32, .44);
+  --ink4: rgba(27, 28, 32, .14);
+  --accent: #3d6fff;
+  --accent-ink: #2448c4;
+  --accent-fill: #2f63f0;
+  --ok: #2fae74;
+  --warn: #d98a0b;
+  --bad: #e5484d;
+  --ink-pen: #e8552d;
+  --ok-fill: #167a4d;
+  --bad-fill: #bf3038;
+  --live-fill: #7540bd;
+  --ink-pen-fill: #b43f1e;
+  --topbar-bg: rgba(239, 239, 236, .72);
+  --sheet-a: rgba(255, 255, 255, .82);
+  --sheet-b: rgba(252, 252, 254, .70);
+  --fog: #f3f4f7;
+  --well: rgba(255, 255, 255, .62);
+  --well-line: rgba(27, 28, 48, .065);
+  --chip-bg: rgba(27, 28, 48, .055);
+  --pop-bg: rgba(255, 255, 255, .86);
+  --glass-hi: #fff;
+  --dim: rgba(244, 244, 241, .5);
+  --code-bg: #f8f8f6;
+  --tbl-head: #fafaf9;
+  --rail: rgb(96, 120, 178);
+  --glow-a: rgba(68, 207, 255, .16);
+  --glow-b: rgba(120, 220, 160, .12);
+  --sheet-drop: 0 1px 2px rgba(20, 30, 60, .05), 0 26px 60px -26px rgba(30, 42, 90, .26), 0 70px 120px -50px rgba(30, 42, 90, .20);
+  --tip-shadow: 0 10px 28px -10px rgba(0, 0, 0, .3);
+  --pane-shadow: 0 0 0 1px var(--l2), 0 18px 50px -12px rgba(0, 0, 0, .35);
+  --tv-bg: #fcfcfb;
+  --tv-fg: #1f2126;
+  --tv-cur: #2b2d33;
+  --tv-cur-ink: #fcfcfb;
+  --tv-sel: rgba(61, 111, 255, .20);
+  --tv-m1: rgba(245, 177, 61, .42);
+  --tv-hit: rgba(245, 177, 61, .78);
+  --ansi0: #1f2126; --ansi1: #cf3a3f; --ansi2: #1d8a5a; --ansi3: #a86a00; --ansi4: #2f5fe0; --ansi5: #8a4fd8; --ansi6: #0f7f93; --ansi7: #6f727b;
+  --ansi8: #80838c; --ansi9: #e5484d; --ansi10: #2fae74; --ansi11: #c98a0b; --ansi12: #3d6fff; --ansi13: #a86af4; --ansi14: #16a3c4; --ansi15: #9ea1a8;
+}
+
+/* Reduced transparency: popovers and the window go solid. */
+@media (prefers-reduced-transparency: reduce) {
+  :root { --tint: 1; }
+  .pop, .tn-cmdk, .mdl, .tip, .toast { backdrop-filter: none !important; background: var(--card) !important; }
+}
+@media (prefers-contrast: more) {
+  :root { --l1: rgba(255, 255, 255, .22); --l2: rgba(255, 255, 255, .4); --l3: rgba(255, 255, 255, .6); --t3: #d0d0d6; --t4: #a8a8b0; }
+  html[data-theme="light"] { --l1: rgba(0, 0, 0, .14); --l2: rgba(0, 0, 0, .3); --l3: rgba(0, 0, 0, .5); --t3: #2c2d32; --t4: #55575f; }
+}
+
+/* ---------------------------------------------------------------- base */
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: transparent; }
+body {
+  font: 400 var(--ui-size)/1.45 var(--sans);
+  letter-spacing: -.003em;
+  color: var(--t1);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  user-select: none;
+  cursor: default;
+}
+button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+button { background: none; border: 0; padding: 0; cursor: default; }
+input, textarea { user-select: text; }
+::selection { background: color-mix(in srgb, var(--accent) 22%, transparent); }
+.mono { font-family: var(--mono); }
+.ico { width: 16px; height: 16px; flex: none; display: block; }
+:focus { outline: none; }
+:focus-visible { outline: none; box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px color-mix(in srgb, var(--accent) 18%, transparent); }
+[hidden] { display: none !important; }
+
+/* Scrollbars: slim overlay thumbs, never the chunky default. */
+* { scrollbar-width: thin; scrollbar-color: var(--l3) transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--l3); border-radius: 999px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--l4); background-clip: content-box; border: 3px solid transparent; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+
+/* ---------------------------------------------------------------- motion */
+@keyframes fadeIn { from { opacity: 0; } }
+@keyframes popIn { from { opacity: 0; transform: translateY(-3px) scale(.97); } }
+@keyframes cmdkIn { from { opacity: 0; transform: scale(.97); } }
+@keyframes mdlIn { from { opacity: 0; transform: translateY(10px) scale(.97); } }
+@keyframes toastIn { from { opacity: 0; transform: translateY(10px); } }
+@keyframes rowIn { from { opacity: 0; transform: translateX(-8px); } }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes tnFocusIn { from { transform: scaleX(0); } }
+@keyframes tnGlow { to { filter: hue-rotate(360deg); } }
+@keyframes tnDone { 0% { opacity: 0; } 20% { opacity: .9; } 100% { opacity: 0; } }
+@keyframes tnBell { 0% { opacity: .9; } 100% { opacity: 0; } }
+@keyframes dotPing { from { transform: scale(1); opacity: .55; } to { transform: scale(2.6); opacity: 0; } }
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes pfIn { from { opacity: 0; transform: translateY(6px); } }
+@keyframes sheetIn { from { opacity: 0; transform: translateX(14px); } }
+
+html.reduce-motion *, html.reduce-motion *::before, html.reduce-motion *::after {
+  animation-duration: .001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: .001ms !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not(.motion) *, html:not(.motion) *::before, html:not(.motion) *::after {
+    animation-duration: .001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .001ms !important;
+  }
+}
+/* A theme switch re-tints smoothly (hover-previewing themes). */
+html.tn-retint, html.tn-retint * { transition: background-color .4s var(--ease), color .4s var(--ease), box-shadow .4s var(--ease), border-color .4s var(--ease) !important; }
