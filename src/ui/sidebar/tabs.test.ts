@@ -7,7 +7,6 @@ import { AI_ID } from '../../ai/chat.js'
 import { SETTINGS_ID } from '../../app/settingsView.js'
 import { DOCS_ID } from '../../docs/store.js'
 import { TERM_ID } from '../../tools/terminal/sessions.js'
-import { WEB_ID } from '../../tools/web/tool.js'
 import { entryIndexOf, fileable, sidebarEntries, sidebarHit, visibleTabIds, type SidebarEntry, type SidebarInput } from './tabs.js'
 
 const conv = (id: string, kind: ConvView['kind']): ConvView => ({ id, kind, title: id, unread: 0, online: true }) as ConvView
@@ -35,14 +34,14 @@ test('order: home, direct, groups, agents (room, ai, each agent, shared), then t
     'v direct (2)', 'd1', 'd2',
     'v groups (1)', 'g1',
     'v agents (5)', ROOM_ID, AI_ID, agentTabId('omp'), agentTabId('claude'), sharedTabId('ab'.repeat(32)),
-    'v tools (4)', TERM_ID, DOCS_ID, WEB_ID, SETTINGS_ID,
+    'v tools (3)', TERM_ID, DOCS_ID, SETTINGS_ID,
   ])
-  assert.deepEqual(visibleTabIds(entries), [null, 'd1', 'd2', 'g1', ROOM_ID, AI_ID, agentTabId('omp'), agentTabId('claude'), sharedTabId('ab'.repeat(32)), TERM_ID, DOCS_ID, WEB_ID, SETTINGS_ID])
+  assert.deepEqual(visibleTabIds(entries), [null, 'd1', 'd2', 'g1', ROOM_ID, AI_ID, agentTabId('omp'), agentTabId('claude'), sharedTabId('ab'.repeat(32)), TERM_ID, DOCS_ID, SETTINGS_ID])
 })
 
 test('extra terminal tabs sit right after the first, ahead of docs', () => {
   const ids = visibleTabIds(sidebarEntries(input({ terminals: [TERM_ID, 'terminal:2', 'terminal:3'] })))
-  assert.deepEqual(ids.slice(-6), [TERM_ID, 'terminal:2', 'terminal:3', DOCS_ID, WEB_ID, SETTINGS_ID])
+  assert.deepEqual(ids.slice(-5), [TERM_ID, 'terminal:2', 'terminal:3', DOCS_ID, SETTINGS_ID])
 })
 
 test('empty DIRECT and GROUPS are omitted; pending rows come right after HOME', () => {
@@ -96,6 +95,6 @@ test('hit-testing maps a 1-based row through the scroll offset', () => {
 test('only chats, docs, the AI tab and the agents room can be filed', () => {
   const convs = [conv('d1', 'dm')]
   for (const id of ['d1', DOCS_ID, ROOM_ID, AI_ID]) assert.equal(fileable(id, convs, true), true, id)
-  for (const id of [null, TERM_ID, WEB_ID, SETTINGS_ID, agentTabId('omp'), sharedTabId('ab'), 'nope']) assert.equal(fileable(id, convs, true), false, String(id))
+  for (const id of [null, TERM_ID, SETTINGS_ID, agentTabId('omp'), sharedTabId('ab'), 'nope']) assert.equal(fileable(id, convs, true), false, String(id))
   assert.equal(fileable(ROOM_ID, convs, false), false)
 })

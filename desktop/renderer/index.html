@@ -1,29 +1,43 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark" class="lay-tiles dense-compact tabs-h mat-glass">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data: blob: http://127.0.0.1:*; media-src 'self' blob: http://127.0.0.1:*; frame-src http://127.0.0.1:*; worker-src 'self' blob:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*">
+<meta name="color-scheme" content="dark light">
 <title>Pager</title>
+<script src="ui/boot.js"></script>
 <link rel="stylesheet" href="vendor/xterm.css">
+<link rel="stylesheet" href="ui/tokens.css">
+<link rel="stylesheet" href="ui/kit.css">
+<link rel="stylesheet" href="ui/chrome.css">
+<link rel="stylesheet" href="ui/layouts.css">
+<link rel="stylesheet" href="ui/palette.css">
+<link rel="stylesheet" href="ui/settings.css">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header id="bar"><img src="pager.png" alt=""><span class="name">pager</span><button id="docs" type="button" title="Docs and usage stats (F1)">docs</button><button id="studio" type="button" title="Bot studio (F2)">bots</button><button id="web" type="button" title="Browser pane (Ctrl+Shift+B)">web</button></header>
-<div id="work">
-<main id="term"></main>
-<div id="split" hidden></div>
-<section id="pane" hidden>
-<div id="tabs"></div>
-<div id="nav"><button id="back" type="button" title="Back (Alt+Left)">‹</button><button id="fwd" type="button" title="Forward (Alt+Right)">›</button><button id="reload" type="button">⟳</button><input id="addr" type="text" placeholder="Search or enter address" spellcheck="false" autocomplete="off"><button id="hide" type="button" title="Hide the pane (Ctrl+Shift+B)">×</button></div>
-<div id="note"></div>
-<div id="viewport"></div>
-</section>
+<div id="app">
+  <header id="bar">
+    <div class="bar-l"><span class="avatar skel" id="avatar"></span><span class="skel skel-chip"></span><span class="skel skel-chip w2"></span></div>
+    <div class="bar-fill"></div>
+  </header>
+  <div id="stage">
+    <aside id="sidebar" hidden></aside>
+    <main id="panes"><div class="skel-pane"><i></i><i></i><i></i></div></main>
+    <section id="pane" hidden>
+      <div id="tabs"></div>
+      <div id="nav"><button id="back" type="button" data-tip="Back" data-tip-keys="Alt+Left">‹</button><button id="fwd" type="button" data-tip="Forward" data-tip-keys="Alt+Right">›</button><button id="reload" type="button">⟳</button><input id="addr" type="text" placeholder="Search or enter address" spellcheck="false" autocomplete="off"><button id="hide" type="button" data-tip="Hide the browser" data-tip-keys="Ctrl+Shift+B">×</button></div>
+      <div id="note"></div>
+      <div id="viewport"></div>
+    </section>
+    <div id="split" hidden></div>
+    <section id="sheet-host"></section>
+  </div>
+  <footer id="statusline" hidden></footer>
 </div>
-<div id="glass"></div>
-<script src="vendor/xterm.js"></script>
-<script src="vendor/addon-fit.js"></script>
-<script src="vendor/addon-webgl.js"></script>
-<script src="renderer.js"></script>
-<script src="pane.js"></script>
+<div id="overlay"></div>
+<div id="toasts"></div>
+<script type="module" src="renderer.js"></script>
+<script type="module" src="pane.js"></script>
 </body>
 </html>

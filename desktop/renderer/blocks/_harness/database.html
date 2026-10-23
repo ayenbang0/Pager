@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Database harness</title>
+<!-- node desktop/renderer/blocks/_harness/serve.mjs, then open /blocks/_harness/database.html?tab=browse&theme=dark&page=8&table=products
+     params: path=sample|<file> (omit for the welcome screen), tab, table, theme=dark|light, page, ro=0 (open for editing) -->
+<link rel="stylesheet" href="../../ui/tokens.css">
+<link id="db-css" rel="stylesheet" href="../database.css">
+<style>
+@font-face { font-family: 'Geist'; src: url('../../fonts/Geist.woff2') format('woff2'); font-weight: 100 900; }
+@font-face { font-family: 'Geist Mono'; src: url('../../fonts/GeistMono.woff2') format('woff2'); font-weight: 100 900; }
+html, body { height: 100%; }
+body { background: var(--page); padding: 6px; }
+#stage { height: 100%; display: flex; }
+#pane { flex: 1; min-width: 0; border-radius: 12px; background: var(--card); box-shadow: var(--pane-shadow); overflow: hidden; position: relative; }
+#toasts { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 99; }
+.toast { padding: 10px 16px; border-radius: 12px; background: var(--pop-bg); box-shadow: 0 0 0 1px var(--l2), var(--tip-shadow); font-size: 13px; animation: toastIn .4s var(--out); }
+.toast.error { color: var(--bad); }
+.toast.ok { color: var(--ok); }
+</style>
+</head>
+<body>
+<div id="stage"><div id="pane"></div></div>
+<div id="toasts"></div>
+<script type="module">
+import { config, makeCtx } from './shim.js'
+const q = new URLSearchParams(location.search)
+if (q.get('theme') === 'light') document.documentElement.dataset.theme = 'light'
+const cfg = await config()
+const path = q.get('path') === 'sample' ? cfg.sample : q.get('path') || undefined
+const args = { path, tab: q.get('tab') || undefined, table: q.get('table') || undefined, readOnly: q.get('ro') !== '0', pageSize: q.get('page') ? +q.get('page') : undefined }
+const ctx = makeCtx({ args, cwd: cfg.out })
+const mod = await import('../database.js')
+window.block = mod.default.mount(document.getElementById('pane'), ctx)
+window.__ctx = ctx
+document.documentElement.dataset.ready = '1'
+</script>
+</body>
+</html>

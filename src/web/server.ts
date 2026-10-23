@@ -1,15 +1,21 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import http from 'node:http'
-import { APP_CSS, APP_JS, INDEX_HTML } from './assets.js'
-import { LOGO_PNG } from './logo.js'
+import { APP_CSS, APP_JS, INDEX_HTML, THEME_JS } from './assets.js'
+import { GEIST_MONO_WOFF2, GEIST_WOFF2 } from './fonts.js'
+import { LOGO_MARK_SVG, LOGO_SVG } from './logo.js'
 import { docsData, statsData, type StatsSources } from './site.js'
 import { parseBotInput, type StudioApi } from './studio.js'
 import { STUDIO_CSS, STUDIO_HTML, STUDIO_JS } from './studioAssets.js'
 
-const ASSETS: Record<string, [type: string, body: string]> = {
+const ASSETS: Record<string, [type: string, body: string | Buffer]> = {
   '/': ['text/html; charset=utf-8', INDEX_HTML],
   '/app.css': ['text/css; charset=utf-8', APP_CSS],
   '/app.js': ['text/javascript; charset=utf-8', APP_JS],
+  '/theme.js': ['text/javascript; charset=utf-8', THEME_JS],
+  '/logo.svg': ['image/svg+xml', LOGO_SVG],
+  '/logo-mark.svg': ['image/svg+xml', LOGO_MARK_SVG],
+  '/fonts/geist.woff2': ['font/woff2', GEIST_WOFF2],
+  '/fonts/geist-mono.woff2': ['font/woff2', GEIST_MONO_WOFF2],
   '/studio/': ['text/html; charset=utf-8', STUDIO_HTML],
   '/studio.css': ['text/css; charset=utf-8', STUDIO_CSS],
   '/studio.js': ['text/javascript; charset=utf-8', STUDIO_JS],
@@ -75,13 +81,13 @@ export async function startDocsServer(src: StatsSources, studio?: StudioApi): Pr
   const token = randomBytes(18).toString('hex')
   let host = ''
   const server = http.createServer((req, res) => {
-    const send = (code: number, type: string, body: string): void => {
+    const send = (code: number, type: string, body: string | Buffer): void => {
       res.writeHead(code, {
         'content-type': type,
         'cache-control': 'no-store',
         'x-content-type-options': 'nosniff',
         'referrer-policy': 'no-referrer',
-        'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'",
+        'content-security-policy': "default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'",
       })
       res.end(body)
     }
@@ -110,10 +116,6 @@ export async function startDocsServer(src: StatsSources, studio?: StudioApi): Pr
       }
       if (route === '/api/docs') return send(200, 'application/json', JSON.stringify(docsData(src.version)))
       if (route === '/api/stats') return send(200, 'application/json', JSON.stringify(statsData(src)))
-      if (route === '/logo.png') {
-        res.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' })
-        return res.end(LOGO_PNG)
-      }
       const asset = ASSETS[route]
       if (asset === undefined) return send(404, 'text/plain', 'not found')
       send(200, asset[0], asset[1])

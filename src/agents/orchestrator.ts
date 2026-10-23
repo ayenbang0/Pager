@@ -6,6 +6,7 @@ import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { stripVTControlCharacters } from 'node:util'
 import type { MessageView, Toast, ToastKind } from '../app/engine.js'
+import { removeTree } from '../platform/removeTree.js'
 import { isRecord } from '../util/guards.js'
 import { ADAPTERS, findBinary, type AdapterSpec } from './run/adapters.js'
 import type { AcpCommand, AcpConfigOption } from './run/acp.js'
@@ -788,7 +789,7 @@ export class Orchestrator extends EventEmitter {
     } catch (err) {
       return { state: 'failed', reason: errMsg(err) }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+      removeTree(dir)
     }
   }
 
@@ -822,7 +823,7 @@ export class Orchestrator extends EventEmitter {
         } catch (err) {
           this.post(`${cli}: failed ${errMsg(err)}`)
         } finally {
-          fs.rmSync(dir, { recursive: true, force: true })
+          removeTree(dir)
         }
       }),
     )
@@ -948,8 +949,8 @@ export class Orchestrator extends EventEmitter {
       return this.toast('success', 'Remembered')
     }
     if (action === 'clear') {
-      this.memoryStore.clear(root)
-      return this.post('memory cleared')
+      const why = this.memoryStore.clear(root)
+      return why === undefined ? this.post('memory cleared') : this.toast('error', `Could not clear the memory file: ${why}`)
     }
     const notes = this.memoryStore.read(root).trim()
     this.post(notes === '' ? 'memory is empty' : `memory (${notes.split('\n').length} notes):\n${notes}`)
@@ -973,7 +974,7 @@ export class Orchestrator extends EventEmitter {
         list = probe.commands
         this.commandStore.set(cfg.cli, list)
       } finally {
-        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5 })
+        removeTree(dir)
       }
     }
     this.post(

@@ -65,8 +65,8 @@ const FEATURES = [
   ['Coding agents', 'Run agents in isolated git worktrees with /agent: chains, reviews, merge, undo, and a shared room contacts can watch or control.'],
   ['Shared documents', 'Markdown documents shared with a chat (/doc new), edited together with a CRDT, with a built-in Vim mode.'],
   ['Themes', 'Flat and visual themes, accent and density settings, and custom themes you define yourself. All under Settings > Appearance.'],
-  ['Desktop window', 'Windows: a pitch-black window with an opt-in glass material, Departure Mono pixel glyphs for the logo and spinners, per-user install without admin.'],
-  ['Web and AI tabs', 'Open pages and talk to a local or hosted model without leaving pager.'],
+  ['Desktop window', 'Windows: a window drawn in one smooth style (Geist, a pitch-black or light page, glass cards, a vector Pager mark) with an opt-in glass material, per-user install, no admin.'],
+  ['AI tab and web tools', 'Talk to a local or hosted model without a repository; agents can search the web and read pages.'],
   ['Usage stats', 'This site: messages, agent turns, tokens and terminal commands, all computed from files in your data directory. Nothing leaves your machine.'],
 ].map(([title, body]) => ({ title: title!, body: body! }))
 

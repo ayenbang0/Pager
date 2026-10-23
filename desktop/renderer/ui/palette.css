@@ -1,0 +1,135 @@
+/* Command palette, generic picker and theme picker (ui/palette.js). Colours come from tokens.css only. */
+
+/* ---------------------------------------------------------------- layers */
+.pal-layer {
+  z-index: 90; display: flex; justify-content: center; align-items: flex-start;
+  padding: var(--pal-top, 12vh) 24px 24px;
+}
+.pal-layer.thm { z-index: 92; }
+.pal-layer.pk { z-index: 95; padding-left: 12px; padding-right: 12px; }
+
+/* ---------------------------------------------------------------- card */
+.pal-card {
+  display: flex; flex-direction: column; width: var(--pal-w, min(640px, 100vw - 48px)); max-height: 100%; min-height: 0;
+  border-radius: 16px; overflow: hidden; color: var(--t1);
+  background: var(--pop-bg);
+  -webkit-backdrop-filter: blur(32px) saturate(190%); backdrop-filter: blur(32px) saturate(190%);
+  box-shadow: 0 0 0 1px var(--l2), inset 0 1px 0 var(--glass-hi), 0 40px 100px -24px rgba(0, 0, 0, .45), 0 0 120px -40px color-mix(in srgb, var(--accent) 35%, transparent);
+  animation: cmdkIn .28s var(--out);
+}
+html:not([data-theme="light"]) .pal-card {
+  -webkit-backdrop-filter: none; backdrop-filter: none;
+  box-shadow: 0 0 0 1px var(--l3), inset 0 1px 0 var(--glass-hi), 0 24px 60px -20px rgba(0, 0, 0, .65), 0 0 120px -40px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+.pal-card.tn-pk { animation: popIn .22s var(--out); }
+html.reduce-motion .pal-card, html.reduce-motion .pal-layer { animation: none; }
+
+/* ---------------------------------------------------------------- header */
+.pal-head {
+  display: flex; align-items: center; gap: 12px; flex: none; height: 54px; padding: 0 16px;
+  box-shadow: inset 0 -1px 0 var(--l1); color: var(--t3);
+}
+.pal-head > .ico { width: 17px; height: 17px; }
+.pal-in {
+  flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent;
+  font: 400 15.5px/1.3 var(--sans); letter-spacing: -.005em; color: var(--t1); caret-color: var(--accent);
+}
+.pal-in:focus, .pal-in:focus-visible { outline: 0; box-shadow: none; }
+.pal-in::placeholder { color: var(--t3); opacity: 1; }
+.pal-esc { height: 20px; }
+.tn-thm .pal-head { height: 50px; }
+.tn-thm .pal-in { font-size: 14.5px; }
+
+/* ---------------------------------------------------------------- chips */
+.pal-chips { display: flex; align-items: center; gap: 4px; flex: none; padding: 10px 12px 2px; overflow-x: auto; scrollbar-width: none; }
+.pal-chips::-webkit-scrollbar { display: none; }
+.pal-chip {
+  flex: none; height: 24px; padding: 0 10px; border-radius: 999px; cursor: default; white-space: nowrap;
+  font: 500 12.5px/1 var(--sans); color: var(--t2); background: transparent;
+  transition: background-color .15s var(--ease), color .15s var(--ease), box-shadow .15s var(--ease);
+}
+.pal-chip:hover { color: var(--t1); background: var(--l1); }
+.pal-chip.on, .pal-chip.on:hover {
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
+/* ---------------------------------------------------------------- list */
+.pal-list {
+  flex: 1 1 auto; min-height: 0; max-height: var(--pal-list, min(460px, 58vh)); overflow-y: auto; overscroll-behavior: contain;
+  padding: 4px 8px 8px; scroll-padding: 8px 0;
+}
+.pal-grp { padding: 12px 10px 6px; font: 500 11.5px/1.2 var(--sans); color: var(--t3); }
+.pal-grp:first-child { padding-top: 8px; }
+.pal-empty { padding: 28px 10px; text-align: center; font-size: 13px; color: var(--t3); }
+
+.pal-row {
+  position: relative; display: flex; align-items: center; gap: 11px; height: 40px; padding: 0 10px 0 8px;
+  border-radius: 9px; color: var(--t1); cursor: default;
+}
+.pal-row.sel { background: var(--l1); }
+.pal-row.sel::before {
+  content: ''; position: absolute; left: -6px; top: 11px; bottom: 11px; width: 2px; border-radius: 2px; background: var(--accent);
+}
+.pal-row.dis { opacity: .5; }
+.pal-row.dis.sel { background: none; }
+.pal-row.dis.sel::before { display: none; }
+
+.pal-ic {
+  display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 7px;
+  background: var(--card); box-shadow: inset 0 0 0 1px var(--l2); color: var(--t2);
+}
+.pal-ic .ico { width: 14px; height: 14px; }
+.pal-row.sel .pal-ic { color: var(--t1); }
+.pal-ic.brand { color: inherit; }
+.pal-ic.brand svg { display: block; }
+.pal-letter { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 6px; font: 600 11px/1 var(--sans); color: #fff; background: var(--accent-fill); }
+
+.pal-main { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; overflow: hidden; }
+.pal-l { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; color: var(--t1); }
+.pal-hint { flex: none; font: 400 12px/1 var(--mono); color: var(--t4); }
+.pal-sub { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 400 11.5px/1.2 var(--mono); color: var(--t4); }
+.pal-row.file .pal-l { font-weight: 500; }
+.pal-card mark { background: color-mix(in srgb, var(--accent) 16%, transparent); color: inherit; border-radius: 3px; padding: 0 1px; margin: 0 -1px; }
+
+.pal-row .kbds { margin-left: auto; }
+.pal-mode {
+  display: inline-flex; align-items: center; flex: none; height: 20px; padding: 0 8px; border-radius: 999px;
+  font: 400 11px/1 var(--mono); color: var(--t3); background: var(--chip-bg);
+}
+.pal-ck { display: grid; place-items: center; flex: none; width: 14px; color: var(--accent-ink); }
+.pal-ck .ico { width: 13px; height: 13px; }
+
+.pal-acts { display: inline-flex; align-items: center; gap: 2px; margin-left: auto; opacity: 0; transition: opacity .15s var(--ease); }
+.pal-row:hover .pal-acts, .pal-row.sel .pal-acts { opacity: 1; }
+.pal-act { width: 26px; height: 26px; }
+.pal-act .ico { width: 14px; height: 14px; }
+.pal-acts ~ .pal-ck { margin-left: 4px; }
+
+/* ---------------------------------------------------------------- footer */
+.pal-foot {
+  display: flex; align-items: center; gap: 8px; flex: none; height: 40px; padding: 0 12px;
+  box-shadow: inset 0 1px 0 var(--l1); font-size: 12.5px; color: var(--t2);
+}
+.pal-foot .kbd { color: var(--t2); }
+.pal-foot .kbd + .kbd { margin-left: -4px; }
+.pal-fl { margin-right: 6px; }
+.pal-fs { flex: 1; }
+.pal-fs + .kbd { margin-right: -2px; }
+
+/* ---------------------------------------------------------------- theme swatch / theme picker */
+.tn-sw {
+  display: inline-flex; align-items: center; gap: 7px; flex: none; height: 22px; padding: 0 8px; border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--l2); transition: box-shadow .15s var(--ease);
+}
+.tn-sw-t { font: 600 10.5px/1 var(--mono); }
+.tn-sw-d { display: inline-flex; align-items: center; gap: 3px; }
+.tn-sw-d i { display: block; width: 5px; height: 5px; border-radius: 50%; }
+.pal-row.sel .tn-sw, .pal-row.cur .tn-sw { box-shadow: inset 0 0 0 1px var(--l2), 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent); }
+
+.tn-thm .pal-row { height: 36px; }
+.tn-thm .pal-row.sel::before { top: 9px; bottom: 9px; }
+.tn-thm .pal-list { padding: 6px 6px 8px; }
+.tn-thm .pal-row .pal-main { flex: 1; }
+.tn-thm .pal-l { font-size: 13.5px; }

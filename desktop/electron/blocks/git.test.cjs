@@ -1,0 +1,193 @@
+'use strict'
+// Runs the git block's main-process methods against a throwaway repository: `node --test desktop/electron/blocks/git.test.cjs`.
+const assert = require('node:assert/strict')
+const { execFileSync } = require('node:child_process')
+const fs = require('node:fs')
+const os = require('node:os')
+const path = require('node:path')
+const { pathToFileURL } = require('node:url')
+const { test, before, after } = require('node:test')
+const { makeFixture } = require('../../renderer/blocks/_harness/git-fixture.cjs')
+
+process.env.PAGER_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-home-')) // no control.token: no Pager to ask
+const block = require('./git.cjs')
+const m = block.methods
+
+let fx
+let patch
+const git = (...args) => execFileSync('git', args, { cwd: fx.repo, encoding: 'utf8', windowsHide: true })
+const call = (name, args = {}) => m[name]({ cwd: fx.repo, ...args }, { emit() {} })
+
+before(async () => {
+  fx = makeFixture()
+  patch = await import(pathToFileURL(path.join(__dirname, '../../renderer/blocks/gitpatch.js')).href)
+})
+after(() => {
+  block.dispose()
+  fx.cleanup()
+})
+
+test('open, status and refs describe the fixture', async () => {
+  const o = await call('open')
+  assert.equal(o.ok, true)
+  assert.equal(o.branch, 'main')
+  assert.equal(o.upstream, 'origin/main')
+  assert.equal(o.ahead, 1)
+  const s = await call('status')
+  const byPath = Object.fromEntries(s.files.map((f) => [f.path, f]))
+  assert.equal(byPath['docs/notes.md'].index, 'A')
+  assert.equal(byPath['src/lib.rs'].worktree, 'M')
+  assert.equal(byPath['TODO.txt'].kind, 'untracked')
+  assert.deepEqual([s.staged, s.modified, s.untracked], [1, 1, 1])
+  const r = await call('refs')
+  assert.deepEqual(r.branches.map((b) => b.name).sort(), ['feature/lanes', 'fix/long-subjects', 'main'])
+  assert.equal(r.branches.find((b) => b.name === 'main').ahead, 1)
+  assert.ok(r.tags.find((t) => t.name === 'v0.1.0' && t.annotated))
+  assert.ok(r.tags.find((t) => t.name === 'nightly' && !t.annotated))
+  assert.ok(r.remotes.find((x) => x.name === 'origin/main'))
+  assert.deepEqual(r.remoteNames, ['origin'])
+  assert.equal(await call('open', { cwd: os.tmpdir() }).then((x) => x.ok), false)
+})
+
+test('log is topologically ordered with parents and decorations; commit lists files', async () => {
+  const l = await call('log', { limit: 100 })
+  assert.equal(l.commits.length, 12)
+  assert.equal(l.commits[0].subject, 'feat(lib): re-exported layout and Place')
+  assert.match(l.commits[0].refs, /HEAD -> main/)
+  const merge = l.commits.find((c) => c.subject.startsWith('Merge branch'))
+  assert.equal(merge.parents.length, 2)
+  const idx = new Map(l.commits.map((c, i) => [c.hash, i]))
+  for (const c of l.commits) for (const p of c.parents) assert.ok(idx.get(p) > idx.get(c.hash), 'parents come after children')
+  const page = await call('log', { limit: 5, skip: 5 })
+  assert.deepEqual(page.commits.map((c) => c.hash), l.commits.slice(5, 10).map((c) => c.hash))
+  assert.equal(page.hasMore, true)
+  const d = await call('commit', { hash: merge.hash })
+  assert.equal(d.message, "Merge branch 'feature/lanes'")
+  assert.ok(d.files.length >= 1)
+  const first = l.commits[l.commits.length - 1]
+  const root = await call('commit', { hash: first.hash })
+  assert.ok(root.files.some((f) => f.path === 'src/lib.rs' && f.status === 'A' && f.add > 10))
+  const diff = await call('diff', { hash: first.hash, path: 'README.md' })
+  assert.match(diff.text, /\+# orbit/)
+  const diff2 = await call('diff', { hash: l.commits[0].hash, parent: l.commits[0].parents[0], path: 'src/mod.rs' })
+  assert.match(diff2.text, /\+pub use/)
+})
+
+test('whole-file stage, unstage and undo/redo', async () => {
+  await call('stage', { paths: ['TODO.txt'] })
+  assert.match(git('diff', '--cached', '--name-only'), /TODO\.txt/)
+  assert.equal((await call('undoState')).undo, 'Stage TODO.txt')
+  await call('undo')
+  assert.doesNotMatch(git('diff', '--cached', '--name-only'), /TODO\.txt/)
+  assert.equal((await call('undoState')).redo, 'Stage TODO.txt')
+  await call('redo')
+  assert.match(git('diff', '--cached', '--name-only'), /TODO\.txt/)
+  await call('unstage', { paths: ['TODO.txt'] })
+  assert.doesNotMatch(git('diff', '--cached', '--name-only'), /TODO\.txt/)
+  await assert.rejects(call('stage', { paths: ['../outside'] }), /outside the repository/)
+})
+
+test('line-level staging: one added line, a hunk, then unstaging a single line', async () => {
+  const text = (await call('diff', { path: 'src/lib.rs' })).text
+  const d = patch.parseDiff(text)
+  assert.ok(d.hunks.length >= 2, `expected several hunks, got ${d.hunks.length}`)
+  // Stage only the first added line of the first hunk.
+  const h0 = d.hunks[0]
+  const li = h0.lines.findIndex((l) => l.t === '+')
+  const p1 = patch.buildPatch(d, [{ hunk: 0, lines: [li] }])
+  await call('applyPatch', { patch: p1 })
+  const cached = patch.parseDiff(git('diff', '--cached', '--no-renames', '--', 'src/lib.rs'))
+  assert.equal(patch.diffStat(cached).add, 1)
+  assert.equal(patch.diffStat(cached).del, 0)
+  // The working tree diff lost exactly that line.
+  const after = patch.parseDiff((await call('diff', { path: 'src/lib.rs' })).text)
+  assert.equal(patch.diffStat(after).add, patch.diffStat(d).add - 1)
+  // Stage the whole last hunk (a pure addition) and the deletion hunk; every change of the file is staged afterwards.
+  const sel = after.hunks.map((_, i) => ({ hunk: i, lines: null }))
+  await call('applyPatch', { patch: patch.buildPatch(after, sel) })
+  assert.equal((await call('diff', { path: 'src/lib.rs' })).text.trim(), '')
+  const full = patch.parseDiff(git('diff', '--cached', '--no-renames', '--', 'src/lib.rs'))
+  assert.deepEqual(patch.diffStat(full), patch.diffStat(d))
+  // Unstage a single staged line; the rest stays staged.
+  const stagedText = (await call('diff', { path: 'src/lib.rs', staged: true })).text
+  const sd = patch.parseDiff(stagedText)
+  const hi = sd.hunks.findIndex((h) => h.lines.some((l) => l.t === '-'))
+  const di = sd.hunks[hi].lines.findIndex((l) => l.t === '-')
+  await call('applyPatch', { patch: patch.buildPatch(sd, [{ hunk: hi, lines: [di] }], { reverse: true }), reverse: true })
+  const rest = patch.parseDiff(git('diff', '--cached', '--no-renames', '--', 'src/lib.rs'))
+  assert.equal(patch.diffStat(rest).del, patch.diffStat(sd).del - 1)
+  assert.equal(patch.diffStat(rest).add, patch.diffStat(sd).add)
+  assert.equal(patch.diffStat(patch.parseDiff((await call('diff', { path: 'src/lib.rs' })).text)).del, 1)
+  // Undo returns the index to before the unstage.
+  await call('undo')
+  assert.equal(patch.diffStat(patch.parseDiff(git('diff', '--cached', '--no-renames', '--', 'src/lib.rs'))).del, patch.diffStat(sd).del)
+})
+
+test('an untracked file stages partially by line', async () => {
+  fs.writeFileSync(path.join(fx.repo, 'TODO.txt'), 'one\ntwo\nthree\n')
+  const t = await call('diff', { path: 'TODO.txt', untracked: true })
+  const d = patch.parseDiff(t.text)
+  assert.equal(d.isNew, true)
+  const idx = d.hunks[0].lines.findIndex((l) => l.text === 'two')
+  await call('applyPatch', { patch: patch.buildPatch(d, [{ hunk: 0, lines: [idx] }]) })
+  assert.equal(git('show', ':TODO.txt'), 'two\n')
+  await call('unstage', { paths: ['TODO.txt'] })
+  assert.equal(git('ls-files', '--', 'TODO.txt').trim(), '')
+})
+
+test('commit message generation falls back to the file list; commit, amend and undo work', async () => {
+  const g = await call('generateMessage')
+  assert.equal(g.source, 'heuristic')
+  assert.ok(g.summary.length > 0 && g.summary.length <= 72)
+  await assert.rejects(call('commitCreate', { summary: '  ' }), /summary/i)
+  const before = git('rev-parse', 'HEAD').trim()
+  const c = await call('commitCreate', { summary: 'Stage by line', body: 'Why: tests.' })
+  assert.equal(git('rev-parse', 'HEAD').trim(), c.hash)
+  assert.equal(git('log', '-1', '--format=%B').trim(), 'Stage by line\n\nWhy: tests.')
+  assert.equal((await call('undoState')).undo, 'Commit')
+  await call('undo')
+  assert.equal(git('rev-parse', 'HEAD').trim(), before)
+  assert.match(git('diff', '--cached', '--name-only'), /docs\/notes\.md/)
+  await call('redo')
+  await call('commitCreate', { summary: 'Stage by line, amended', amend: true })
+  assert.equal(git('log', '-1', '--format=%s').trim(), 'Stage by line, amended')
+  assert.equal(git('rev-list', '--count', 'HEAD').trim(), String(Number(git('rev-list', '--count', before).trim()) + 1))
+})
+
+test('discard, branch, tag, checkout and stash', async () => {
+  fs.writeFileSync(path.join(fx.repo, 'README.md'), 'changed\n')
+  fs.writeFileSync(path.join(fx.repo, 'junk.txt'), 'junk\n')
+  await call('discard', { paths: ['README.md'], untracked: ['junk.txt'] })
+  assert.equal(git('status', '--porcelain').includes('README.md'), false)
+  assert.equal(fs.existsSync(path.join(fx.repo, 'junk.txt')), false)
+  await call('createBranch', { name: 'topic/x' })
+  assert.equal(git('branch', '--show-current').trim(), 'topic/x')
+  await call('checkout', { ref: 'main' })
+  await call('createTag', { name: 'tmp-tag' })
+  assert.match(git('tag'), /tmp-tag/)
+  await call('deleteTag', { name: 'tmp-tag' })
+  await call('deleteBranch', { name: 'topic/x' })
+  assert.doesNotMatch(git('branch'), /topic/)
+  await assert.rejects(call('checkout', { ref: '--evil' }), /invalid ref/)
+  fs.writeFileSync(path.join(fx.repo, 'README.md'), 'stash me\n')
+  await call('stashPush', { message: 'wip' })
+  assert.equal(fs.readFileSync(path.join(fx.repo, 'README.md'), 'utf8').includes('stash me'), false)
+  assert.equal((await call('refs')).stashes.length, 1)
+  await call('stashPop')
+  assert.equal(fs.readFileSync(path.join(fx.repo, 'README.md'), 'utf8'), 'stash me\n')
+})
+
+test('push and fetch against the fixture remote; watch emits changes', async () => {
+  const p = await call('push')
+  assert.ok(typeof p.output === 'string')
+  assert.equal((await call('open')).ahead, 0)
+  await call('fetch')
+  const events = []
+  await m.watch({ cwd: fx.repo }, { emit: (e, x) => events.push([e, x]) })
+  await new Promise((r) => setTimeout(r, 400))
+  fs.writeFileSync(path.join(fx.repo, 'watched.txt'), 'x')
+  for (let i = 0; i < 40 && !events.length; i++) await new Promise((r) => setTimeout(r, 100))
+  assert.ok(events.length > 0, 'a worktree change is reported')
+  assert.equal(events[0][0], 'changed')
+  await m.unwatch({ cwd: fx.repo })
+})

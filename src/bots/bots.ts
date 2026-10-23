@@ -6,6 +6,7 @@ import type { ChatMessage } from '../ai/http.js'
 import { botNameProblem, DEFAULT_SETTINGS, instructionsProblem, loadBots, MAX_BOTS_PER_GROUP, saveBots, settingsFrom, type BotConfig, type BotSettings } from './config.js'
 import { docCap } from '../agents/run/protocol.js'
 import { docName } from '../docs/store.js'
+import { removeTree, type RmFn } from '../platform/removeTree.js'
 import { botReply, buildBotPrompt, extractDocEdits, hasWord, mentions, type BotLine } from './prompt.js'
 
 /** Chat lines (besides the new ones) a turn shows the model. */
@@ -40,6 +41,8 @@ export interface BotDeps {
   writeDoc(conv: string, name: string, text: string, append: boolean, base: string | undefined): string
   /** A turn failed. Called once until the bot succeeds again, so a dead backend does not repeat itself on every message. */
   failed(conv: string, name: string, error: string): void
+  /** Deletes folders; only a test sets it, to simulate Windows holding a sandbox open. */
+  rm?: RmFn
 }
 
 export interface BotView extends BotConfig {
@@ -141,22 +144,26 @@ export class GroupBots extends EventEmitter {
     return undefined
   }
 
-  /** Stops a bot, forgets it and deletes its sandbox folder. False when there is no such bot. */
-  remove(conv: string, name: string): boolean {
+  /**
+   * Stops a bot, forgets it and deletes its sandbox folder. Undefined when there is no such bot. A sandbox that Windows will not let
+   * go (something still has a file open) is not an error: the bot is gone either way, and `leftover` says what was left and why.
+   */
+  remove(conv: string, name: string): { leftover: string | undefined } | undefined {
     const key = keyOf(conv, name)
     const bot = this.live.get(key)
-    if (bot === undefined) return false
+    if (bot === undefined) return undefined
     this.halt(bot)
     this.live.delete(key)
     this.save()
-    fs.rmSync(path.join(this.deps.dir, 'bots', conv.replace(/^grp:/, '').slice(0, 16), name), { recursive: true, force: true })
+    const dir = path.join(this.deps.dir, 'bots', conv.replace(/^grp:/, '').slice(0, 16), name)
+    const why = removeTree(dir, this.deps.rm)
     this.emit('change')
-    return true
+    return { leftover: why === undefined ? undefined : `${dir} (${why})` }
   }
 
-  /** Removes every bot of a group (it was left). */
-  forget(conv: string): void {
-    for (const b of this.list(conv)) this.remove(conv, b.name)
+  /** Removes every bot of a group (it was left). Returns the sandbox folders that could not be deleted, with why. */
+  forget(conv: string): string[] {
+    return this.list(conv).flatMap((b) => this.remove(conv, b.name)?.leftover ?? [])
   }
 
   /** A new chat line in `conv`: each of its bots (but the one that wrote it) gets to react. */

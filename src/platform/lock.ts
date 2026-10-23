@@ -50,7 +50,13 @@ export function acquireLock(dir: string): () => void {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
       const state = inspectLock(file)
       if (attempt < 3 && (state.kind === 'gone' || state.kind === 'stale')) {
-        if (state.kind === 'stale') fs.rmSync(file, { force: true })
+        if (state.kind === 'stale') {
+          try {
+            fs.rmSync(file, { force: true })
+          } catch {
+            // Held open by something else just now; the next pass finds it stale again, then reports "already running".
+          }
+        }
         continue
       }
       throw new AlreadyRunningError(state.kind === 'held' ? state.pid : 0)
@@ -61,7 +67,11 @@ export function acquireLock(dir: string): () => void {
     if (released) return
     released = true
     process.removeListener('exit', release)
-    fs.rmSync(file, { force: true })
+    try {
+      fs.rmSync(file, { force: true })
+    } catch {
+      // The process is ending; a lock file left behind reads as stale (its pid is gone) at the next start.
+    }
   }
   process.on('exit', release)
   return release

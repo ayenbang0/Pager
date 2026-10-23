@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import path from 'node:path'
 import type { MessageView } from '../app/engine.js'
+import { removeTree } from '../platform/removeTree.js'
 import type { ChatResult } from '../agents/chat.js'
 import { buildChatPrompt } from '../agents/chat.js'
 import { effectiveAi, loadAiConfig, saveAiConfig, type AiConfig, type AiLock } from './config.js'
@@ -135,14 +136,20 @@ export class AiChat extends EventEmitter {
     return had
   }
 
-  /** Empties the history and the scratch folder and forgets the sticky backend. */
-  clear(): void {
+  /** Empties the history and the scratch folder and forgets the sticky backend. Returns why the scratch folder could not be emptied (a Windows lock), or undefined. */
+  clear(): string | undefined {
     this.stop()
     this.transcript.clear()
     this.sticky = undefined
-    fs.rmSync(path.join(this.deps.dir, 'ai', 'work'), { recursive: true, force: true })
-    this.scratch()
-    this.emit('change')
+    const why = removeTree(path.join(this.deps.dir, 'ai', 'work'))
+    try {
+      this.scratch()
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err)
+    } finally {
+      this.emit('change')
+    }
+    return why
   }
 
   messages(limit: number): MessageView[] {

@@ -34,8 +34,6 @@ export function titleLabel(place: Place, online: boolean): string {
       return `◈ ${place.title}'s agents`
     case 'settings':
       return '⚙ settings'
-    case 'web':
-      return '⌕ web'
     case 'ai':
       return '✦ ai'
   }

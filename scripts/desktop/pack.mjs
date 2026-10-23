@@ -71,8 +71,6 @@ cpSync(must(path.join(nm, 'xterm', 'lib', 'xterm.js')), path.join(vendor, 'xterm
 cpSync(must(path.join(nm, 'xterm', 'css', 'xterm.css')), path.join(vendor, 'xterm.css'))
 cpSync(must(path.join(nm, 'addon-fit', 'lib', 'addon-fit.js')), path.join(vendor, 'addon-fit.js'))
 cpSync(must(path.join(nm, 'addon-webgl', 'lib', 'addon-webgl.js')), path.join(vendor, 'addon-webgl.js'))
-mkdirSync(path.join(renderer, 'fonts'), { recursive: true })
-cpSync(must(path.join(desk, 'assets', 'DepartureMono-Regular.otf')), path.join(renderer, 'fonts', 'DepartureMono-Regular.otf'))
 cpSync(must(path.join(desk, 'assets', 'pager.png')), path.join(renderer, 'pager.png'))
 
 // The pty child: a real node.exe (Microsoft/OpenJS-signed), not Electron acting as node.

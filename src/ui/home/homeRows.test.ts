@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { HomeStats } from '../../app/engine.js'
 import { DEFAULT_THEME as theme, THEMES } from '../theme/themes.js'
-import { LOGO, REVEAL_FRAMES, tagline } from './banner.js'
+import { REVEAL_FRAMES, tagline, WORDMARK } from './banner.js'
 import type { HomeAgentRow, HomeAgents } from './homeAgents.js'
 import {
   agentColumns,
@@ -13,17 +13,14 @@ import {
   codeRows,
   dropToFit,
   fitText,
-  GLITCH_EVERY,
-  GLITCH_FRAMES,
-  glitchAt,
   flowSegs,
   greetingWord,
   homeRows,
-  logoRows,
   parseInfo,
   renderCard,
   stackedOrder,
   visualFrame,
+  wordmarkRow,
   wrapText,
   type HomeInput,
 } from './homeRows.js'
@@ -94,41 +91,27 @@ test('every row fits the pane at every width and height, with wide glyphs and lo
 
 test('animation frames never change the width of a row', () => {
   for (const frame of [0, 5, 12, 24, 40, 100]) {
-    for (const r of logoRows(frame, theme, true)) assert.equal(segsWidth(r), LOGO[0]?.length)
+    assert.equal(segsWidth(wordmarkRow(frame, theme, true)), WORDMARK.length)
     for (const r of homeRows(input({ frame, animate: true }))) assert.ok(segsWidth(r) <= 92)
   }
 })
 
-test('the block logo appears on a big pane and is a one-line mark on a small one', () => {
+test('a big pane gets the wordmark between two rules and a tagline row; a small one gets a one-line mark', () => {
   const big = lines(homeRows(input()))
-  assert.ok(big.some((l) => l.includes(LOGO[0] ?? 'x')))
+  assert.ok(big.some((l) => l.includes(`━  ${WORDMARK}  ━`)))
   for (const [width, height] of [[92, 20], [52, 31], [59, 40]] as const) {
     const small = lines(homeRows(input({ width, height })))
-    assert.ok(!small.some((l) => l.includes(LOGO[0] ?? 'x')), `${width}x${height}`)
-    assert.ok(small.some((l) => l.includes('P A G E R')), `${width}x${height}`)
+    assert.ok(!small.some((l) => l.includes(`━  ${WORDMARK}  ━`)), `${width}x${height}`)
+    assert.ok(small.some((l) => l.includes('◆ P A G E R ◆')), `${width}x${height}`)
   }
 })
 
-test('after the reveal the logo is still except for a short, small glitch burst', () => {
-  const calm = logoRows(REVEAL_FRAMES, theme, false).map(text)
-  const frames = Array.from({ length: GLITCH_EVERY * 4 }, (_, i) => REVEAL_FRAMES + i)
-  const glitching = frames.filter((f) => glitchAt(f) !== undefined)
-  assert.equal(glitching.length, 4 * GLITCH_FRAMES, 'bursts are rare and short')
-  for (const f of frames) {
-    const rows = logoRows(f, theme, true)
-    const changed = rows.map(text).flatMap((t, r) => [...t].filter((ch, c) => ch !== [...(calm[r] ?? '')][c]).map(() => 1)).length
-    if (glitchAt(f) === undefined) assert.equal(changed, 0, `frame ${f} is calm`)
-    else assert.ok(changed > 0 && changed <= 40, `frame ${f} glitches a little (${changed} cells)`)
-    for (const r of rows) assert.equal(segsWidth(r), LOGO[0]?.length)
-  }
-  assert.deepEqual(logoRows(REVEAL_FRAMES + 7, theme, true), logoRows(REVEAL_FRAMES + 7, theme, true), 'a frame always glitches the same way')
-})
-
-test('the logo is a gradient: colors differ across the row, solid and shadow differ', () => {
-  const colors = new Set(logoRows(0, theme, false).flat().filter((s) => s.text.trim() !== '').map((s) => s.color))
-  assert.ok(colors.size > 6)
-  const frame0 = logoRows(0, theme, true)
-  assert.equal(frame0.map(text).join('').trim(), '')
+test('the wordmark reveals letter by letter, settles, and is a gradient', () => {
+  assert.equal(text(wordmarkRow(0, theme, true)).trim(), '')
+  assert.equal(text(wordmarkRow(REVEAL_FRAMES, theme, true)), WORDMARK)
+  assert.equal(text(wordmarkRow(0, theme, false)), WORDMARK)
+  const colors = new Set(wordmarkRow(0, theme, false).filter((s) => s.text.trim() !== '').map((s) => s.color))
+  assert.ok(colors.size >= 3)
 })
 
 test('the greeting carries the user name and badge, and follows the hour', () => {
@@ -313,7 +296,7 @@ test('a tall pane puts the content a little below the top; a short one starts at
 test('visualFrame draws exactly what the frame it replaces draws, so idle ticks need no re-render', () => {
   for (let f = 0; f < 800; f++) {
     const v = visualFrame(f)
-    assert.deepEqual(logoRows(v, theme, true), logoRows(f, theme, true), `logo at ${f}`)
+    assert.deepEqual(wordmarkRow(v, theme, true), wordmarkRow(f, theme, true), `wordmark at ${f}`)
     assert.equal(tagline(v, true), tagline(f, true), `tagline at ${f}`)
   }
   assert.ok(new Set(Array.from({ length: 800 }, (_, f) => visualFrame(f))).size < 120, 'the calm frames collapse onto a few')

@@ -5,6 +5,38 @@ All notable changes to pager are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.11.0] - 2026-10-22
+
+### Added
+
+- **Crash log**: an error nothing caught (a failed background task, a rejected promise) is written with a timestamp to `crash.log` in the data directory and shown as an error toast; pager keeps running instead of closing the window
+- **Desktop Board block** (`Alt+Mod+K`): the pane's `TODO.md` as a kanban. `##` headings are lanes, `- [ ]` items are cards, `#tags` are labels, `📅 2025-01-31` (also `@{…}` and `due:`) is a due date, indented checkboxes are subtasks with a counter. Board and List views, drag between lanes, quick add, a card editor, and live reload when the file changes on disk. Edits rewrite only the lines they change and are written atomically, so front matter, prose, other lists, CRLF/BOM and Obsidian Kanban files (archive lane, settings footer) are kept byte for byte
+- **Desktop Task manager block**: processes with CPU, memory and GPU as a sortable list or a parent/child tree, a detail card (owner, path, command line), and Stop (close its windows), Force Quit (optionally with its children) and Pause behind a confirmation. Pager's own processes, the session daemon and critical Windows processes can never be ended from it. Sampling runs only while the pane is visible and the sampler exits 30 s after the last request
+- **Desktop Screen block**: view this machine's displays (nothing is captured until you pick one), Fit or Actual size, a LIVE/REC indicator, optional recording to a `.webm`. Driving a display is a separate per-session opt-in behind a red banner (Esc three times stops it); it ends when the pane is hidden or after 10 idle minutes, and every held key and button is released. Sharing a screen with another machine is not included
+- **Session daemon** (`pager daemon`, see `desktop/DAEMON.md`): one background process owns every program of the desktop window, so closing the window only detaches and agents, bots, chat and calls keep running (the first pane is the Pager TUI itself). Windows and the CLI start it on demand on `\\.\pipe\pager-<USERNAME>` (`PAGER_DAEMON_SOCKET` overrides); an explicit Quit or `pager daemon stop` ends it. Several windows show the same output live, a window that falls behind is resynced from a replay, and `daemon.state` (layout, folders, newest 2 MiB of output per pane, written atomically and debounced) brings every pane back in its folder after a reboot or crash, agents resuming with `--continue`
+- **Scripting the daemon**: `pager daemon start|stop|status`, `pager split right|down`, `pager send`, `pager capture`, `pager ls`, `pager events` (JSON lines) and `pager open PATH[:LINE[:COL]] | URL`; inside a desktop pane `pager run` opens the command in a new shell beside it
+
+### Changed
+
+- A stray error still ends pager when it is not safe to go on: the terminal is gone (EPIPE, EIO), memory ran out, or twenty errors arrive within ten seconds
+- If the interface itself throws while rendering, pager exits non-zero with the error and records it in `crash.log`
+- **One smooth look, no pixel art.** The pager logo is a single rounded P stroke (blue to indigo) instead of the pixel P: the app tile is the docs and bot studio favicon and sidebar mark (`logo.svg`; `logo-mark.svg` is the tile-less mark), and heads the README
+- The Home screen in the terminal shows a plain `P A G E R` wordmark in the theme gradient between two rules, instead of the big block-letter logo, and no longer glitches into block glyphs
+- Terminal spinners are the standard braille dots (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`), the same frames the window title uses
+- The docs, stats and bot studio site is restyled: Geist and Geist Mono (SIL OFL, served by pager itself behind the site's random token, so no network), a pitch-black page by default with glass cards on a 1px ring, 1.45-stroke vector icons and an Appearance control (dark, light, system)
+- The README no longer describes the desktop window as pixel-styled or the Departure Mono pixel font
+
+### Fixed
+
+- `/bot remove` no longer closes pager when Windows keeps the bot's sandbox folder open (EPERM): the folder is retried for half a second, and if it still will not go the bot is removed anyway and a warning names the folder left behind
+- Leaving a group warns about bot sandbox folders that could not be deleted instead of failing
+- Clearing the AI chat and clearing the agents' memory report a locked file instead of throwing, and `Agents: check installs` and `/agent commands` no longer fail on a locked temporary folder
+- The lock file is removed with the same care at start and exit: a stale one that is held open no longer aborts startup, and a failed delete on exit is ignored
+
+### Removed
+
+- The `⌕ web` tab in the sidebar's TOOLS section, its `⌕ Web` palette entry, `/open web`, and its labels in the status bar, breadcrumb and window title. Agents keep `web_search` and `web_read` (Settings > AI chat and Web, `PAGER_NO_WEB=1`)
+
 ## [1.10.0] - 2026-10-22
 
 ### Added

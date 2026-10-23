@@ -22,7 +22,7 @@ interface Harness {
 }
 
 /** `answer` sees the backend and the whole prompt; by default it replies `ok` unless the prompt carries SILENT. */
-function harness(answer: (backend: string, prompt: string) => Promise<string> | string = (_b, p) => (p.includes('SILENT') ? NO_REPLY : 'ok'), dir = tmpDir('pager-bots-')): Harness {
+function harness(answer: (backend: string, prompt: string) => Promise<string> | string = (_b, p) => (p.includes('SILENT') ? NO_REPLY : 'ok'), dir = tmpDir('pager-bots-'), extra: Partial<BotDeps> = {}): Harness {
   const chat: BotLine[] = []
   const posts: Harness['posts'] = []
   const docs = new Map<string, string>([['plan.md', 'step 1']])
@@ -55,6 +55,7 @@ function harness(answer: (backend: string, prompt: string) => Promise<string> | 
       docs.set(name, append ? `${docs.get(name) ?? ''}${text}` : text)
       return `${append ? 'added to' : 'wrote'} ${name}`
     },
+    ...extra,
   }
   const bots = new GroupBots(deps)
   const say = (from: string, text: string): void => {
@@ -126,8 +127,28 @@ test('a CLI bot works in its own sandbox under the data dir; removing it deletes
   assert.equal(path.relative(h.dir, cwd), path.join('bots', 'ab'.repeat(8), 'helper'))
   assert.ok(fs.statSync(cwd).isDirectory())
   assert.match(h.asks[0]?.prompt ?? '', /own sandbox folder/)
-  assert.equal(h.bots.remove(G, 'helper'), true)
+  assert.deepEqual(h.bots.remove(G, 'helper'), { leftover: undefined })
   assert.equal(fs.existsSync(cwd), false)
+})
+
+test('removing a bot whose sandbox Windows holds open still removes the bot and reports the leftover folder', () => {
+  const seen: string[] = []
+  const h = harness(undefined, undefined, {
+    rm: (target) => {
+      seen.push(target)
+      throw Object.assign(new Error(`EPERM: operation not permitted, rmdir '${target}'`), { code: 'EPERM' })
+    },
+  })
+  h.bots.add(G, 'helper', 'claude', 'help')
+  const sandbox = h.bots.sandbox(G, 'helper')
+  const gone = h.bots.remove(G, 'helper')
+  assert.deepEqual(seen, [sandbox])
+  assert.match(gone?.leftover ?? '', /EPERM/)
+  assert.ok((gone?.leftover ?? '').startsWith(sandbox))
+  assert.deepEqual(h.bots.list(G), [])
+  assert.equal(h.bots.remove(G, 'helper'), undefined)
+  assert.ok(fs.existsSync(sandbox), 'the folder stays for the user to delete')
+  assert.deepEqual(harness(undefined, h.dir).bots.list(G), [], 'the bot list was saved before the delete was tried')
 })
 
 test('validation, persistence across a restart, and one failure notice until the bot recovers', async () => {

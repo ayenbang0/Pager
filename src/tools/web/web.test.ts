@@ -1,13 +1,7 @@
 import assert from 'node:assert/strict'
-import fs from 'node:fs'
-import path from 'node:path'
-import { after, test } from 'node:test'
-import { removeTmpDirs, tmpDir } from '../../testing/testutil.js'
+import { test } from 'node:test'
 import { readCapped, readPage } from './read.js'
-import { blocked, parseResults, searchWeb, unwrapLink } from './search.js'
-import { WebTool, WEB_OFF } from './tool.js'
-
-after(removeTmpDirs)
+import { blocked, formatResults, parseResults, searchWeb, unwrapLink } from './search.js'
 
 /**
  * A trimmed sample in the shape DuckDuckGo's html endpoint returns (the class names `result__a` and `result__snippet`, links wrapped as
@@ -103,55 +97,12 @@ test('readCapped stops at 1 MiB', async () => {
   assert.equal(text.length, 1024 * 1024)
 })
 
-test('WebTool grammar: bare text searches, open writes the URL to the seam, read prints text, bad numbers fail', async () => {
-  const file = path.join(tmpDir('pager-web-'), 'open.txt')
-  process.env.PAGER_OPEN_FILE = file
-  try {
-    const tool = new WebTool({
-      fetch: async (input) => (String(input).includes('duckduckgo') ? html(SAMPLE) : html('<title>Doc</title><p>page body</p>')),
-    })
-    await tool.run('node sqlite')
-    const first = tool.list()[0]!
-    assert.equal(first.state, 'done')
-    assert.equal(first.lines[0], '1. SQLite | Node.js v24 Documentation')
-    assert.equal(first.lines[1], '   https://nodejs.org/api/sqlite.html')
-    assert.equal(first.results?.length, 3)
-    await tool.run('open 2')
-    assert.equal(fs.readFileSync(file, 'utf8'), 'https://example.org/direct?x=1&y=2\n')
-    await tool.run('read 1')
-    assert.deepEqual(tool.list().at(-1)?.lines, ['Doc', '', 'page body'])
-    await tool.run('read 9')
-    assert.deepEqual([tool.list().at(-1)?.state, tool.list().at(-1)?.lines], ['failed', ['No result 9']])
-    await tool.run('search')
-    assert.equal(tool.list().at(-1)?.state, 'failed')
-    await tool.run('help')
-    assert.ok((tool.list().at(-1)?.lines.length ?? 0) >= 4)
-    await tool.run('clear')
-    assert.equal(tool.list().length, 0)
-    assert.equal(tool.busy, false)
-  } finally {
-    delete process.env.PAGER_OPEN_FILE
-  }
-})
-
-test('WebTool answers that web search is off when PAGER_NO_WEB=1, and reports fetch errors as failed entries', async () => {
-  const tool = new WebTool({ fetch: async () => html('', { status: 500 }) })
-  await tool.run('anything')
-  assert.deepEqual([tool.list()[0]?.state, tool.list()[0]?.lines[0]], ['failed', 'search answered 500'])
-  process.env.PAGER_NO_WEB = '1'
-  try {
-    await tool.run('again')
-    assert.deepEqual([tool.list().at(-1)?.state, tool.list().at(-1)?.lines], ['failed', [WEB_OFF]])
-  } finally {
-    delete process.env.PAGER_NO_WEB
-  }
-})
-
-test('entries are capped at 50 and control characters from the web never reach a line', async () => {
-  const tool = new WebTool({ fetch: async () => html('<p>bad \u001b[31mred\u0007</p>', { headers: { 'content-type': 'text/html' } }) })
-  await tool.run('x')
-  for (let i = 0; i < 55; i++) await tool.run(`q${i}`)
-  assert.equal(tool.list().length, 50)
-  await tool.run('open 1') // no results from a page with no links
-  assert.equal(tool.list().at(-1)?.state, 'failed')
+test('formatResults numbers each hit and skips an empty snippet', () => {
+  assert.deepEqual(
+    formatResults([
+      { title: 'One', url: 'https://example.org/1', snippet: 'first' },
+      { title: 'Two', url: 'https://example.org/2', snippet: '' },
+    ]),
+    ['1. One', '   https://example.org/1', '   first', '2. Two', '   https://example.org/2'],
+  )
 })

@@ -4,7 +4,6 @@ import { agentTabId, parseAgentTab, parseSharedTab } from '../agents/ids.js'
 import { ROOM_ID } from '../agents/orchestrator.js'
 import type { AgentView } from '../agents/types.js'
 import { isTermTab, TERM_ID } from '../tools/terminal/sessions.js'
-import { WEB_ID } from '../tools/web/tool.js'
 import { DOCS_ID } from '../docs/store.js'
 import { copyText } from '../platform/clipboard.js'
 import { splitArgs } from '../agents/run/protocol.js'
@@ -206,11 +205,10 @@ export function App({ engine, onExit }: Props) {
   const sharedRoom = sharedPk === undefined ? undefined : engine.sharedRoom(sharedPk)
   const review = engine.agentReview()
   const inTerm = isTermTab(activeId)
-  const inWeb = activeId === WEB_ID
   const inAi = activeId === AI_ID
   // Short panes fall back to compact rows, and the terminal tab is always compact: its rows are commands and output, not speakers.
   const look: Look = {
-    density: inTerm || inWeb ? 'compact' : effectiveDensity(settings.density, frame),
+    density: inTerm ? 'compact' : effectiveDensity(settings.density, frame),
     badge: badgeGlyph(settings.badge, engine.me.name),
     agentColors: Object.fromEntries(room.agents.flatMap((a) => (a.color === undefined ? [] : [[a.name, a.color] as const]))),
     me: engine.me.name,
@@ -239,7 +237,7 @@ export function App({ engine, onExit }: Props) {
   const termCtl = useRef<TermCtl | null>(null)
   const settingsCtl = useRef<SettingsCtl | null>(null)
   // Emoji shortcodes expand in chats and agent tabs only; the terminal and the Docs list take text as typed.
-  const emojiOk = activeId !== null && !inTerm && !inDocs && !inSettings && !inWeb
+  const emojiOk = activeId !== null && !inTerm && !inDocs && !inSettings
   const agentMenu: AgentMenu | undefined = agentView === undefined ? undefined : { agent: agentView.name, commands: engine.agentCommands(agentView.name) }
   // An agent's question takes the prompt's place in its own tab and in the hub; in any other tab a banner points to it.
   const questions = engine.questions()
@@ -449,8 +447,6 @@ export function App({ engine, onExit }: Props) {
     ? { kind: 'docs', title: openDocName ?? '' }
     : inSettings
       ? { kind: 'settings', title: '' }
-      : inWeb
-      ? { kind: 'web', title: '' }
       : inAi
       ? { kind: 'ai', title: '' }
       : inTerm
@@ -475,7 +471,7 @@ export function App({ engine, onExit }: Props) {
   const sharedHere = sharedRoom?.guests.filter((g) => g.online).map((g) => g.name) ?? []
   const sharedNote =
     sharedRoom === undefined ? undefined : [sharedRoom.access, sharedRoom.connected ? undefined : 'host offline', sharedHere.length === 0 ? undefined : `with ${sharedHere.join(', ')}`].filter(Boolean).join(' · ')
-  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inWeb ? '⌕ web' : inAi ? '✦ ai' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
+  const tabTitle = sharedRoom !== undefined ? `◈ ${sharedRoom.host}'s agents` : inSettings ? '⚙ settings' : inAi ? '✦ ai' : inDocs ? `▤ docs${openDocName ? ` · ${openDocName}` : ''}` : activeConv?.kind === 'dm' ? `${activeConv.online ? '●' : '○'} ${activeConv.title}` : activeConv ? `# ${activeConv.title}` : '⌂ home'
   const groupBots = activeConv?.kind === 'group' && engine.agentsEnabled() ? engine.groupBots(activeConv.id) : []
   const botNote = groupBots.length === 0 ? undefined : `${groupBots.some((b) => b.busy) ? '◆ thinking… · ' : '◆ '}${groupBots.map((b) => `@${b.name}`).join(' ')}`
   const callNote = activeConv === undefined ? undefined : engine.callRooms(activeConv.id).map((r) => `☎ ${activeConv.kind === 'dm' ? '' : `${r.room}: `}${r.people.join(', ')}`).join(' · ') || undefined
@@ -487,8 +483,6 @@ export function App({ engine, onExit }: Props) {
     ? field.label
     : inAi
       ? 'Ask anything. @claude, @ollama or @openai picks who answers'
-      : inWeb
-      ? 'Search the web, or: open <n> · read <n> · clear'
       : inTerm
     ? ''
     : sharedRoom !== undefined
@@ -628,7 +622,6 @@ export function App({ engine, onExit }: Props) {
     { label: '▸ Terminal', hint: termRunning ? 'running' : '/open terminal', run: () => engine.activate(TERM_ID) },
     { label: 'Terminal: new tab', hint: '/terminal new', run: () => engine.openTerminal() },
     ...(inTerm && activeId !== null ? [{ label: 'Terminal: close tab', hint: '/terminal close', run: () => engine.closeTerminal(activeId) }] : []),
-    { label: '⌕ Web', hint: 'search the web', run: () => engine.activate(WEB_ID) },
     ...(engine.agentsEnabled() ? [{ label: '✦ AI', hint: 'chat without a repository', run: () => engine.activate(AI_ID) }, { label: 'Clear AI chat', hint: 'history and scratch files', run: () => engine.clearAi() }] : []),
     { label: '▤ Docs', hint: '/open docs', run: () => engine.openDoc(null) },
     ...engine.docList().map((d): PaletteItem => ({ label: `Doc: ${d.name}`, hint: d.where, run: () => engine.openDoc(d.id) })),
@@ -743,7 +736,6 @@ export function App({ engine, onExit }: Props) {
               shared={shared}
               activeId={activeId}
               terminalRunning={termRunning}
-              webBusy={engine.webBusy()}
               aiBusy={engine.aiBusy()}
             />
           ) : null}
@@ -791,7 +783,7 @@ export function App({ engine, onExit }: Props) {
                 ) : inTerm && termInfo !== undefined ? (
                   <TerminalHeader term={termInfo} width={mainWidth} n={termNum} />
                 ) : (
-                  <BandTitle title={tabTitle} width={mainWidth} right={inWeb ? 'DuckDuckGo' : inAi ? (engine.aiBusy() ? 'thinking…' : '@name picks who answers') : tabNote} />
+                  <BandTitle title={tabTitle} width={mainWidth} right={inAi ? (engine.aiBusy() ? 'thinking…' : '@name picks who answers') : tabNote} />
                 )}
                 {inSettings ? (
                   <SettingsPanel

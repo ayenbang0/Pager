@@ -32,9 +32,25 @@ test('the site serves docs and stats only under its token, and stats come from t
     assert.equal(home.status, 200)
     assert.match(home.body, /<title>pager docs<\/title>/)
 
-    const logo = await fetch(`${site.url}logo.png`)
-    assert.equal(logo.headers.get('content-type'), 'image/png')
-    assert.deepEqual([...new Uint8Array(await logo.arrayBuffer()).slice(0, 4)], [0x89, 0x50, 0x4e, 0x47])
+    const logo = await fetch(`${site.url}logo.svg`)
+    assert.equal(logo.headers.get('content-type'), 'image/svg+xml')
+    assert.match(await logo.text(), /^<svg [^>]*viewBox="0 0 64 64"/)
+    assert.equal((await fetch(`${site.url}logo.png`)).status, 404, 'the pixel icon is gone')
+    const mark = await fetch(`${site.url}logo-mark.svg`)
+    assert.equal(mark.headers.get('content-type'), 'image/svg+xml')
+    const markSvg = await mark.text()
+    assert.match(markSvg, /^<svg [^>]*viewBox="0 0 64 64"/)
+    assert.doesNotMatch(markSvg, /<rect width="64"/, 'the mark has no tile')
+
+    for (const name of ['geist', 'geist-mono']) {
+      const font = await fetch(`${site.url}fonts/${name}.woff2`)
+      assert.equal(font.headers.get('content-type'), 'font/woff2')
+      assert.match(font.headers.get('content-security-policy') ?? '', /font-src 'self'/)
+      assert.deepEqual([...new Uint8Array(await font.arrayBuffer()).slice(0, 4)], [0x77, 0x4f, 0x46, 0x32], `${name} is woff2`)
+    }
+    const css = (await get(`${site.url}app.css`)).body + (await get(`${site.url}studio.css`)).body
+    assert.match(css, /font-family:"Geist"/)
+    assert.doesNotMatch(css, /pixelated|crisp-edges|steps\(/, 'one smooth style: no pixel rendering')
 
     const docs = JSON.parse((await get(`${site.url}api/docs`)).body) as { version: string; commands: { usage: string }[] }
     assert.equal(docs.version, '9.9.9')
@@ -51,6 +67,8 @@ test('the site serves docs and stats only under its token, and stats come from t
 
     const origin = new URL(site.url).origin
     assert.equal((await get(`${origin}/${'0'.repeat(36)}/api/stats`)).status, 404, 'a wrong token is refused')
+    assert.equal((await fetch(`${origin}/${'0'.repeat(36)}/fonts/geist.woff2`)).status, 404, 'the fonts are behind the token too')
+    assert.equal((await fetch(`${origin}/fonts/geist.woff2`)).status, 404, 'no token, no font')
     assert.equal((await get(`${origin}/api/stats`)).status, 404, 'no token is refused')
     assert.equal((await get(`${site.url}api/stats`, { host: 'evil.example' })).status, 403, 'a foreign Host header (DNS rebinding) is refused')
   } finally {

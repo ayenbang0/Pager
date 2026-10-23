@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { LOGO, LOGO_WIDTH, REVEAL_FRAMES, sparkline, tagline, TAGLINE } from './banner.js'
+import { REVEAL_FRAMES, sparkline, tagline, TAGLINE, WORDMARK } from './banner.js'
 
-test('every logo row has the same width', () => {
-  assert.ok(LOGO.every((r) => r.length === LOGO_WIDTH))
+test('the wordmark is plain letters, no block art', () => {
+  assert.equal(WORDMARK, 'P A G E R')
+  assert.ok(/^[A-Z ]+$/.test(WORDMARK))
 })
 
 test('tagline types out after the reveal and is whole when static', () => {

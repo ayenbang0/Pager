@@ -5,3 +5,7 @@ dist/
 CLI-UI.md
 tern/
 release/
+
+# Local design references (not shipped)
+/reference/
+desktop.ini
