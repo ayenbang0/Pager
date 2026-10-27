@@ -7,7 +7,7 @@ import { I } from './canvas-icons.js'
 import { aabb, centerOf, isPoly, unionOf, withAbsPts, absPts, round, bendControl, linePath, distToSegment } from './canvas-geom.js'
 import {
   DEFAULT_SETTINGS, DEFAULT_VIEW, DEFAULTS, FILLS, History, STICKY_COLORS, STROKES, alignShapes, cleanBindings, cloneShapes, byId,
-  clampZoom, distributeShapes, duplicateShapes, expandUnits, fitText, fitView, groupShapes, layoutShapes, moveShapes, newId, parseShape,
+  clampZoom, distributeShapes, duplicateShapes, expandUnits, fitText, fitView, groupShapes, layoutShapes, mergeShapes, moveShapes, newId, parseShape,
   reflowBindings, reorder, rotateShapes, scaleShapes, ungroupShapes, wrapText, LINE_HEIGHT, ZOOM_MAX, ZOOM_MIN, normalizeDoc,
 } from './canvas-model.js'
 import {
@@ -19,6 +19,7 @@ import {
 } from './canvas-draw.js'
 import { simplifyInk, simulatePressure } from './canvas-ink.js'
 import { Sync } from './canvas-sync.js'
+import { registerInstance, registerShare } from './share.js'
 
 const ic = (name) => fromHTML(I[name])
 const GRID = 24
@@ -139,7 +140,7 @@ export default {
     const canvas = h('canvas', { class: 'cv-canvas' })
     const stage = h('div', { class: 'cv-stage' }, canvas)
     const editorLayer = h('div', { class: 'cv-editor-layer' })
-    const empty = h('div', { class: 'cv-empty' }, h('div', { class: 'cv-empty-ic' }, ic('canvas')), h('div', { class: 'cv-empty-t' }, 'Draw something'), h('div', { class: 'cv-empty-s' }, 'Press R, O or P, paste an image, or ask an agent to sketch it.'))
+    const empty = h('div', { class: 'cv-empty' }, h('div', { class: 'cv-empty-t' }, 'Draw something'), h('div', { class: 'cv-empty-s' }, 'Press R, O, or P, or paste an image.'))
     const nameBtn = h('button', { type: 'button', class: 'cv-name', title: 'Canvases and export', onClick: () => openDocMenu() }, h('span', { class: 'cv-name-ic' }, ic('canvas')), h('span', { class: 'cv-name-t' }, S.name), h('span', { class: 'cv-name-c' }, ic('chevD')))
     const statusEl = h('span', { class: 'cv-status', title: 'Saved to disk' }, ic('cloud'), h('span', { class: 'cv-status-t' }, 'Saved'))
     const top = h('div', { class: 'cv-top cv-glass' }, nameBtn, statusEl)
@@ -157,18 +158,19 @@ export default {
     const undoBtn = h('button', { type: 'button', class: 'cv-btn', title: `Undo  ${kbd('Ctrl+Z')}`, onClick: () => undo() }, ic('undo'))
     const redoBtn = h('button', { type: 'button', class: 'cv-btn', title: `Redo  ${kbd('Ctrl+Shift+Z')}`, onClick: () => redo() }, ic('redo'))
     const histBtn = h('button', { type: 'button', class: 'cv-btn', title: 'History', onClick: () => toggleHistory() }, ic('clock'))
-    const bl = h('div', { class: 'cv-bl cv-glass' }, undoBtn, redoBtn, h('span', { class: 'cv-sep' }), histBtn)
     const zoomLabel = h('button', { type: 'button', class: 'cv-zoom-l', title: 'Reset to 100%', onClick: () => zoomTo(1) }, '100%')
-    const br = h('div', { class: 'cv-br cv-glass' },
+    toolbar.append(
+      h('span', { class: 'cv-sep' }), undoBtn, redoBtn, histBtn,
+      h('span', { class: 'cv-sep' }),
       h('button', { type: 'button', class: 'cv-btn', title: `Zoom out  ${kbd('Ctrl+-')}`, onClick: () => zoomBy(1 / 1.25) }, ic('minus')),
       zoomLabel,
       h('button', { type: 'button', class: 'cv-btn', title: `Zoom in  ${kbd('Ctrl+=')}`, onClick: () => zoomBy(1.25) }, ic('plus')),
       h('span', { class: 'cv-sep' }),
-      h('button', { type: 'button', class: 'cv-btn', title: 'Zoom to fit  Shift+1', onClick: () => fitToContent() }, ic('fit')))
+      h('button', { type: 'button', class: 'cv-btn', title: 'Zoom to fit  Shift+1', onClick: () => fitToContent() }, ic('fit')),
+    )
     const histPanel = h('div', { class: 'cv-hist cv-glass', hidden: true })
-    const toastEl = h('div', { class: 'cv-toast', hidden: true })
     const fileInput = h('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', multiple: true, class: 'cv-file', onChange: () => onFiles(fileInput.files, S.pointer).finally(() => { fileInput.value = '' }) })
-    root.append(stage, editorLayer, empty, top, insp, toolbar, bl, br, histPanel, toastEl, fileInput)
+    root.append(stage, editorLayer, empty, top, insp, toolbar, histPanel, fileInput)
     el.append(root)
     const c2 = canvas.getContext('2d')
 
@@ -187,13 +189,8 @@ export default {
     const gridSize = () => (S.settings.snap ? GRID : 0)
 
     function toast(text, tone = 'info') {
-      toastEl.textContent = text
-      toastEl.dataset.tone = tone
-      toastEl.hidden = false
-      clearTimeout(toast.t)
-      toast.t = setTimeout(() => { toastEl.hidden = true }, tone === 'error' ? 6000 : 2600)
       try {
-        if (tone === 'error' && ctx.toast) ctx.toast('error', text)
+        ctx.toast?.(tone, text)
       } catch { /* no toast host */ }
     }
 
@@ -343,6 +340,26 @@ export default {
         c.beginPath()
         c.arc(S.eraser[0], S.eraser[1], 9 * px, 0, Math.PI * 2)
         c.stroke()
+        c.restore()
+      }
+      // collaborator cursors (a shared canvas); stale entries drop out after 10 s
+      for (const [id, cur] of shareCursors) {
+        if (now - cur.t > 10000) { shareCursors.delete(id); continue }
+        c.save()
+        c.fillStyle = `hsl(${cur.hue} 75% 55%)`
+        c.beginPath()
+        c.moveTo(cur.x, cur.y)
+        c.lineTo(cur.x + 7 * px, cur.y + 12 * px)
+        c.lineTo(cur.x + 2.5 * px, cur.y + 9 * px)
+        c.lineTo(cur.x + 4 * px, cur.y + 5 * px)
+        c.closePath()
+        c.fill()
+        const label = cur.name.slice(0, 24)
+        c.font = `${11 * px}px sans-serif`
+        const w = c.measureText(label).width
+        c.fillRect(cur.x + 9 * px, cur.y + 11 * px, w + 10 * px, 14 * px)
+        c.fillStyle = '#fff'
+        c.fillText(label, cur.x + 14 * px, cur.y + 21 * px)
         c.restore()
       }
       return animating
@@ -519,6 +536,7 @@ export default {
       for (const id of [...S.sel]) if (!m.has(id)) S.sel.delete(id)
     }
     function commit(next, label, opts) {
+      if (S.shareRo) { S.live = null; return false } // a read-only share guest cannot edit; the gesture falls through with no document change
       S.live = null
       if (!S.hist.commit(next, label, opts)) {
         invalidate()
@@ -528,6 +546,7 @@ export default {
       sync.touch(label)
       updateUi()
       invalidate()
+      emitShare()
       return true
     }
     function undo() {
@@ -539,6 +558,7 @@ export default {
       sync.touch('Undo')
       updateUi()
       invalidate()
+      emitShare()
     }
     function redo() {
       if (S.editing) return
@@ -549,6 +569,7 @@ export default {
       sync.touch('Redo')
       updateUi()
       invalidate()
+      emitShare()
     }
     function jumpTo(i) {
       if (!S.hist.jump(i)) return
@@ -557,6 +578,7 @@ export default {
       sync.touch('History')
       updateUi()
       invalidate()
+      emitShare()
     }
 
     // ---- persistence ----------------------------------------------------------------------------------------------
@@ -850,6 +872,7 @@ export default {
         if (S.I && S.I.kind === 'pinch') return movePinch()
       }
       const [wx, wy] = toWorld(sx, sy)
+      if (sharePresenceEmitters.size) sharePulse(wx, wy)
       const I = S.I
       if (!I || I.pointerId !== e.pointerId) {
         hover(e, wx, wy)
@@ -2109,6 +2132,77 @@ export default {
       insp.hidden = false
     }
 
+    // ---- sharing (local://chats-contract.md, "Sharing") -----------------------------------------------------------
+    // The op is the whole shapes array; guests fold it in with mergeShapes — the same three-way merge a saved push gets —
+    // so concurrent edits degrade gracefully instead of last-write-wins clobbering.
+    const shareEmitters = new Set()
+    const sharePresenceEmitters = new Set()
+    const shareCursors = new Map() // peer pk -> { name, hue, x, y, t } in world coordinates
+    let shareApplying = false
+    let shareLastPulse = 0
+    const emitShare = () => {
+      if (shareApplying) return // applying a remote op is not a local edit; never re-emit it
+      for (const cb of shareEmitters) cb(S.hist.shapes)
+    }
+    const sharePulse = (wx, wy) => {
+      const now = performance.now()
+      if (now - shareLastPulse < 120) return // ~8 pulses/s per sender
+      shareLastPulse = now
+      const d = { x: round(wx, 1), y: round(wy, 1), tool: S.tool }
+      for (const cb of sharePresenceEmitters) cb(d)
+    }
+    const shareHooks = {
+      snapshot: () => ({ name: S.name, view: { ...S.view }, settings: { ...S.settings }, shapes: S.hist.shapes }),
+      applyOp: (op, meta) => {
+        if (meta && meta.mine) return // my own op coming back through the relay: already applied locally
+        if (!Array.isArray(op)) return // opaque peer text this build does not understand
+        const was = shareApplying
+        shareApplying = true
+        try {
+          commit(mergeShapes(S.hist.shapes, S.hist.shapes, op), 'Shared edit')
+        } finally {
+          shareApplying = was
+        }
+      },
+      applySnapshot: (s) => {
+        if (!s || !Array.isArray(s.shapes)) return
+        const was = shareApplying
+        shareApplying = true
+        try {
+          S.hist = new History(s.shapes)
+          S.live = null
+          S.sel.clear()
+          if (s.view) S.view = { ...S.view, ...s.view }
+          if (s.name) {
+            S.name = String(s.name)
+            nameBtn.querySelector('.cv-name-t').textContent = S.name
+            try { ctx.setTitle && ctx.setTitle(S.name) } catch { /* cosmetic */ }
+          }
+          updateUi()
+          invalidate()
+        } finally {
+          shareApplying = was
+        }
+      },
+      onLocalOp: (cb) => (shareEmitters.add(cb), () => shareEmitters.delete(cb)),
+      presence: {
+        local: (cb) => (sharePresenceEmitters.add(cb), () => sharePresenceEmitters.delete(cb)),
+        remote: (from, d) => {
+          if (!from || !d || typeof d.x !== 'number' || typeof d.y !== 'number') return
+          shareCursors.set(from.pk || from.name || 'peer', { name: from.name || 'peer', hue: from.hue ?? 180, x: d.x, y: d.y, t: performance.now() })
+          invalidate()
+        },
+      },
+      readonly: (on) => {
+        S.shareRo = !!on
+        if (S.shareRo) setTool('select')
+        stage.style.cursor = S.shareRo ? 'not-allowed' : ''
+        updateCursor()
+      },
+    }
+    const shareAdapter = canvasShare(shareHooks)
+    const unshare = ctx.paneId ? registerInstance(ctx.paneId, 'canvas', S.name, CANVAS_SHARE_MODES, shareAdapter) : null
+
     // ---- remote events --------------------------------------------------------------------------------------------------------------
     const offEvent = ctx.onEvent((event, payload) => {
       // hosts pass either (event, payload) or one { event, payload } object
@@ -2147,9 +2241,11 @@ export default {
     })
 
     return {
+      share: shareAdapter,
       focus: () => root.focus({ preventScroll: true }),
       resize,
       dispose() {
+        if (typeof unshare === 'function') { try { unshare() } catch { /* already unregistered */ } }
         if (S.dead) return
         S.dead = true
         cancelAnimationFrame(raf)
@@ -2168,6 +2264,7 @@ export default {
       },
       /** Test and automation access (the harness drives the block through this). */
       debug: {
+        share: shareAdapter,
         S, sync, commit, setTool, undo, redo, selectAll, groupSelection, ungroupSelection, duplicateSelection, removeSelection, fitToContent,
         setView, toWorld, toScreen, layoutSel, alignSel, distributeSel, arrange, startEdit, commitEdit, exportPng, exportSvg, answerShot,
         openDocMenu, toggleHistory, shapes: () => shapes(), invalidate, applyStyle, make, linePath, distToSegment, ZOOM_MAX, ZOOM_MIN,
@@ -2176,3 +2273,30 @@ export default {
     }
   },
 }
+
+// ---------------------------------------------------------------------------------------------------- sharing
+
+const CANVAS_SHARE_MODES = ['live', 'readonly', 'snapshot']
+
+/**
+ * The share adapter for one mounted canvas (local://chats-contract.md, "Sharing"). `hooks` carries the mount's live
+ * closures ({ snapshot, applyOp, applySnapshot, onLocalOp, presence, readonly }), each optional so the registry
+ * factory always returns a well-formed adapter. The op is the whole shapes array; guests merge it with mergeShapes.
+ */
+function canvasShare(hooks = {}) {
+  return {
+    modes: CANVAS_SHARE_MODES,
+    snapshot: () => (hooks.snapshot ? hooks.snapshot() : null),
+    applyOp: (op, meta) => { if (hooks.applyOp) hooks.applyOp(op, meta) },
+    applySnapshot: (s) => { if (hooks.applySnapshot) hooks.applySnapshot(s) },
+    onLocalOp: (cb) => (hooks.onLocalOp ? hooks.onLocalOp(cb) : () => {}),
+    presence: hooks.presence
+      ? {
+          local: (cb) => (hooks.presence.local ? hooks.presence.local(cb) : () => {}),
+          remote: (from, d) => { if (hooks.presence.remote) hooks.presence.remote(from, d) },
+        }
+      : undefined,
+    readonly: (on) => { if (hooks.readonly) hooks.readonly(on) },
+  }
+}
+registerShare('canvas', canvasShare)

@@ -7,6 +7,9 @@ export class AlreadyRunningError extends Error {
   }
 }
 
+/** How long a process that asked the session daemon to let go of the lock has to take it before the daemon may take it back. */
+export const HANDOFF_SETTLE_MS = 3000
+
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0)

@@ -4,7 +4,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { Engine } from './app/engine.js'
 import type { LanHandle } from './net/lan.js'
-import { acquireLock, AlreadyRunningError } from './platform/lock.js'
+import { AlreadyRunningError } from './platform/lock.js'
+import { acquireLockOrAskDaemon, HeldByDaemonError } from './daemon/handoff.js'
 import { dataDir } from './platform/paths.js'
 import { MOUSE_OFF } from './ui/input/mouse.js'
 import { isNewer, latestVersion, runUpdate } from './app/update.js'
@@ -20,7 +21,7 @@ import type { Secrets } from './chat/secrets.js'
 
 const USAGE = `pager: a simpler way to chat
 
-Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | docs | studio | desktop | daemon | split | capture | send | ls | events | open | update | lock | unlock | -h | --help | -v | --version]
+Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | docs | studio | desktop | daemon | serve | show | split | capture | send | ls | events | open | update | lock | unlock | -h | --help | -v | --version]
 
   --cwd DIR          start with the Terminal tab in DIR
   --lan [host:port]  chat over the local network only: find (or start) the network's DHT, or join the one at host:port
@@ -34,6 +35,10 @@ Usage: pager [--cwd DIR] [--lan [host:port]] [--no-agents] [run | docs | studio 
                    Windows only: a glass window host for pager (Windows Terminal), Start menu entry, "Open Pager here"
   daemon start|stop|status
                    the session daemon that keeps the desktop window's programs alive between windows
+  serve [--port N] [--host ADDR] [--read-only] [--tls-cert FILE --tls-key FILE] [--allow-host NAME]... | --stop | --status
+                   the session daemon in a browser: live terminals, input, new/split/close panes (127.0.0.1:8377; the URL carries a one-time token; --host 0.0.0.0 opts in to the network)
+  show mermaid|math|diff|image <file|-> [--title TEXT] [--id ID] [--height ROWS]
+                   draw a diagram, formula, diff or picture inline in the desktop terminal (reads standard input for -)
   split right|down [--pane ID] [--kind K] [--cwd DIR] [-- COMMAND...]
                    a pane beside this one (or the focused one) in the desktop window
   capture [--pane ID] [--lines N] [--ansi] [--json]
@@ -86,6 +91,20 @@ if (parsed.command === 'desktop') {
 if (parsed.command === 'daemon') {
   const { runDaemonCommand } = await import('./daemon/cli.js') // only the daemon commands pay for loading it
   process.exit(await runDaemonCommand(parsed.daemon!, dataDir()))
+}
+if (parsed.command === 'show') {
+  const { runShow } = await import('./surface/emit.js') // only `pager show` pays for loading it
+  process.exit(
+    await runShow(parsed.show!, {
+      stdin: process.stdin,
+      write: (text) => {
+        const done = Promise.withResolvers<void>()
+        process.stdout.write(text, (e) => (e ? done.reject(e) : done.resolve()))
+        return done.promise
+      },
+      error: (text) => process.stderr.write(text),
+    }),
+  )
 }
 if (parsed.cwd !== undefined) {
   let isDir = false
@@ -146,10 +165,11 @@ if (!process.stdin.isTTY || !process.stdout.isTTY) {
 const dir = dataDir()
 let release: () => void
 try {
-  release = acquireLock(dir)
+  release = await acquireLockOrAskDaemon(dir)
 } catch (err) {
   if (err instanceof AlreadyRunningError) {
-    process.stderr.write(`pager is already running (pid ${err.pid}) for ${dir}\n`)
+    const by = err instanceof HeldByDaemonError ? ` The pager daemon holds it for the desktop's chat; \`pager daemon stop\` releases it.` : ''
+    process.stderr.write(`pager is already running (pid ${err.pid}) for ${dir}.${by}\n`)
     process.exit(1)
   }
   throw err

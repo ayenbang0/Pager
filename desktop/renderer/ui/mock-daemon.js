@@ -733,6 +733,11 @@ export function createMockDaemon(opts = {}) {
     return pane
   }
 
+  /** The Home pane never closes (the real daemon refuses the same way). */
+  function keepHome(ids) {
+    if (ids.some((id) => (paneById(id) || {}).kind === 'block:home')) throw new Error('Pager home stays open')
+  }
+
   function killPane(paneId) {
     const sh = shells.get(paneId)
     if (sh && sh.job) sh.job.cancelled = true
@@ -896,6 +901,7 @@ export function createMockDaemon(opts = {}) {
     },
     'tab.close'({ tabId } = {}) {
       const { session, tab } = needTab(tabId || activeTab().id)
+      keepHome(leavesOf(tab.root))
       closeTab(session, tab)
       return { ok: true }
     },
@@ -928,6 +934,7 @@ export function createMockDaemon(opts = {}) {
     },
     'pane.close'({ paneId }) {
       needPane(paneId)
+      keepHome([paneId])
       const loc = detachPane(paneId)
       killPane(paneId)
       if (loc && loc.emptied) closeTab(loc.session, loc.tab, false)
@@ -1206,7 +1213,29 @@ export function createMockDaemon(opts = {}) {
     },
     diff: () => ({ text: '', truncated: false }),
   }
-  const BLOCKS = { files: filesBlock, git: gitBlock }
+  const homeBlock = {
+    info: () => ({
+      user: 'welov',
+      home: HOME,
+      platform: 'win32',
+      changelog: [
+        '# Changelog',
+        '',
+        '## [1.11.0] - 2026-10-22',
+        '',
+        '### Added',
+        '',
+        '- **Crash log**: an error nothing caught is written with a timestamp to `crash.log` and shown as an error toast; pager keeps running',
+        '- **Desktop Board block** (`Alt+Mod+K`): the pane\'s `TODO.md` as a kanban with lanes, cards, tags and due dates',
+        '- **Desktop Task manager block**: processes with CPU, memory and GPU as a sortable list or a parent/child tree',
+        '- **Desktop Screen block**: view this machine\'s displays; driving a display is a separate per-session opt-in',
+        '- **Session daemon** (`pager daemon`): one background process owns every program of the desktop window',
+        '- **`pager serve`**: the daemon\'s panes in a browser, behind a random per-run token',
+        '',
+      ].join('\n'),
+    }),
+  }
+  const BLOCKS = { home: homeBlock, files: filesBlock, git: gitBlock }
 
   // ------------------------------------------------------------------------------------ public object
 
@@ -1292,7 +1321,7 @@ export function createMockDaemon(opts = {}) {
   {
     const session = { id: newId('s'), name: 'Default', tabs: [], activeTab: '' }
     state.sessions.push(session)
-    addTab(session, { kind: 'pager', cwd: DEFAULT_CWD })
+    addTab(session, { kind: 'block:home', cwd: DEFAULT_CWD })
     state.activeSession = session.id
   }
 

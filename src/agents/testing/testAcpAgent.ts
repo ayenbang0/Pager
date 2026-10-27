@@ -1,7 +1,7 @@
 // Fake ACP agent used by acp tests: `node testAcpAgent.js` speaks JSON-RPC over stdio.
 // Message lines (after the NEW MESSAGES marker): ECHO text | TOOL title | WRITE f=x | CWD | SESSION | PERM [{toolCall fields json}] | SLEEP ms | FAIL
 //   | MCP | CFG | USAGE used/size | ELICIT {requestedSchema json} | PAGER name {json}
-// Env: TEST_ACP_BAD_INIT=1 makes `initialize` fail; TEST_ACP_NO_LOAD=1 hides the loadSession capability.
+// Env: TEST_ACP_BAD_INIT=1 makes `initialize` fail; TEST_ACP_HANG_INIT=1 never answers it; TEST_ACP_NO_LOAD=1 hides the loadSession capability.
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
@@ -135,6 +135,7 @@ async function handle(msg: Record<string, unknown>): Promise<void> {
   const servers = (Array.isArray(params.mcpServers) ? params.mcpServers.filter(isRecord) : []) as Record<string, unknown>[]
   if (method === 'initialize') {
     if (process.env.TEST_ACP_BAD_INIT === '1') return send({ id, error: { code: -32603, message: 'bad init' } })
+    if (process.env.TEST_ACP_HANG_INIT === '1') return
     clientCaps = isRecord(params.clientCapabilities) ? params.clientCapabilities : {}
     return send({ id, result: { protocolVersion: 1, agentCapabilities: { loadSession: process.env.TEST_ACP_NO_LOAD !== '1' }, authMethods: [] } })
   }

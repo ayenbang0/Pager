@@ -30,7 +30,7 @@ import { agentChip, chipWidth, filesChanged, inviteChipWidth, questionBanner, qu
 import { agentHelpSections } from './overlays/agentHelp.js'
 import { CommandPalette, type PaletteItem } from './overlays/CommandPalette.js'
 import { HelpPanel, type HelpCtl } from './overlays/HelpPanel.js'
-import { BANNER_ROWS, HomeBanner } from './home/HomeBanner.js'
+import { HomeView } from './home/HomeView.js'
 import { homeAgents, type HomeAgents } from './home/homeAgents.js'
 import { emptyInput, setText, type InputBuffer } from './input/inputBuffer.js'
 import { buildLines, PICK_CELL, plainLines, windowLines, type Line } from './chat/layout.js'
@@ -66,14 +66,18 @@ const HISTORY_LIMIT = 500
 const PROMPT_ROWS = 3
 /** Lines per wheel notch; trackpads send many notches, so this feels smooth rather than jumpy. */
 const WHEEL_LINES = 3
+/** Run inside the Pager desktop window, whose own tab bar already names the place, the identity and the connection. */
+const HOSTED = process.env.TERM_PROGRAM === 'pager-desktop'
+/** The top bar row: the section tabs and identity of a plain terminal, left out in the desktop window that has them. */
+const HEADER_ROWS = HOSTED ? 0 : 1
 // header + title + prompt box + status bar
-const FIXED_ROWS = 1 + 1 + 3 + 1
+const FIXED_ROWS = HEADER_ROWS + 1 + 3 + 1
 /** Terminal row (1-based) where the message pane starts: below the header and the title row. */
-const PANE_TOP_ROW = 3
+const PANE_TOP_ROW = HEADER_ROWS + 2
 /** Terminal row (1-based) of the title row, where an agent tab's model chip sits. */
-const TITLE_ROW = 2
+const TITLE_ROW = HEADER_ROWS + 1
 /** Terminal row (1-based) of the sidebar's first entry: below the header. */
-const SIDEBAR_TOP_ROW = 2
+const SIDEBAR_TOP_ROW = HEADER_ROWS + 1
 const MIN_PANE_ROWS = 3
 /** A second Ctrl+C within this window quits. */
 const QUIT_WINDOW_MS = 2000
@@ -190,7 +194,7 @@ export function App({ engine, onExit }: Props) {
     terminals: engine.terms.ids(),
   })
   /** Rows the sidebar has: the screen less the header and the status bar. */
-  const sbRows = Math.max(1, frame - 2)
+  const sbRows = Math.max(1, frame - HEADER_ROWS - 1)
   const maxScroll = Math.max(0, entries.length - sbRows)
   const activeAt = entryIndexOf(entries, activeId)
   useEffect(() => {
@@ -263,7 +267,7 @@ export function App({ engine, onExit }: Props) {
     if (seen.current.id === activeId && offset > 0 && grew > 0) setOffset((o) => o + grew)
     seen.current = { id: activeId, len: lines.length }
   }, [lines.length, activeId, offset])
-  const showBanner = activeId === null && engine.welcome() && paneRows >= BANNER_ROWS
+  const showBanner = activeId === null && engine.welcome()
 
   // The list reorders as people edit, so the selection follows the document, not its row.
   const docList = engine.docList()
@@ -715,15 +719,17 @@ export function App({ engine, onExit }: Props) {
     <ThemeContext.Provider value={theme}>
       <LookContext.Provider value={look}>
       <Box width={columns} height={frame} flexDirection="column">
-        <Header
-          width={columns}
-          crumbs={crumbsFor(place)}
-          connected={engine.listening()}
-          unread={unread}
-          agentsRunning={agentsActive}
-          name={engine.me.name}
-          badge={look.badge}
-        />
+        {HEADER_ROWS === 0 ? null : (
+          <Header
+            width={columns}
+            crumbs={crumbsFor(place)}
+            connected={engine.listening()}
+            unread={unread}
+            agentsRunning={agentsActive}
+            name={engine.me.name}
+            badge={look.badge}
+          />
+        )}
         <Box flexGrow={1}>
           {sidebarShown ? (
             <Sidebar
@@ -832,7 +838,7 @@ export function App({ engine, onExit }: Props) {
                     onSwitch={onSwitch}
                   />
                 ) : showBanner ? (
-                  <HomeBanner key={engine.homeEpoch} width={mainWidth - 2} height={paneRows} stats={engine.stats()} agents={homeData(engine, room.agents)} agentsOn={engine.agentsEnabled()} info={engine.home().slice(2)} />
+                  <HomeView width={mainWidth - 2} height={paneRows} stats={engine.stats()} agents={homeData(engine, room.agents)} agentsOn={engine.agentsEnabled()} chats={convs} info={engine.home().slice(2)} recap={engine.recapLine()} news={engine.whatsNew()} />
                 ) : (
                   <Box height={paneRows} flexDirection="column" justifyContent="flex-end" overflow="hidden" paddingX={1}>
                     {visible.map((line, row) => (

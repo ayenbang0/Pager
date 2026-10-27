@@ -27,6 +27,16 @@ const P = {
   copy: '<rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5V4a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 4v5A1.5 1.5 0 0 0 4 10.5h1.5"/>',
   folder: '<path d="M2.5 4.5a1.3 1.3 0 0 1 1.3-1.3h2.6l1.4 1.6h4.4a1.3 1.3 0 0 1 1.3 1.3v5.6a1.3 1.3 0 0 1-1.3 1.3H3.8a1.3 1.3 0 0 1-1.3-1.3z"/>',
   spinner: '<path d="M8 2.2a5.8 5.8 0 1 0 5.8 5.8" class="gt-spin"/>',
+  rows: '<path d="M3 4.5h10M3 8h10M3 11.5h6"/>',
+  columns: '<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><path d="M8 3.5v9"/>',
+  ws: '<path d="M3 5h7M3 8h10M3 11h4"/><circle cx="12.5" cy="5" r=".5" fill="currentColor"/>',
+  alert: '<path d="M8 2.3 14.3 13H1.7z"/><path d="M8 6.4v3.4"/><circle cx="8" cy="11.6" r=".45" fill="currentColor"/>',
+  image: '<rect x="2.5" y="3.5" width="11" height="9" rx="1.5"/><circle cx="5.4" cy="6.4" r="1"/><path d="m3.2 11.8 3.3-3.3 2.3 2.3 2-2 3 3"/>',
+  filter: '<path d="M2.8 4h10.4l-3.9 4.6v3.2L6.7 13.2V8.6z"/>',
+  sign: '<circle cx="8" cy="4.6" r="1.9"/><path d="M3.4 13.4c.9-2.6 2.6-3.7 4.6-3.7s3.7 1.1 4.6 3.7"/>',
+  keyboard: '<rect x="1.8" y="4.2" width="12.4" height="7.6" rx="1.5"/><path d="M4 6.6h.9M6.6 6.6h.9M9.1 6.6h.9M11.7 6.6h.9M4.9 9.2h6.2"/>',
+  merge: '<circle cx="4.5" cy="3.4" r="1.5"/><circle cx="4.5" cy="12.6" r="1.5"/><circle cx="11.8" cy="8.4" r="1.5"/><path d="M4.5 4.9v3a2.6 2.6 0 0 0 2.6 2.6h4.7"/>',
+  clock: '<circle cx="8" cy="8" r="5.6"/><path d="M8 4.8V8l2.6 1.6"/>',
 }
 
 /** An <svg class="ico"> element. */

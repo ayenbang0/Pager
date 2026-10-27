@@ -1,8 +1,8 @@
 // Every user-facing action: registered as a command (so the palette lists it) and bound to a hotkey where it has one.
-import { app, tabPaneIds } from './store.js'
+import { app, isHome, tabPaneIds } from './store.js'
 import { registerCommands, commandForChord, chordFromEvent, runCommand } from './commands.js'
 import { BLOCKS } from '../blocks/index.js'
-import { BLOCK_TITLES, shortPath } from './labels.js'
+import { BLOCK_TITLES, BLOCK_ICONS, shortPath } from './labels.js'
 import { focusDirection, focusedView } from './panes.js'
 import { openPalette, closePalette, paletteOpen, openPicker, openThemePicker } from './palette.js'
 import { openSettings, toggleSettings } from './settings.js'
@@ -12,6 +12,10 @@ import { clamp } from './dom.js'
 
 const hk = (name) => window.pager && window.pager.hotkey && window.pager.hotkey(name)
 const set = (patch) => app.set(patch)
+// The native caption buttons float over the glass top bar, so their symbols switch with the theme: light grey on pitch black, dark grey on the off-white light theme.
+app.on('theme', () => {
+  if (window.pager && window.pager.chrome) window.pager.chrome('titlebar', document.documentElement.dataset.theme === 'light' ? '#4b4f57' : '#b4b8c4')
+})
 
 /** Window material, opacity and font size belong to the host window when it offers a hotkey for them (it also repaints the native backdrop); otherwise they are plain settings. */
 function viaMain(name, patch) {
@@ -26,13 +30,7 @@ const LAYOUT_DOC = {
   tiles: 'Tiling: every pane its own card on the glass.',
   studio: 'Tabs as pills in a titlebar, every pane headed.',
 }
-const BLOCK_KEYS = { files: 'Ctrl+Shift+O', git: 'Ctrl+Alt+G', board: 'Ctrl+Alt+K' }
-const AGENTS = [
-  ['omp', 'New omp block', 'Ctrl+Shift+A'],
-  ['claude', 'New Claude Code block', ''],
-  ['opencode', 'New opencode block', ''],
-  ['hermes', 'New Hermes block', ''],
-]
+const BLOCK_KEYS = { files: 'Ctrl+Shift+O', git: 'Ctrl+Alt+G', board: 'Ctrl+Alt+K', chats: 'Ctrl+Alt+C' }
 
 const session = () => app.activeSession()
 const focusedId = () => {
@@ -52,7 +50,7 @@ export async function confirmClose(panes, what) {
 
 export async function newTab(opts = {}) {
   const s = session()
-  const kind = opts.kind || (app.settings.new_blocks === 'agent' ? app.settings.agent || 'omp' : 'shell')
+  const kind = opts.kind || 'shell'
   return app.call('tab.new', { sessionId: s && s.id, kind, cwd: opts.cwd !== undefined ? opts.cwd : newCwd(), command: opts.command })
 }
 
@@ -60,13 +58,14 @@ export async function splitPane(dir, opts = {}) {
   const id = opts.paneId || focusedId()
   if (!id) return newTab(opts)
   const src = app.paneById(id)
-  return app.call('pane.split', { paneId: id, dir, kind: opts.kind || (app.settings.new_blocks === 'agent' ? app.settings.agent || 'omp' : 'shell'), cwd: opts.cwd !== undefined ? opts.cwd : (src && src.cwd) || undefined, command: opts.command })
+  return app.call('pane.split', { paneId: id, dir, kind: opts.kind || 'shell', cwd: opts.cwd !== undefined ? opts.cwd : (src && src.cwd) || undefined, command: opts.command })
 }
 
 export async function closePane(paneId) {
   const id = paneId || focusedId()
   const p = app.paneById(id)
   if (!p) return
+  if (isHome(p)) return toast('info', 'Pager home stays open')
   if (!(await confirmClose([p], 'this pane'))) return
   return app.call('pane.close', { paneId: id })
 }
@@ -76,6 +75,7 @@ export async function closeTab(tabId) {
   const tab = (s ? s.tabs : []).find((t) => t.id === (tabId || (app.activeTab() && app.activeTab().id)))
   if (!tab) return
   const panes = tabPaneIds(tab).map((id) => app.paneById(id)).filter(Boolean)
+  if (panes.some(isHome)) return toast('info', 'Pager home stays open')
   if (!(await confirmClose(panes, 'this tab'))) return
   return app.call('tab.close', { tabId: tab.id })
 }
@@ -97,14 +97,28 @@ export async function openBlock(name, args, from) {
   return app.call('pane.split', { paneId: id, dir: 'row', kind, cwd, command })
 }
 
-async function openAgent(kind) {
-  const mode = app.settings.agent_opens || 'split'
-  const cwd = app.focusedCwd() || undefined
-  if (mode === 'tab') return newTab({ kind, cwd })
-  const id = focusedId()
-  if (!id) return newTab({ kind, cwd })
-  if (mode === 'replace' && app.activeTab() && tabPaneIds(app.activeTab()).length === 1) return newTab({ kind, cwd })
-  return app.call('pane.split', { paneId: id, dir: 'row', kind, cwd })
+/** A block (canvas, notebook, database, …) in a tab of its own. */
+export async function newBlockTab(name, args) {
+  const command = args && Object.keys(args).length ? JSON.stringify(args) : undefined
+  return app.call('tab.new', { sessionId: session() && session().id, kind: `block:${name}`, cwd: app.focusedCwd() || undefined, command })
+}
+
+/** Show the tab that holds the Home pane. */
+export function goHome() {
+  const home = app.state.panes.find(isHome)
+  for (const s of app.state.sessions) {
+    const tab = s.tabs.find((t) => tabPaneIds(t).includes(home && home.id))
+    if (tab) return app.call('tab.activate', { tabId: tab.id })
+  }
+}
+
+/** What hovering the + button offers: a terminal, then every block as a new tab. */
+export function newTabMenuItems() {
+  const blocks = BLOCKS.filter((b) => b.id !== 'surface' && b.id !== 'home')
+  return [
+    { label: 'Terminal', icon: 'terminal', keys: 'Ctrl+Shift+T', onClick: () => runCommand('tab.new') },
+    ...blocks.map((b, i) => ({ ...(i === 0 ? { section: 'Blocks' } : {}), label: BLOCK_TITLES[b.id] || b.id, icon: BLOCK_ICONS[b.id] || 'box', onClick: () => runCommand('tab.new.block', { name: b.id }) })),
+  ]
 }
 
 async function runInSplit(command, label) {
@@ -134,6 +148,9 @@ export function initActions() {
     // tabs and panes
     { id: 'tab.new', title: 'New tab', group: 'Commands', icon: 'plus', keys: 'Ctrl+Shift+T', run: () => newTab() },
     { id: 'tab.new.shell', title: 'New shell tab', group: 'Commands', icon: 'terminal', run: () => newTab({ kind: 'shell' }) },
+    { id: 'tab.new.block', title: 'New block tab', group: 'Commands', icon: 'box', hidden: true, run: (a) => a && a.name && newBlockTab(a.name, a.args) },
+    { id: 'tab.new.agent', title: 'New agent tab', group: 'Commands', icon: 'sparkle', run: () => newTab({ kind: 'omp' }) },
+    { id: 'home.show', title: 'Go to Home', group: 'Commands', icon: 'home', run: () => goHome() },
     { id: 'tab.close', title: 'Close tab', group: 'Commands', icon: 'close', keys: 'Ctrl+Alt+W', run: (a) => closeTab(a && a.tabId) },
     { id: 'tab.rename', title: 'Rename tab…', group: 'Commands', icon: 'edit', run: (a) => renameTab(a && a.tabId) },
     { id: 'tab.next', title: 'Next tab', group: 'Commands', icon: 'arrow-right', keys: 'Ctrl+Tab', run: () => stepTab(1) },
@@ -153,9 +170,8 @@ export function initActions() {
     { id: 'session.rename', title: 'Rename session…', group: 'Commands', icon: 'edit', run: async () => { const s = session(); if (!s) return; const n = await promptDialog({ title: 'Rename session', label: 'Name', value: s.name, confirm: 'Rename' }); if (n) return app.call('session.rename', { sessionId: s.id, name: n }) } },
     { id: 'session.close', title: 'Close session', group: 'Commands', icon: 'close', run: async () => { const s = session(); if (!s) return; const panes = s.tabs.flatMap((t) => tabPaneIds(t)).map((id) => app.paneById(id)).filter(Boolean); if (await confirmClose(panes, `session “${s.name}”`)) return app.call('session.close', { sessionId: s.id }) } },
     { id: 'session.switch', title: 'Go to session…', group: 'Commands', icon: 'layers', keys: 'Ctrl+Alt+J', run: (a) => (a && (a.tabId || a.sessionId) ? switchTo(a) : openPalette({ scope: 'sessions' })) },
-    // agents and blocks
-    ...AGENTS.map(([kind, title, keys]) => ({ id: `agent.${kind}`, title, group: 'Agents', tile: { agent: kind }, keys, run: () => openAgent(kind) })),
-    ...BLOCKS.map((b) => ({ id: `block.${b.id}`, title: `Open ${BLOCK_TITLES[b.id] || b.id}`, group: 'Blocks', icon: { files: 'files', git: 'branch', database: 'database', notebook: 'notebook', board: 'board', tasks: 'tasks', screen: 'screen' }[b.id] || 'box', keys: BLOCK_KEYS[b.id] || '', run: () => openBlock(b.id) })),
+    // blocks
+    ...BLOCKS.map((b) => ({ id: `block.${b.id}`, title: `Open ${BLOCK_TITLES[b.id] || b.id}`, group: 'Blocks', hidden: b.id === 'surface' || b.id === 'home', icon: BLOCK_ICONS[b.id] || 'box', keys: BLOCK_KEYS[b.id] || '', run: () => openBlock(b.id) })),
     { id: 'block.open', title: 'Open block', group: 'Blocks', icon: 'box', hidden: true, run: (a) => a && openBlock(a.name, a.args, a.from) },
     { id: 'file.open', title: 'Open file', group: 'Files', icon: 'file', hidden: true, run: (a) => a && a.path && openBlock('files', { path: a.path }, a.from) },
     // git

@@ -191,3 +191,127 @@ test('push and fetch against the fixture remote; watch emits changes', async () 
   assert.equal(events[0][0], 'changed')
   await m.unwatch({ cwd: fx.repo })
 })
+
+/** A tiny repo of its own for the merge/conflict flow, so the shared fixture's state stays untouched. */
+function scratchRepo() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-git-ops-'))
+  const g = (...args) => execFileSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true })
+  g('init', '-q', '-b', 'main')
+  g('config', 'user.email', 'ada@example.com')
+  g('config', 'user.name', 'Ada')
+  g('config', 'core.autocrlf', 'false')
+  fs.writeFileSync(path.join(dir, 'a.txt'), 'base\n')
+  g('add', '-A')
+  g('commit', '-qm', 'base')
+  return { dir, g }
+}
+
+test('merge: fast-forward, conflicts, resolve, continue and abort', async () => {
+  const { dir, g } = scratchRepo()
+  const c = (name, args = {}) => m[name]({ cwd: dir, ...args }, { emit() {} })
+  try {
+    g('checkout', '-qb', 'side')
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'side\n')
+    g('commit', '-qam', 'side change')
+    g('checkout', '-q', 'main')
+    // fast-forward only
+    const ff = await c('merge', { ref: 'side', mode: 'ffonly' })
+    assert.equal(ff.conflicts, false)
+    assert.equal(g('log', '-1', '--format=%s').trim(), 'side change')
+    assert.equal((await c('status')).operation, null)
+    // diverge: both change a.txt
+    g('checkout', '-qb', 'other', 'HEAD~1')
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'other\n')
+    g('commit', '-qam', 'other change')
+    const merged = await c('merge', { ref: 'main', mode: 'noff' })
+    assert.equal(merged.conflicts, true)
+    const st = await c('status')
+    assert.equal(st.operation.kind, 'merge')
+    assert.equal(st.conflicted, 1)
+    assert.equal(st.files.find((f) => f.path === 'a.txt').kind, 'unmerged')
+    // continue with unresolved conflicts is an error, not silent
+    await assert.rejects(c('operation', { action: 'continue' }), /unmerged|unresolved|conflict/i)
+    // abort restores the pre-merge state
+    await c('operation', { action: 'abort' })
+    assert.equal((await c('status')).operation, null)
+    assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'other\n')
+    // again, resolve with theirs and continue
+    await c('merge', { ref: 'main', mode: 'noff' })
+    await c('resolve', { path: 'a.txt', side: 'theirs' })
+    assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'side\n')
+    const done = await c('operation', { action: 'continue' })
+    assert.equal(done.operation, null)
+    assert.equal(g('rev-list', '--parents', '-n1', 'HEAD').trim().split(' ').length, 3, 'a merge commit with two parents')
+    await assert.rejects(c('operation', { action: 'abort' }), /Nothing is in progress/)
+    await assert.rejects(c('merge', { ref: '--evil' }), /invalid ref/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('rebase state is reported and can be aborted', async () => {
+  const { dir, g } = scratchRepo()
+  const c = (name, args = {}) => m[name]({ cwd: dir, ...args }, { emit() {} })
+  try {
+    g('checkout', '-qb', 'topic')
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'topic\n')
+    g('commit', '-qam', 'topic change')
+    g('checkout', '-q', 'main')
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'main\n')
+    g('commit', '-qam', 'main change')
+    g('checkout', '-q', 'topic')
+    assert.throws(() => g('rebase', 'main'), /CONFLICT|could not apply/i)
+    const op = (await c('status')).operation
+    assert.equal(op.kind, 'rebase')
+    assert.equal(op.step, 1)
+    assert.equal(op.total, 1)
+    await c('operation', { action: 'abort' })
+    assert.equal((await c('status')).operation, null)
+    assert.equal(g('branch', '--show-current').trim(), 'topic')
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test('stash apply/drop, branch create without switching, rename, sign-off, remote info and clone', async () => {
+  const { dir, g } = scratchRepo()
+  const c = (name, args = {}) => m[name]({ cwd: dir, ...args }, { emit() {} })
+  const cloneParent = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-git-clone-'))
+  try {
+    fs.writeFileSync(path.join(dir, 'a.txt'), 'stashed\n')
+    await c('stashPush', { message: 'keep me' })
+    let refs = await c('refs')
+    assert.equal(refs.stashes.length, 1)
+    assert.ok(refs.stashes[0].date > 0)
+    await c('stashApply', { ref: 'stash@{0}' })
+    assert.equal(fs.readFileSync(path.join(dir, 'a.txt'), 'utf8'), 'stashed\n')
+    assert.equal((await c('refs')).stashes.length, 1, 'apply keeps the stash')
+    await c('discard', { paths: ['a.txt'] })
+    await c('stashDrop', { ref: 'stash@{0}' })
+    assert.equal((await c('refs')).stashes.length, 0)
+
+    await c('createBranch', { name: 'feature/x', checkout: false })
+    assert.equal(g('branch', '--show-current').trim(), 'main')
+    await c('renameBranch', { name: 'feature/x', to: 'feature/y' })
+    refs = await c('refs')
+    assert.deepEqual(refs.branches.map((b) => b.name).sort(), ['feature/y', 'main'])
+
+    fs.writeFileSync(path.join(dir, 'b.txt'), 'b\n')
+    await c('stage', { paths: ['b.txt'] })
+    await c('commitCreate', { summary: 'add b', signoff: true })
+    assert.match(g('log', '-1', '--format=%B'), /Signed-off-by: Ada <ada@example\.com>/)
+
+    assert.deepEqual((await c('refs')).remoteInfo, [])
+    g('remote', 'add', 'origin', dir)
+    assert.deepEqual((await c('refs')).remoteInfo, [{ name: 'origin', url: dir }])
+
+    const cloned = await c('clone', { url: dir, dir: cloneParent })
+    assert.equal(cloned.path, path.join(cloneParent, path.basename(dir)))
+    assert.ok(fs.existsSync(path.join(cloned.path, '.git')))
+    await assert.rejects(c('clone', { url: dir, dir: cloneParent }), /already exists/)
+    await assert.rejects(c('clone', { url: '--upload-pack=x', dir: cloneParent }), /Enter a repository URL/)
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(cloneParent, { recursive: true, force: true })
+  }
+})

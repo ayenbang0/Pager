@@ -1,18 +1,48 @@
 // The top bar (and Rail's left column): avatar, session chip, tab pills with a sliding highlight, "+", tools, inbox bell.
 import { h, reconcile } from './dom.js'
-import { app } from './store.js'
+import { app, isHome, tabPaneIds } from './store.js'
 import { icon, markEl } from './icons.js'
 import { tabLabel, paneGlyph, folderLabel, shortPath } from './labels.js'
 import { runCommand, getCommand, splitChord } from './commands.js'
 import { showMenu } from './popover.js'
 import { openSettings } from './settings.js'
-import { closeTab, renameTab } from './actions.js'
+import { closeTab, renameTab, newTabMenuItems } from './actions.js'
 
 let barEl, tabsEl, pillEl, sessionEl, addEl, bellEl, badgeEl, updEl, vtabsEl, sidebarBtn
 let lastSig = ''
 
 const tool = (name, tip, keys, onClick, extra = {}) =>
   h('button', { class: 'icon-btn', type: 'button', attrs: { 'data-tip': tip, ...(keys ? { 'data-tip-keys': keys } : {}) }, onClick, ...extra }, icon(name))
+
+/** Hovering a "+" opens the new-tab menu (a terminal, then every block); it closes once the pointer has been away from both for a moment. */
+function hoverNewMenu(el) {
+  let openTimer = 0
+  let watch = 0
+  let away = 0
+  const stop = () => {
+    clearTimeout(openTimer)
+    clearInterval(watch)
+    watch = 0
+  }
+  const over = () => el.matches(':hover') || !!document.querySelector('#overlay .pop:hover')
+  el.addEventListener('pointerenter', (e) => {
+    if (e.pointerType === 'touch' || watch) return
+    clearTimeout(openTimer)
+    openTimer = setTimeout(() => {
+      // Never replace a menu the user opened on purpose.
+      if (document.querySelector('#overlay .pop') || !el.matches(':hover')) return
+      const r = el.getBoundingClientRect()
+      const menu = showMenu({ anchor: { left: r.left, top: r.top, width: r.width, height: r.height }, items: newTabMenuItems(), hover: true, onClose: stop })
+      away = 0
+      watch = setInterval(() => {
+        away = over() ? 0 : away + 1
+        if (away >= 3) menu.close()
+      }, 100)
+    }, 150)
+  })
+  el.addEventListener('pointerleave', () => !watch && clearTimeout(openTimer))
+  return el
+}
 
 function tabNode(tab) {
   const ico = h('span', { class: 'gl' })
@@ -82,6 +112,7 @@ function updateTab(el, tab) {
   if (ttl && ttl.textContent !== label) ttl.textContent = label
   el.querySelector('.tt-sub').textContent = pane ? shortPath(pane.cwd) : ''
   el.dataset.state = pane ? pane.state : ''
+  el.classList.toggle('home', tabPaneIds(tab).some((id) => isHome(app.paneById(id))))
   el.title = label
 }
 
@@ -129,7 +160,7 @@ function renderVTabs(s) {
       }),
     ),
   )
-  vtabsEl.replaceChildren(...groups, h('button', { class: 'vt-row', type: 'button', onClick: () => runCommand('tab.new') }, icon('plus'), h('span', {}, 'New tab')))
+  vtabsEl.replaceChildren(...groups, hoverNewMenu(h('button', { class: 'vt-row', type: 'button', onClick: () => runCommand('tab.new') }, icon('plus'), h('span', {}, 'New tab'))))
 }
 
 export function render() {
@@ -171,7 +202,7 @@ export function initTopbar(onBell) {
   pillEl = h('i', { class: 'tb-pill' })
   tabsEl.append(pillEl)
   const kbds = h('span', { class: 'kbds' })
-  addEl = h('button', { class: 'icon-btn tb-add', type: 'button', attrs: { 'data-tip': 'New tab', 'data-tip-keys': 'Ctrl+Shift+T' }, onClick: () => runCommand('tab.new') }, icon('plus'), h('span', { class: 'lbl' }, 'New tab'), kbds)
+  addEl = hoverNewMenu(h('button', { class: 'icon-btn tb-add', type: 'button', attrs: { 'data-tip': 'New tab', 'data-tip-keys': 'Ctrl+Shift+T' }, onClick: () => runCommand('tab.new') }, icon('plus'), h('span', { class: 'lbl' }, 'New tab'), kbds))
   const keys = (getCommand('tab.new') || {}).keys
   for (const k of splitChord(keys)) kbds.append(h('kbd', { class: 'kbd' }, k))
   sidebarBtn = tool('files', 'Files sidebar', (getCommand('view.sidebar') || {}).keys, () => runCommand('view.sidebar'), { dataset: { keep: '1' } })

@@ -24,8 +24,8 @@ export const folderLabel = (cwd) => {
   return s === '~' || s === '' ? s || '~' : baseName(s)
 }
 
-export const BLOCK_TITLES = { files: 'Files', git: 'Git', database: 'Database', notebook: 'Notebook', board: 'Board', tasks: 'Tasks', screen: 'Screen' }
-const BLOCK_ICONS = { files: 'files', git: 'branch', database: 'database', notebook: 'notebook', board: 'board', tasks: 'tasks', screen: 'screen' }
+export const BLOCK_TITLES = { home: 'Home', files: 'Files', git: 'Git', database: 'Database', notebook: 'Notebook', board: 'Board', tasks: 'Tasks', screen: 'Screen', canvas: 'Canvas', chats: 'Chats' }
+export const BLOCK_ICONS = { home: 'pager', files: 'files', git: 'branch', database: 'database', notebook: 'notebook', board: 'board', tasks: 'tasks', screen: 'screen', canvas: 'grid', chats: 'chat' }
 
 export function paneLabel(pane) {
   if (!pane) return ''

@@ -192,6 +192,32 @@ function countStatus(files) {
   return { staged, modified, untracked, conflicted }
 }
 
+/**
+ * The multi-step operation a repository is in the middle of, from the marker files git leaves in its git dir.
+ * `{ kind: 'merge'|'rebase'|'cherry-pick'|'revert', label, step?, total? }` or null.
+ */
+function operationState(gitDir) {
+  const has = (n) => fs.existsSync(path.join(gitDir, n))
+  const num = (f) => {
+    try {
+      const v = parseInt(fs.readFileSync(path.join(gitDir, f), 'utf8'), 10)
+      return Number.isFinite(v) ? v : undefined
+    } catch {
+      return undefined
+    }
+  }
+  if (has('rebase-merge') || has('rebase-apply')) {
+    const dir = has('rebase-merge') ? 'rebase-merge' : 'rebase-apply'
+    const step = num(dir === 'rebase-merge' ? 'rebase-merge/msgnum' : 'rebase-apply/next')
+    const total = num(dir === 'rebase-merge' ? 'rebase-merge/end' : 'rebase-apply/last')
+    return { kind: 'rebase', label: 'Rebase in progress', step, total }
+  }
+  if (has('MERGE_HEAD')) return { kind: 'merge', label: 'Merge in progress' }
+  if (has('CHERRY_PICK_HEAD')) return { kind: 'cherry-pick', label: 'Cherry-pick in progress' }
+  if (has('REVERT_HEAD')) return { kind: 'revert', label: 'Revert in progress' }
+  return null
+}
+
 /** `diff-tree --name-status -z` -> [{ status, path, oldPath? }] */
 function parseNameStatusZ(out) {
   const t = out.split('\0')
@@ -273,6 +299,13 @@ async function mutate(root, label, fn) {
     s.redo.length = 0
   }
   return result
+}
+
+/** Empties the undo/redo stacks (after an action the index/HEAD-only undo cannot reverse). */
+function forgetUndo(root) {
+  const s = stackOf(root)
+  s.undo.length = 0
+  s.redo.length = 0
 }
 
 async function restore(root, target) {
@@ -462,7 +495,9 @@ function fileName(p) {
 const methods = {
   /** Resolves the repository for a folder. Never throws for "not a repository". */
   async open(args) {
-    const info = await resolveRepo(args && args.cwd)
+    const cwd = typeof (args && args.cwd) === 'string' ? args.cwd.trim() : ''
+    if (!cwd) return { ok: false, error: 'not a git repository', cwd: args && args.cwd }
+    const info = await resolveRepo(cwd)
     if (!info) return { ok: false, error: 'not a git repository', cwd: args.cwd }
     const st = await git(info.root, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=no'], { opId: args.opId })
     const { branch } = parseStatus(st.stdout)
@@ -499,11 +534,11 @@ const methods = {
   },
 
   async status(args) {
-    const { root } = await needRepo(args)
+    const { root, gitDir } = await needRepo(args)
     const r = await git(root, ['status', '--porcelain=v2', '--branch', '-z', '--untracked-files=all'], { opId: args.opId, cap: CAP_TEXT })
     const { branch, files } = parseStatus(r.stdout)
     files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
-    return { root, branch, files, ...countStatus(files), truncated: r.truncated, undo: undoState(root) }
+    return { root, branch, files, ...countStatus(files), truncated: r.truncated, undo: undoState(root), operation: operationState(gitDir) }
   },
 
   async refs(args) {
@@ -511,7 +546,7 @@ const methods = {
     const fmt = ['%(refname)', '%(objectname)', '%(*objectname)', '%(upstream:short)', '%(upstream:track,nobracket)', '%(HEAD)', '%(creatordate:unix)'].join('%09')
     const [fe, rem] = await Promise.all([
       git(root, ['for-each-ref', `--format=${fmt}`, 'refs/heads', 'refs/remotes', 'refs/tags', 'refs/stash'], { opId: args.opId }),
-      git(root, ['remote']),
+      git(root, ['remote', '-v']),
     ])
     const branches = []
     const remotes = []
@@ -529,13 +564,18 @@ const methods = {
     }
     let stashes = []
     if (hasStash) {
-      const s = await git(root, ['stash', 'list', '--format=%gd%x1f%H%x1f%s'])
+      const s = await git(root, ['stash', 'list', '--format=%gd%x1f%H%x1f%s%x1f%ct'])
       stashes = s.stdout.split('\n').filter(Boolean).map((l) => {
-        const [ref, hash, message] = l.split('\x1f')
-        return { ref, hash, message }
+        const [ref, hash, message, date] = l.split('\x1f')
+        return { ref, hash, message, date: +date || 0 }
       })
     }
-    return { branches, remotes, tags, stashes, remoteNames: rem.stdout.split('\n').filter(Boolean) }
+    const remoteInfo = []
+    for (const line of rem.stdout.split('\n')) {
+      const m = /^(\S+)\t(.*) \((fetch|push)\)$/.exec(line)
+      if (m && m[3] === 'fetch') remoteInfo.push({ name: m[1], url: m[2] })
+    }
+    return { branches, remotes, tags, stashes, remoteNames: remoteInfo.map((r) => r.name), remoteInfo }
   },
 
   async log(args) {
@@ -656,11 +696,12 @@ const methods = {
     const summary = String(args.summary ?? '').trim()
     const body = String(args.body ?? '').trim()
     const amend = !!args.amend
+    const sign = args.signoff ? ['--signoff'] : []
     if (!summary && !amend) throw new GitError('Write a summary for the commit.')
     const message = body ? `${summary}\n\n${body}` : summary
     await mutate(root, amend ? 'Amend commit' : 'Commit', async () => {
-      if (amend && !summary) await git(root, ['commit', '--amend', '--no-edit'], { timeout: 120_000 })
-      else await git(root, ['commit', '-F', '-', ...(amend ? ['--amend'] : [])], { input: message + '\n', timeout: 120_000 })
+      if (amend && !summary) await git(root, ['commit', '--amend', '--no-edit', ...sign], { timeout: 120_000 })
+      else await git(root, ['commit', '-F', '-', ...sign, ...(amend ? ['--amend'] : [])], { input: message + '\n', timeout: 120_000 })
     })
     const head = (await git(root, ['rev-parse', 'HEAD'])).stdout.trim()
     return { hash: head, undo: undoState(root) }
@@ -736,8 +777,28 @@ const methods = {
     const { root } = await needRepo(args)
     const name = refName(args.name)
     await git(root, ['check-ref-format', '--branch', name])
-    await git(root, ['checkout', '-b', name, ...(args.from ? [refName(args.from)] : [])])
+    const from = args.from ? [refName(args.from)] : []
+    // `checkout: false` only creates the branch (the branches panel); the default also switches to it.
+    if (args.checkout === false) await git(root, ['branch', '--', name, ...from])
+    else await git(root, ['checkout', '-b', name, ...from])
     return { ok: true }
+  },
+  async renameBranch(args) {
+    const { root } = await needRepo(args)
+    const to = refName(args.to)
+    await git(root, ['check-ref-format', '--branch', to])
+    await git(root, ['branch', '-m', '--', refName(args.name), to])
+    return { ok: true }
+  },
+  /** Deletes a branch on its remote: `git push <remote> --delete <branch>`. */
+  async deleteRemoteBranch(args) {
+    const { root } = await needRepo(args)
+    const full = refName(args.name)
+    const remotes = (await git(root, ['remote'])).stdout.split('\n').filter(Boolean)
+    const remote = remotes.find((r) => full.startsWith(`${r}/`))
+    if (!remote) throw new GitError(`${full} does not belong to a known remote`)
+    const r = await git(root, ['push', remote, '--delete', '--', full.slice(remote.length + 1)], { timeout: TIMEOUT_NET, opId: args.opId })
+    return { output: (r.stderr || r.stdout).trim() }
   },
   async deleteBranch(args) {
     const { root } = await needRepo(args)
@@ -789,6 +850,86 @@ const methods = {
     const { root } = await needRepo(args)
     const r = await git(root, ['stash', 'pop', ...(args.ref ? [refName(args.ref)] : [])], { env: { GIT_LITERAL_PATHSPECS: '0' } })
     return { output: r.stdout.trim() }
+  },
+  async stashApply(args) {
+    const { root } = await needRepo(args)
+    const r = await git(root, ['stash', 'apply', ...(args.ref ? [refName(args.ref)] : [])], { env: { GIT_LITERAL_PATHSPECS: '0' } })
+    return { output: r.stdout.trim() }
+  },
+  async stashDrop(args) {
+    const { root } = await needRepo(args)
+    const r = await git(root, ['stash', 'drop', refName(args.ref)])
+    return { output: r.stdout.trim() }
+  },
+
+  /** `git merge`. A merge that stops on conflicts is a result (`conflicts: true`), not an error. */
+  async merge(args) {
+    const { root, gitDir } = await needRepo(args)
+    const ref = refName(args.ref)
+    const mode = args.mode === 'noff' ? ['--no-ff', '--no-edit'] : args.mode === 'ffonly' ? ['--ff-only'] : args.mode === 'squash' ? ['--squash'] : ['--no-edit']
+    const r = await run(['merge', ...mode, ref], { cwd: root, timeout: 120_000 })
+    forgetUndo(root) // a merge moves the work tree too; the index/HEAD-only undo cannot reverse it
+    const output = (r.stdout || r.stderr).trim()
+    if (r.code === 0) return { output, conflicts: false }
+    if (operationState(gitDir) || /CONFLICT/.test(r.stdout)) return { output, conflicts: true }
+    throw new GitError(errText(r, ['merge']))
+  },
+
+  /** Continues, aborts or skips the merge/rebase/cherry-pick/revert the repository is in the middle of. */
+  async operation(args) {
+    const { root, gitDir } = await needRepo(args)
+    const op = operationState(gitDir)
+    if (!op) throw new GitError('Nothing is in progress.')
+    const action = args.action
+    if (action !== 'continue' && action !== 'abort' && action !== 'skip') throw new GitError('unknown action')
+    if (op.kind === 'merge' && action === 'skip') throw new GitError('A merge cannot be skipped.')
+    const cmd = op.kind === 'merge' ? (action === 'abort' ? ['merge', '--abort'] : ['commit', '--no-edit']) : [op.kind, `--${action}`]
+    const r = await run(cmd, { cwd: root, timeout: 120_000 })
+    forgetUndo(root)
+    const output = (r.stdout || r.stderr).trim()
+    if (r.code === 0) return { output, conflicts: false, operation: operationState(gitDir) }
+    if (action !== 'abort' && /CONFLICT/.test(r.stdout)) return { output, conflicts: true, operation: operationState(gitDir) }
+    throw new GitError(errText(r, cmd))
+  },
+
+  /** Settles a conflicted file with one side of the merge (`ours` = the current branch) and stages it. */
+  async resolve(args) {
+    const { root } = await needRepo(args)
+    const [p] = cleanPaths([args.path])
+    if (args.side !== 'ours' && args.side !== 'theirs') throw new GitError('choose ours or theirs')
+    await git(root, ['checkout', `--${args.side}`, '--', p])
+    await git(root, ['add', '--', p])
+    return { ok: true }
+  },
+
+  /** `git clone <url>` into `<dir>/<name>`; the folder must not exist or be empty. */
+  async clone(args) {
+    const url = String(args.url ?? '').trim()
+    if (!url || url.startsWith('-') || /[\0\r\n]/.test(url)) throw new GitError('Enter a repository URL.')
+    if (typeof args.dir !== 'string' || !path.isAbsolute(args.dir)) throw new GitError('a parent folder is required')
+    const base = url.replace(/[\\/]+$/, '').replace(/\.git$/i, '').split(/[\\/:]/).pop()
+    const name = String(args.name || base || '').trim()
+    if (!name || /[\\/\0]/.test(name) || name === '.' || name === '..') throw new GitError('Could not work out a folder name for the clone.')
+    const target = path.join(args.dir, name)
+    if (fs.existsSync(target) && fs.readdirSync(target).length) throw new GitError(`${target} already exists and is not empty.`)
+    fs.mkdirSync(args.dir, { recursive: true })
+    await git(args.dir, ['clone', '--', url, target], { timeout: TIMEOUT_NET * 4, opId: args.opId })
+    return { path: target }
+  },
+
+  /** Native folder picker (desktop only). `{ path: null }` when cancelled. */
+  async pickFolder(args, ctx) {
+    let e
+    try {
+      e = require('electron')
+    } catch {
+      e = null
+    }
+    if (!e || !e.dialog) throw new GitError('Not available outside the desktop app')
+    const win = (ctx && ctx.window) || (e.BrowserWindow && e.BrowserWindow.getFocusedWindow())
+    const opts = { title: String(args.title || 'Open a folder'), properties: ['openDirectory', ...(args.create ? ['createDirectory'] : [])], defaultPath: typeof args.defaultPath === 'string' && args.defaultPath ? args.defaultPath : undefined }
+    const r = win ? await e.dialog.showOpenDialog(win, opts) : await e.dialog.showOpenDialog(opts)
+    return { path: r.canceled || !r.filePaths[0] ? null : r.filePaths[0] }
   },
 
   /** Starts pushing `changed` events ({ root, kinds }) for a repository. */

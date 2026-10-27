@@ -22,9 +22,10 @@ import {
   splitAtCursor,
   type InputBuffer,
 } from './inputBuffer.js'
-import { promptBorders, type PromptChip } from '../chrome/chrome.js'
+import type { PromptChip } from '../chrome/chrome.js'
 import { SegLine } from '../kit/SegLine.js'
-import { fitSegs, selectedBar } from '../kit/segs.js'
+import { edgeColor } from '../kit/tern.js'
+import { composerRows, menuRow, type ComposerExtra } from './composer.js'
 import { useTheme } from '../theme/theme.js'
 
 interface Props {
@@ -57,11 +58,15 @@ interface Props {
   chip: PromptChip
   /** Contextual keys, on the right of the bottom border. */
   hint: string
+  /** Quiet chips after the recipient: the agent's model and the folder it works in. */
+  extras?: readonly ComposerExtra[]
   /** Draws the text as dots (a secret being typed). */
   mask?: boolean
   /** When set, Esc calls this instead of clearing the input. */
   onEscape?: () => void
 }
+
+const NO_EXTRAS: readonly ComposerExtra[] = []
 
 export function Prompt({
   value,
@@ -83,6 +88,7 @@ export function Prompt({
   width,
   chip,
   hint,
+  extras = NO_EXTRAS,
   mask = false,
   onEscape,
 }: Props) {
@@ -201,20 +207,18 @@ export function Prompt({
   const ghostHead = ghostChars[0]
   const ghostTail = ghostChars.slice(1).join('')
 
-  const borders = promptBorders(width, chip, hint, active, theme)
-  const stops = active ? theme.gradient : [theme.border]
+  const rows = composerRows({ width, chip, extras, hint, active, typed: value.text.trim() !== '' }, theme)
   const slash = value.text.startsWith('/')
 
   return (
     <Box flexDirection="column" width={width}>
-      {menu.map((m, i) => {
-        const row = [{ text: ` ${m.label}`, color: theme.text, bold: true }, { text: m.summary === '' ? '' : `  ${m.summary}`, color: theme.dim }]
-        return <SegLine key={m.label} segs={i === selectedRow ? selectedBar(row, width, theme) : fitSegs(row, width)} />
-      })}
-      <SegLine segs={borders.top} />
-      <Box width={width} borderStyle="bold" borderTop={false} borderBottom={false} borderLeftColor={stops[0]} borderRightColor={stops.at(-1)} paddingX={1}>
+      {menu.map((m, i) => (
+        <SegLine key={m.label} segs={menuRow(m, i === selectedRow, width, theme)} />
+      ))}
+      <SegLine segs={rows.top} />
+      <Box width={width} flexDirection="column" borderStyle="round" borderTop={false} borderBottom={false} borderColor={edgeColor(theme, active)} paddingX={1}>
         <Text wrap="truncate-start">
-          <Text color={slash ? theme.accent2 : theme.glow} bold>
+          <Text color={active ? (slash ? theme.accent2 : theme.accent) : theme.dim} bold>
             ❯{' '}
           </Text>
           {value.text === '' ? (
@@ -233,8 +237,9 @@ export function Prompt({
             </>
           )}
         </Text>
+        <SegLine segs={rows.chips} />
       </Box>
-      <SegLine segs={borders.bottom} />
+      <SegLine segs={rows.bottom} />
     </Box>
   )
 }

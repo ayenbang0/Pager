@@ -56,10 +56,21 @@ function pill(bg: string): Pill {
   return { fg: readableOn(fill), bg: fill }
 }
 
+/** How much of the color a toned pill keeps over the surface: a quiet tinted fill with light text instead of a neon block with black text. */
+const PILL_KEEP = 0.42
+
+/** A calm pill: `color` mixed into the surface (dark themes only), text chosen to read on it. Light surfaces keep the plain pill. */
+function softPill(color: string, surface: string, text: string): Pill {
+  if (!color.startsWith('#') || !surface.startsWith('#') || contrast(surface, '#ffffff') <= 4) return pill(color)
+  let fill = mix(surface, color, PILL_KEEP)
+  for (let step = 0; step < 12 && contrast(text, fill) < 4.5; step++) fill = mix(fill, surface, 0.1)
+  return contrast(text, fill) >= 4.5 ? { fg: text, bg: fill } : pill(color)
+}
+
 type Base = Omit<Theme, 'band' | 'pill'>
 
 /** How far the saturated tokens are pulled toward the background: the theme palettes are tuned vivid, this keeps them bold but easy on the eyes. */
-const TONE_DOWN = 0.3
+const TONE_DOWN = 0.4
 /** Secondary text moves toward primary text by this much so it never gets hard to read. */
 const DIM_LIFT = 0.15
 
@@ -93,16 +104,17 @@ function tone(base: Base): Base {
 /** Fills in the derived tokens: a band in the accent and a pill per meaning, each readable on its own background. Custom themes skip the toning: their colors show as written. */
 function build(raw: Base, toned = true): Theme {
   const base = toned ? tone(raw) : raw
+  const p = (c: string): Pill => (toned ? softPill(c, base.surface, base.text) : pill(c))
   return {
     ...base,
-    band: pill(base.accent),
+    band: p(base.accent),
     pill: {
-      accent: pill(base.accent),
-      accent2: pill(base.accent2),
-      success: pill(base.success),
-      warning: pill(base.warning),
-      error: pill(base.error),
-      info: pill(base.info),
+      accent: p(base.accent),
+      accent2: p(base.accent2),
+      success: p(base.success),
+      warning: p(base.warning),
+      error: p(base.error),
+      info: p(base.info),
       muted: { fg: base.text, bg: mix(base.surface, base.text, 0.16) },
     },
   }

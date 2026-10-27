@@ -40,6 +40,20 @@ async function dial(dir: string, start: boolean): Promise<DaemonClient> {
   return client
 }
 
+/** True once no process has `pid`; polls, since the daemon finishes its own shutdown (panes, chat engine) after it drops its clients. */
+async function exited(pid: number, ms: number): Promise<boolean> {
+  const end = Date.now() + ms
+  for (;;) {
+    try {
+      process.kill(pid, 0)
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ESRCH') return true
+    }
+    if (Date.now() >= end) return false
+    await sleep(50)
+  }
+}
+
 /** A pane id, `@focused`, or a title/kind; none given means the pane this runs in, else the focused one. */
 export async function resolvePane(client: DaemonClient, spec: string | undefined, env: NodeJS.ProcessEnv = process.env): Promise<Pane> {
   const state = await client.call<DaemonState>('state')
@@ -123,9 +137,18 @@ async function execute(args: DaemonArgs, dir: string): Promise<number> {
       client.once('close', () => closed.resolve())
       await client.call('daemon.stop')
       await Promise.race([closed.promise, sleep(8000)])
+      const pid = client.pid
       client.close()
-      out('daemon stopped')
-      return 0
+      if (await exited(pid, 10_000)) {
+        out('daemon stopped')
+        return 0
+      }
+      out(`the daemon (pid ${pid}) was asked to stop but is still running`)
+      return 1
+    }
+    case 'serve': {
+      const { runServe } = await import('../remote/cli.js') // the web server loads only for `pager serve`
+      return runServe(args, dir)
     }
     case 'split': {
       const client = await dial(dir, true)

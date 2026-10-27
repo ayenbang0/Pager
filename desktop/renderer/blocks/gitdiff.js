@@ -1,28 +1,58 @@
-// The git block's diff view: hunks with line numbers, and (for working-tree diffs) per-line and per-hunk staging.
-// Pure view: it never talks to git. It reports what the user picked through `onApply(kind, diff, selection)` and the
-// owner rebuilds the patch (gitpatch.buildPatch) and shows the refreshed diff again.
+// The git block's diff view: hunks with line numbers, unified or side by side, light syntax colouring, and (for working-tree
+// diffs) per-line and per-hunk staging. Pure view: it never talks to git. It reports what the user picked through
+// `onApply(kind, diff, selection)` and the owner rebuilds the patch (gitpatch.buildPatch) and shows the refreshed diff again.
+// Every piece of text from the repository (paths, lines) goes in as a text node, never as markup.
 import { h } from '../ui/dom.js'
-import { changeCount, diffStat } from './gitpatch.js'
+import { isImagePath } from './gitmodel.js'
+import { changeCount, diffStat, lineTotal, splitRows } from './gitpatch.js'
 import { icon } from './giticons.js'
+import { langOf, tokenize } from './gitsyntax.js'
 
 /** Lines rendered before the "Show all" button appears. */
-const RENDER_LIMIT = 4000
+export const RENDER_LIMIT = 4000
+/** Above this the "Show all" button warns that rendering will be slow. */
+export const HUGE = 20000
+/** The side-by-side view needs this much width; narrower panes fall back to the unified view. */
+const SPLIT_MIN = 620
+const VIEW_KEY = 'pager.git.diffview'
+
+const readView = () => {
+  try {
+    return localStorage.getItem(VIEW_KEY) === 'split' ? 'split' : 'unified'
+  } catch {
+    return 'unified'
+  }
+}
+
+/** A code cell's children: the line as coloured spans (text nodes only). */
+function codeNodes(text, lang) {
+  if (text === '') return [' ']
+  if (lang === 'none') return [text]
+  const out = []
+  for (const t of tokenize(text, lang)) out.push(t.k ? h('span', { class: `sx-${t.k}` }, t.s) : t.s)
+  return out
+}
 
 /**
- * @param {{ onApply?: (kind: 'stage'|'unstage', diff: object, selection: {hunk:number, lines:number[]|null}[]) => void }} opts
+ * @param {{ onApply?: (kind: 'stage'|'unstage', diff: object, selection: {hunk:number, lines:number[]|null}[]) => void,
+ *           onReload?: () => void }} opts  `onReload` is called when a view option that changes git's output (whitespace) flips
  */
-export function createDiffView({ onApply } = {}) {
+export function createDiffView({ onApply, onReload } = {}) {
   const bar = h('div', { class: 'gt-diff-bar' })
   const body = h('div', { class: 'gt-diff-body', tabIndex: -1 })
   const el = h('div', { class: 'gt-diff' }, bar, body)
 
-  let cur = null // { diff, mode, path }
+  let cur = null // { diff, mode, path, lang }
   /** hunk index -> Set(line index) */
   let picked = new Map()
   let rows = [] // rows[hunk][lineIndex] -> element
   let anchor = null // { hunk, line } of the last plain click, for shift-click ranges
   let drag = null // { hunk, to: boolean }
   let showAll = false
+  let view = readView()
+  let ws = false
+  let nav = null // { index, total, prev, next }
+  let rendered = null // 'unified' | 'split': what the body currently shows
 
   const isChange = (l) => l.t === '+' || l.t === '-'
   const count = () => {
@@ -31,6 +61,7 @@ export function createDiffView({ onApply } = {}) {
     return n
   }
   const editable = () => !!cur && (cur.mode === 'worktree' || cur.mode === 'staged') && !cur.diff.binary
+  const wantSplit = () => view === 'split' && body.clientWidth >= SPLIT_MIN
 
   function setLine(hi, li, on) {
     let set = picked.get(hi)
@@ -75,6 +106,25 @@ export function createDiffView({ onApply } = {}) {
     fire(sel)
   }
 
+  function setView(next) {
+    if (view === next) return
+    view = next
+    try {
+      localStorage.setItem(VIEW_KEY, next)
+    } catch {
+      /* storage unavailable */
+    }
+    if (cur && rendered) render(true)
+    renderBar()
+  }
+
+  function viewSwitch() {
+    const narrow = view === 'split' && !wantSplit()
+    const seg = (id, ico, label) =>
+      h('button', { class: 'gt-seg-b' + (view === id ? ' on' : ''), type: 'button', title: id === 'split' && narrow ? 'Side by side (needs a wider pane)' : label, 'aria-pressed': view === id, onClick: () => setView(id) }, icon(ico))
+    return h('span', { class: 'gt-seg sm', role: 'group', 'aria-label': 'Diff layout' }, seg('unified', 'rows', 'Unified'), seg('split', 'columns', 'Side by side'))
+  }
+
   function renderBar() {
     bar.replaceChildren()
     if (!cur) return
@@ -104,6 +154,23 @@ export function createDiffView({ onApply } = {}) {
     } else if (mode === 'commit' && st.add + st.del) {
       bar.append(h('span', { class: 'gt-hint' }, `${diff.hunks.length} hunk${diff.hunks.length === 1 ? '' : 's'}`))
     }
+    if (diff.hunks.length) bar.append(viewSwitch())
+    bar.append(h('button', { class: 'gt-ibtn' + (ws ? ' on' : ''), type: 'button', title: ws ? 'Whitespace changes are hidden: click to show them' : 'Hide whitespace-only changes', 'aria-pressed': ws, onClick: toggleWs }, icon('ws')))
+    if (nav && nav.total > 1) {
+      bar.append(
+        h('span', { class: 'gt-nav' },
+          h('button', { class: 'gt-ibtn', type: 'button', title: 'Previous file', disabled: nav.index <= 0, onClick: () => nav.prev() }, icon('chevD', 'up')),
+          h('span', { class: 'gt-nav-n' }, `${nav.index + 1}/${nav.total}`),
+          h('button', { class: 'gt-ibtn', type: 'button', title: 'Next file', disabled: nav.index >= nav.total - 1, onClick: () => nav.next() }, icon('chevD')),
+        ),
+      )
+    }
+  }
+
+  function toggleWs() {
+    ws = !ws
+    renderBar()
+    if (onReload) onReload()
   }
 
   function clear() {
@@ -115,16 +182,43 @@ export function createDiffView({ onApply } = {}) {
   function lineRow(hi, li, l) {
     const cls = l.t === '+' ? 'add' : l.t === '-' ? 'del' : l.t === '\\' ? 'meta' : 'ctx'
     const mark = l.t === '\\' ? '' : l.t === ' ' ? ' ' : l.t
-    const row = h(
+    return h(
       'div',
       { class: `gt-dl ${cls}`, dataset: { h: hi, i: li } },
       h('span', { class: 'gt-pick' }, isChange(l) && editable() ? h('span', { class: 'gt-tick' }, icon('check')) : null),
       h('span', { class: 'gt-no' }, l.oldNo ?? ''),
       h('span', { class: 'gt-no' }, l.newNo ?? ''),
       h('span', { class: 'gt-mk' }, mark),
-      h('span', { class: 'gt-code' }, l.t === '\\' ? l.text : l.text === '' ? ' ' : l.text),
+      h('span', { class: 'gt-code' }, ...(l.t === '\\' ? [l.text] : codeNodes(l.text, cur.lang))),
     )
-    return row
+  }
+
+  /** One side of a side-by-side row (the old side shows old numbers, the new side new ones). */
+  function sideCell(hi, cell, side) {
+    if (!cell) return h('div', { class: 'gt-sl empty' })
+    const { li, line: l } = cell
+    const cls = l.t === '+' ? 'add' : l.t === '-' ? 'del' : 'ctx'
+    return h(
+      'div',
+      { class: `gt-dl gt-sl ${cls}`, dataset: { h: hi, i: li } },
+      h('span', { class: 'gt-pick' }, isChange(l) && editable() ? h('span', { class: 'gt-tick' }, icon('check')) : null),
+      h('span', { class: 'gt-no' }, (side === 'l' ? l.oldNo : l.newNo) ?? ''),
+      h('span', { class: 'gt-mk' }, l.t === ' ' ? ' ' : l.t),
+      h('span', { class: 'gt-code' }, ...codeNodes(l.text, cur.lang)),
+    )
+  }
+
+  function hunkHead(hunk, hi) {
+    const total = changeCount(hunk)
+    return h(
+      'div',
+      { class: 'gt-hh', dataset: { h: hi } },
+      editable() && total ? h('button', { class: 'gt-box', title: 'Pick every line of this hunk', onClick: () => toggleHunk(hi) }, icon('check')) : h('span', { class: 'gt-box-gap' }),
+      h('span', { class: 'gt-hh-range' }, `@@ \u2212${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`),
+      hunk.section ? h('span', { class: 'gt-hh-sec' }, hunk.section) : null,
+      h('span', { class: 'gt-grow' }),
+      editable() && total ? h('button', { class: 'gt-btn sm quiet gt-hh-btn', onClick: () => fire([{ hunk: hi, lines: null }]) }, applyKind() === 'stage' ? 'Stage hunk' : 'Unstage hunk') : null,
+    )
   }
 
   function render(keepScroll) {
@@ -132,46 +226,55 @@ export function createDiffView({ onApply } = {}) {
     const left = keepScroll ? body.scrollLeft : 0
     body.replaceChildren()
     rows = []
+    const split = wantSplit()
+    rendered = split ? 'split' : 'unified'
+    body.classList.toggle('split', split)
     const { diff } = cur
     let budget = showAll ? Infinity : RENDER_LIMIT
     let cut = false
     diff.hunks.forEach((hunk, hi) => {
       const out = (rows[hi] = [])
       const wrap = h('section', { class: 'gt-hunk' })
-      const total = changeCount(hunk)
-      wrap.append(
-        h(
-          'div',
-          { class: 'gt-hh', dataset: { h: hi } },
-          editable() && total ? h('button', { class: 'gt-box', title: 'Pick every line of this hunk', onClick: () => toggleHunk(hi) }, icon('check')) : h('span', { class: 'gt-box-gap' }),
-          h('span', { class: 'gt-hh-range' }, `@@ \u2212${hunk.oldStart},${hunk.oldLines} +${hunk.newStart},${hunk.newLines} @@`),
-          hunk.section ? h('span', { class: 'gt-hh-sec' }, hunk.section) : null,
-          h('span', { class: 'gt-grow' }),
-          editable() && total
-            ? h('button', { class: 'gt-btn sm quiet gt-hh-btn', onClick: () => fire([{ hunk: hi, lines: null }]) }, applyKind() === 'stage' ? 'Stage hunk' : 'Unstage hunk')
-            : null,
-        ),
-      )
-      for (let li = 0; li < hunk.lines.length; li++) {
-        if (budget-- <= 0) {
-          cut = true
-          break
+      wrap.append(hunkHead(hunk, hi))
+      if (split) {
+        for (const r of splitRows(hunk)) {
+          if (budget-- <= 0) {
+            cut = true
+            break
+          }
+          if (r.meta) {
+            wrap.append(h('div', { class: 'gt-sr meta' }, h('span', { class: 'gt-code' }, r.meta.line.text)))
+            continue
+          }
+          const l = sideCell(hi, r.l, 'l')
+          const rr = sideCell(hi, r.r, 'r')
+          if (r.l) out[r.l.li] = l
+          if (r.r && !(r.l && r.l.li === r.r.li)) out[r.r.li] = rr
+          wrap.append(h('div', { class: 'gt-sr' }, l, rr))
         }
-        const row = lineRow(hi, li, hunk.lines[li])
-        if (picked.get(hi)?.has(li)) row.classList.add('sel')
-        out[li] = row
-        wrap.append(row)
+        for (const [li, set] of Object.entries(out)) if (picked.get(hi)?.has(+li)) set.classList.add('sel')
+      } else {
+        for (let li = 0; li < hunk.lines.length; li++) {
+          if (budget-- <= 0) {
+            cut = true
+            break
+          }
+          const row = lineRow(hi, li, hunk.lines[li])
+          if (picked.get(hi)?.has(li)) row.classList.add('sel')
+          out[li] = row
+          wrap.append(row)
+        }
       }
       body.append(wrap)
     })
     if (cut) {
-      const total = diff.hunks.reduce((a, x) => a + x.lines.length, 0)
+      const total = lineTotal(diff)
       body.append(
         h(
           'div',
           { class: 'gt-more' },
           h('span', {}, `Showing the first ${RENDER_LIMIT.toLocaleString()} of ${total.toLocaleString()} lines.`),
-          h('button', { class: 'gt-btn sm', onClick: () => ((showAll = true), render(true)) }, 'Show all'),
+          h('button', { class: 'gt-btn sm', onClick: () => ((showAll = true), render(true)) }, total > HUGE ? 'Show all (slow)' : 'Show all'),
         ),
       )
     }
@@ -232,15 +335,35 @@ export function createDiffView({ onApply } = {}) {
   body.addEventListener('pointerup', endDrag)
   body.addEventListener('pointercancel', endDrag)
 
+  // The side-by-side view needs room: re-render when the pane crosses the threshold.
+  if (typeof ResizeObserver !== 'undefined') {
+    let raf = 0
+    new ResizeObserver(() => {
+      cancelAnimationFrame(raf)
+      raf = requestAnimationFrame(() => {
+        if (cur && rendered && !cur.card && (wantSplit() ? 'split' : 'unified') !== rendered) render(true)
+        else if (cur) renderBar()
+      })
+    }).observe(body)
+  }
+
+  /** A centred card instead of a diff (binary, image, too large, conflicts). */
+  function card(ico, title, text, actions = []) {
+    rows = []
+    rendered = null
+    body.classList.remove('split')
+    body.replaceChildren(h('div', { class: 'gt-card gt-diff-card' }, h('span', { class: 'gt-card-ico' }, icon(ico)), h('div', { class: 'gt-card-title' }, title), text ? h('div', { class: 'gt-card-text' }, text) : null, actions.length ? h('div', { class: 'gt-card-actions' }, ...actions) : null))
+  }
+
   return {
     el,
     /**
      * @param {object} diff parsed by gitpatch.parseDiff
-     * @param {{ path: string, mode: 'worktree'|'staged'|'commit', keepScroll?: boolean, notice?: string }} info
+     * @param {{ path: string, mode: 'worktree'|'staged'|'commit', keepScroll?: boolean, notice?: string, actions?: Node[] }} info
      */
     show(diff, info) {
       const same = cur && cur.path === info.path && cur.mode === info.mode
-      cur = { diff, mode: info.mode, path: info.path }
+      cur = { diff, mode: info.mode, path: info.path, lang: langOf(info.path), card: false }
       if (!same || !info.keepScroll) {
         picked = new Map()
         anchor = null
@@ -257,9 +380,12 @@ export function createDiffView({ onApply } = {}) {
         picked = next
       }
       if (info.notice || diff.binary || !diff.hunks.length) {
-        rows = []
+        cur.card = true
         renderBar()
-        body.replaceChildren(h('div', { class: 'gt-diff-note' }, info.notice || (diff.binary ? 'Binary file: nothing to show.' : cur.mode === 'commit' ? 'No textual changes (mode or rename only).' : 'No changes.')))
+        if (info.notice) card('alert', info.noticeTitle || 'Nothing to show', info.notice, info.actions)
+        else if (isImagePath(info.path)) card('image', diff.isNew ? 'New image' : diff.isDeleted ? 'Image deleted' : 'Image changed', 'Pixel changes are not shown in the diff. Open the file to see the image itself.', info.actions)
+        else if (diff.binary) card('file', diff.isNew ? 'New binary file' : diff.isDeleted ? 'Binary file deleted' : 'Binary file changed', 'Binary content is not shown in the diff.', info.actions)
+        else card('check', 'No textual changes', cur.mode === 'commit' ? 'Only the file mode or its name changed.' : 'This file has no changes in this view.', info.actions)
         return
       }
       render(!!info.keepScroll && same)
@@ -269,8 +395,19 @@ export function createDiffView({ onApply } = {}) {
       cur = null
       picked = new Map()
       rows = []
+      rendered = null
+      body.classList.remove('split')
       bar.replaceChildren()
       body.replaceChildren(h('div', { class: 'gt-diff-note' }, text))
+    },
+    /** Hide-whitespace flag the owner passes to `git diff -w`. */
+    get ignoreWhitespace() {
+      return ws
+    },
+    /** Previous/next-file buttons: { index, total, prev(), next() } or null. */
+    setNav(n) {
+      nav = n
+      renderBar()
     },
     pickedCount: count,
     clear,

@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { after, before, describe, test } from 'node:test'
+import type { Engine } from '../app/engine.js'
 import { DaemonClient, tryConnect } from './client.js'
 import { detachPane, focusAfterClose, movePane, newTab, paneIds, removePane, setRatio, setRatioAt, splitCount, splitPane } from './layout.js'
 import { usableCwd, type LaunchSpec } from './launch.js'
@@ -253,12 +254,30 @@ describe('daemon', () => {
     assert.equal(((await cli.call('state')) as DaemonState).clients, open.filter((c) => c.alive).length - 1)
   })
 
-  test('the first pane is the pager, two clients see the same output, input from either reaches it', async () => {
+  test('the first pane of a session is the Home block: no process, never closes, by pane or by tab', async () => {
+    const c = await connect()
+    const made = (await c.call('session.new', { name: 'home', cwd: os.tmpdir() })) as { paneId: string; tabId: string; sessionId: string }
+    let state = (await c.call('state')) as DaemonState
+    const home = state.panes.find((p) => p.id === made.paneId)
+    assert.equal(home?.kind, 'block:home')
+    assert.equal(home?.state, 'running')
+    assert.equal(home?.pid, undefined)
+    await assert.rejects(c.call('pane.close', { paneId: made.paneId }), /stays open/)
+    await assert.rejects(c.call('tab.close', { tabId: made.tabId }), /stays open/)
+    // With a Home alive, a new tab is a shell; once it is gone, the next session starts with Home again.
+    const tab = (await c.call('tab.new', { kind: 'shell' })) as { paneId: string }
+    state = (await c.call('state')) as DaemonState
+    assert.equal(state.panes.find((p) => p.id === tab.paneId)?.kind, 'shell')
+    assert.equal(state.panes.find((p) => p.id === made.paneId)?.kind, 'block:home')
+    await c.call('session.close', { sessionId: made.sessionId })
+  })
+
+  test('the classic pager terminal is an ordinary pane: two clients see the same output, input from either reaches it', async () => {
     const a = await connect()
     const b = await connect()
     const seenA = collect(a)
     const seenB = collect(b)
-    const made = (await a.call('session.new', { name: 'main', cwd: os.tmpdir() })) as { paneId: string }
+    const made = (await a.call('session.new', { name: 'main', cwd: os.tmpdir(), kind: 'pager' })) as { paneId: string }
     const state = (await a.call('state')) as DaemonState
     assert.equal(state.panes.find((p) => p.id === made.paneId)?.kind, 'pager')
     await a.attach(made.paneId, { cols: 100, rows: 30 })
@@ -368,7 +387,7 @@ describe('slow clients', () => {
     const d = await startDaemon({ dir, address, cliPath: 'unused', launcher, log: () => {}, slowBytes: 256 * 1024 })
     const c = await DaemonClient.connect(address, { client: 'window' })
     try {
-      const made = (await c.call('session.new', { cwd: os.tmpdir(), command: 'flood' })) as { paneId: string }
+      const made = (await c.call('session.new', { cwd: os.tmpdir(), command: 'flood', kind: 'shell' })) as { paneId: string }
       await c.attach(made.paneId)
       const resync = Promise.withResolvers<void>()
       c.on('event', (e: { event: string }) => e.event === 'pane_resync' && resync.resolve())
@@ -390,6 +409,34 @@ describe('slow clients', () => {
       other.close()
     } finally {
       c.close()
+      await d.close()
+      await cleanup(dir)
+    }
+  })
+})
+
+describe('shutdown', () => {
+  test('a client that connects while the chat engine is still closing is refused and cannot keep the daemon alive', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-daemon-stop-'))
+    fs.writeFileSync(path.join(dir, 'desktop.json'), JSON.stringify({ chatsOn: true }))
+    const address = addr('stop')
+    const opening = Promise.withResolvers<void>()
+    const gate = Promise.withResolvers<Engine>()
+    const openEngine = (): Promise<Engine> => {
+      opening.resolve()
+      return gate.promise
+    }
+    const d = await startDaemon({ dir, address, cliPath: 'unused', launcher, log: () => {}, chats: { acquire: () => () => {}, openEngine } })
+    try {
+      await Promise.race([opening.promise, sleep(10_000).then(() => assert.fail('the chat engine never began opening'))])
+      // Closing the chats host is the slow step of shutdown, and it waits for the engine that is still opening.
+      const stopping = d.close()
+      await assert.rejects(DaemonClient.connect(address, { client: 'window', timeoutMs: 1000 }), 'a stopping daemon must not accept clients')
+      gate.reject(new Error('engine opening abandoned'))
+      const outcome = await Promise.race([stopping.then(() => 'stopped'), sleep(5000).then(() => 'still waiting')])
+      assert.equal(outcome, 'stopped')
+    } finally {
+      gate.reject(new Error('test over'))
       await d.close()
       await cleanup(dir)
     }
@@ -427,7 +474,7 @@ describe('restore', () => {
       assert.equal(back.state, 'restored')
       assert.equal(back.cwd, work)
       assert.equal(back.kind, 'shell')
-      assert.equal(state.panes.find((p) => p.id === first.paneId)?.kind, 'pager')
+      assert.equal(state.panes.find((p) => p.id === first.paneId)?.kind, 'block:home')
       const at = await c.attach(second.paneId)
       const replay = at.replay.toString('utf8')
       assert.match(replay, /echo\[before-restart\]/)
@@ -445,6 +492,33 @@ describe('restore', () => {
       await d?.close()
       await cleanup(dir)
       await cleanup(work)
+    }
+  })
+
+  test('state from before Home was a block gets a Home tab first; the old pager pane stays and can close', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-daemon-oldhome-'))
+    const address = addr('oldhome')
+    const opts = { dir, address, cliPath: 'unused', launcher, log: () => {}, layoutSaveMs: 20, dataSaveMs: 50 }
+    let d: DaemonHandle | undefined = await startDaemon(opts)
+    try {
+      let c = await DaemonClient.connect(address, { client: 'window' })
+      const old = (await c.call('session.new', { name: 'Old', cwd: os.tmpdir(), kind: 'pager' })) as { paneId: string }
+      c.close()
+      await d.close()
+      d = await startDaemon(opts)
+      c = await DaemonClient.connect(address, { client: 'window' })
+      const state = (await c.call('state')) as DaemonState
+      const root = state.sessions[0]!.tabs[0]!.root
+      const firstPane = root.type === 'pane' ? state.panes.find((p) => p.id === root.paneId) : undefined
+      assert.equal(firstPane?.kind, 'block:home')
+      assert.equal(state.sessions[0]!.tabs.length, 2)
+      assert.equal(state.panes.find((p) => p.id === old.paneId)?.kind, 'pager')
+      const oldTab = state.sessions[0]!.tabs[1]!
+      await c.call('tab.close', { tabId: oldTab.id })
+      c.close()
+    } finally {
+      await d?.close()
+      await cleanup(dir)
     }
   })
 })

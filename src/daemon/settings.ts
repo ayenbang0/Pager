@@ -91,6 +91,8 @@ export interface Settings {
   antialias: boolean
   syncToDisplay: boolean
   framesQueued: number
+  /** Start the chat engine with the daemon (so messages arrive while no window is open) instead of on the first Chats request. */
+  chatsOn: boolean
   [extra: string]: unknown
 }
 
@@ -151,6 +153,7 @@ export const DEFAULTS: Settings = {
   antialias: true,
   syncToDisplay: true,
   framesQueued: 3,
+  chatsOn: false,
 }
 
 /** Numeric limits applied after load and after every patch (Tern's `clamp()`); keyed by the dotted path. */

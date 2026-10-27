@@ -1,4 +1,4 @@
-// Settings control kit: small DOM factories (no framework). Styles live in settings.css.
+// Shared control kit: small DOM factories (no framework). Styles live in kit.css.
 // Every control returns one element with `.setValue(v)` so a page can update it in place when a setting changes elsewhere
 // (the element keeps focus and caret; nothing is re-rendered).
 

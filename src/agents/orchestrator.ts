@@ -160,7 +160,11 @@ export class Orchestrator extends EventEmitter {
   private readonly lineStats = new Map<string, DiffStat>()
   private readonly conflicts = new ConflictBook()
   private active = 0
-  private closing = false
+  /** Aborted by `close()`: agents still handshaking in a readiness probe are killed instead of holding the shutdown for the probe timeout. */
+  private readonly shutdown = new AbortController()
+  private get closing(): boolean {
+    return this.shutdown.signal.aborted
+  }
   private root: string | undefined
   private mergeQueue: Promise<void> = Promise.resolve()
   private reviewCursor = -1
@@ -749,7 +753,7 @@ export class Orchestrator extends EventEmitter {
     for (const cli of queue) this.registry.setReadiness(cli, { state: 'checking' })
     this.emit('change')
     const pool = Array.from({ length: Math.min(CHECK_CONCURRENCY, queue.length) }, async () => {
-      for (let cli = queue.shift(); cli !== undefined; cli = queue.shift()) {
+      for (let cli = queue.shift(); cli !== undefined && !this.closing; cli = queue.shift()) {
         this.registry.setReadiness(cli, await this.checkCli(cli))
         this.emit('change')
       }
@@ -774,12 +778,13 @@ export class Orchestrator extends EventEmitter {
     try {
       let acpError = ''
       if (acpBin !== undefined) {
-        const probe = await probeAcp(acpBin, spec.acp ?? [], dir, env)
+        const probe = await probeAcp(acpBin, spec.acp ?? [], dir, env, { signal: this.shutdown.signal })
         if (probe.ok) {
           if (probe.commands.length > 0) this.commandStore.set(cli, probe.commands)
           if (probe.options.length > 0) this.cliOptions.set(cli, probe.options)
           return { state: 'ready' }
         }
+        if (this.closing) return { state: 'failed', reason: 'stopped' }
         acpError = probe.error
         if (oneShotBin === undefined) return { state: 'failed', reason: this.withAuthHint(cli, acpError) }
       }
@@ -969,7 +974,7 @@ export class Orchestrator extends EventEmitter {
       if ('error' in found) return this.toast('error', found.error)
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pager-acp-'))
       try {
-        const probe = await probeAcp(found.bin, spec.acp ?? [], dir, { ...this.env, ...this.registry.launchFor(cfg.cli)?.env }, 5000)
+        const probe = await probeAcp(found.bin, spec.acp ?? [], dir, { ...this.env, ...this.registry.launchFor(cfg.cli)?.env }, { waitMs: 5000, signal: this.shutdown.signal })
         if (!probe.ok) return this.post(`${name}: could not list commands (${probe.error})`, [name])
         list = probe.commands
         this.commandStore.set(cfg.cli, list)
@@ -1017,7 +1022,7 @@ export class Orchestrator extends EventEmitter {
   }
 
   async close(): Promise<void> {
-    this.closing = true
+    this.shutdown.abort()
     this.cancel(new Set(this.workers.values()))
     await Promise.allSettled([...this.inflight])
     await this.tools.close()

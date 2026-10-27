@@ -39,10 +39,7 @@ export const DEFAULT_SETTINGS = {
   sidebar_width: 260,
   sheet_width: 440,
   confirm_close: 'running', // never | running | always
-  new_blocks: 'shell', // shell | agent
   new_tabs_start: 'current', // current | home
-  agent: 'omp',
-  agent_opens: 'split', // split | replace | tab
   shell: '',
   snap_text: false,
   antialias: true,
@@ -50,8 +47,6 @@ export const DEFAULT_SETTINGS = {
   sync_to_display: true,
   keybinds: {}, // commandId -> chord override
   hosts: [], // [{ id, name, address }]
-  agents_custom: [], // [{ id, name, command }]
-  agent_composer: true, // new agent panes open with the wordmark + composer until the first prompt
   share_sessions: true,
   reconnect_hosts: true,
   auto_update: true,
@@ -180,5 +175,7 @@ export function layoutTree(node, rect = { x: 0, y: 0, w: 1, h: 1 }, out = { pane
 }
 
 export const PANE_KINDS = ['pager', 'shell', 'omp', 'claude', 'opencode', 'hermes', 'custom']
+/** The Pager home pane: the `home` block, the app's front door, never closed. */
+export const isHome = (pane) => !!pane && pane.kind === 'block:home'
 export const isBlock = (pane) => !!pane && typeof pane.kind === 'string' && pane.kind.startsWith('block:')
 export const blockName = (pane) => (isBlock(pane) ? pane.kind.slice(6) : null)

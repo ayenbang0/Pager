@@ -1,5 +1,8 @@
 // One xterm.js terminal bound to one daemon pane: replay on attach, rAF-coalesced writes, WebGL only while visible.
 import { app } from './store.js'
+import { runCommand } from './commands.js'
+import { toast } from './toast.js'
+import { attachSurface } from '../surface/index.js'
 
 let xtermReady = null
 const loadScript = (src) =>
@@ -22,22 +25,6 @@ const enc = new TextEncoder()
 const toBytes = (d) => (typeof d === 'string' ? enc.encode(d) : d)
 const isWin = /Windows/i.test(navigator.userAgent)
 const cssVar = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim()
-
-let gpu = null
-/** WebGL only pays off on a real GPU: on software GL (SwiftShader, llvmpipe) xterm's DOM renderer is faster and paints reliably. */
-function hasGpu() {
-  if (gpu !== null) return gpu
-  try {
-    const gl = document.createElement('canvas').getContext('webgl2') || document.createElement('canvas').getContext('webgl')
-    const ext = gl && gl.getExtension('WEBGL_debug_renderer_info')
-    const name = ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : ''
-    gpu = !!gl && !/swiftshader|llvmpipe|software|basic render/i.test(name)
-    if (gl && gl.getExtension('WEBGL_lose_context')) gl.getExtension('WEBGL_lose_context').loseContext()
-  } catch {
-    gpu = false
-  }
-  return gpu
-}
 
 export function terminalTheme() {
   const v = cssVar
@@ -116,6 +103,7 @@ export class TerminalView {
     term.open(this.host)
     this.term = term
     this.fit = fit
+    this.surface = attachSurface(term, { openBlock: (n, a) => runCommand('block.open', { name: n, args: a, from: this.id }), onError: (m) => toast('warn', m) })
 
     term.onData((d) => app.d.write(this.id, d))
     term.onResize(({ cols, rows }) => {
@@ -240,7 +228,7 @@ export class TerminalView {
 
   #gl(on) {
     if (!this.term) return
-    if (on && !this.webgl && app.settings.renderer !== 'canvas' && window.WebglAddon && (app.settings.renderer === 'webgl' || hasGpu())) {
+    if (on && !this.webgl && app.settings.renderer === 'webgl' && window.WebglAddon) {
       try {
         const gl = new WebglAddon.WebglAddon()
         gl.onContextLoss(() => {
@@ -320,6 +308,7 @@ export class TerminalView {
   }
 
   dispose() {
+    if (this.surface) this.surface.dispose()
     this.disposed = true
     cancelAnimationFrame(this.raf)
     cancelAnimationFrame(this.fitRaf)

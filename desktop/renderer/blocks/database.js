@@ -2,6 +2,7 @@
 // bundled node (desktop/electron/blocks/database.cjs); this file is only the view. Files open read-only; Edit mode
 // stages changes in one transaction that Write changes commits and Revert rolls back.
 import { h, fromHTML, uid, clamp } from '../ui/dom.js'
+import { confirmDialog } from '../ui/dialog.js'
 import {
   columnChips, displayValue, editText, formatBytes, formatMs, nextSort, offsetForRow, pageLabel, pageOffsets, parseCellInput,
   plural, rowsToTsv, tokenizeSql, valueKind,
@@ -79,7 +80,7 @@ const errText = (e) => {
 
 // ---------------------------------------------------------------- small UI parts
 function button({ icon: ic, label, title, cls = '', onClick, kbd }) {
-  const b = h('button', { type: 'button', class: 'db-btn ' + cls, title: title || '' }, ic ? icon(ic) : null, label ? h('span', { class: 'db-btn-l' }, label) : null, kbd ? h('kbd', null, kbd) : null)
+  const b = h('button', { type: 'button', class: `db-btn btn sm ${cls.replace(/\bprimary\b/g, 'accent')}`, title: title || '' }, ic ? icon(ic) : null, label ? h('span', { class: 'db-btn-l' }, label) : null, kbd ? h('kbd', null, kbd) : null)
   if (onClick) b.addEventListener('click', (e) => { if (!b.disabled) onClick(e) })
   return b
 }
@@ -135,22 +136,9 @@ function popMenu(root, anchor, items, { align = 'left', width } = {}) {
   return close
 }
 
-/** Modal confirm inside the block. Resolves true on the primary button. */
-function confirmBox(root, { title, body, ok = 'Continue', danger = false }) {
-  return new Promise((resolve) => {
-    const prev = document.activeElement
-    const done = (v) => { layer.remove(); prev && prev.focus && prev.focus(); resolve(v) }
-    const okBtn = h('button', { type: 'button', class: 'db-btn primary' + (danger ? ' danger' : '') }, ok)
-    const layer = h('div', { class: 'db-modal', onKeydown: (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(false) } } },
-      h('div', { class: 'db-dialog', role: 'dialog', 'aria-modal': 'true' },
-        h('div', { class: 'db-dialog-h' }, h('span', { class: 'db-dialog-t' }, title)),
-        h('div', { class: 'db-dialog-b' }, body),
-        h('div', { class: 'db-dialog-f' }, h('button', { type: 'button', class: 'db-btn', onClick: () => done(false) }, 'Cancel'), okBtn)))
-    okBtn.addEventListener('click', () => done(true))
-    layer.addEventListener('pointerdown', (e) => { if (e.target === layer) done(false) })
-    root.append(layer)
-    okBtn.focus()
-  })
+/** Modal confirm using the shell kit. Resolves true on the primary button. */
+function confirmBox(_root, { title, body, ok = 'Continue', danger = false }) {
+  return confirmDialog({ title, body, confirm: ok, danger })
 }
 
 // ---------------------------------------------------------------- the grid
@@ -709,9 +697,8 @@ export default {
       const recent = store.get('recent', []).filter((p) => p !== S.path)
       emptyEl.replaceChildren(
         h('div', { class: 'db-welcome-card' },
-          h('div', { class: 'db-welcome-ico' }, icon('db')),
           h('h2', null, 'SQLite databases'),
-          h('p', null, 'Browse tables, run SQL and tune pragmas. Files open read-only; turn on Editing to change one.'),
+          h('p', null, 'Files open read-only. Turn on Editing to make changes.'),
           h('div', { class: 'db-welcome-act' },
             button({ icon: 'folder', label: 'Open database…', cls: 'accent', onClick: pickOpen }),
             button({ icon: 'filePlus', label: 'New database…', onClick: pickNew })),
@@ -789,7 +776,7 @@ export default {
         h('div', { class: 'db-sqlbox-h' }, h('span', null, sel ? 'Schema · ' + sel.name : 'Schema'), sel && sel.sql ? button({ icon: 'copy', label: 'Copy', cls: 'quiet sm', onClick: () => { navigator.clipboard?.writeText(sel.sql); notify('ok', 'Copied') } }) : null,
           sel && (sel.kind === 'table' || sel.kind === 'view') ? button({ icon: 'table', label: 'Browse', cls: 'quiet sm', onClick: () => { B.table = sel.name; B.offset = 0; B.filters = {}; B.sort = []; B.data = null; setTab('browse') } }) : null),
         h('pre', { class: 'db-sql-pre' }, sel && sel.sql ? highlight(sel.sql) : h('span', { class: 'db-hint' }, 'Select a table, view, index or trigger to see its CREATE statement. Double-click a table to browse it.')))
-      pane.replaceChildren(tree, sqlBox)
+      pane.replaceChildren(tree, ...(sel ? [sqlBox] : []))
       tree.scrollTop = prevScroll
     }
 

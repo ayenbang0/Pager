@@ -260,12 +260,28 @@ export class Store {
     }
   }
 
-  /** The last `limit` chat rows (texts, bot messages, renames, membership) ordered by (ts, author, seq) ascending. */
-  listMessages(conv: string, limit: number): StoredEvent[] {
-    const rows = this.db
-      .prepare("SELECT * FROM events WHERE conv = ? AND (op IS NULL OR op IN ('rename', 'bot')) ORDER BY ts DESC, author DESC, seq DESC LIMIT ?")
-      .all(conv, limit)
+  /**
+   * The last `limit` chat rows (texts, bot messages, renames, membership) ordered by (ts, author, seq) ascending.
+   * With `before` (a message key `<author>:<seq>`), only rows strictly older than that message; an unknown key yields none.
+   */
+  listMessages(conv: string, limit: number, before?: string): StoredEvent[] {
+    const sql = "SELECT * FROM events WHERE conv = ? AND (op IS NULL OR op IN ('rename', 'bot'))"
+    const order = ' ORDER BY ts DESC, author DESC, seq DESC LIMIT ?'
+    let rows
+    if (before === undefined) rows = this.db.prepare(sql + order).all(conv, limit)
+    else {
+      const m = /^([0-9a-f]{64}):(\d{1,9})$/.exec(before)
+      const at = m === null ? undefined : this.db.prepare('SELECT ts FROM events WHERE conv = ? AND author = ? AND seq = ?').get(conv, m[1] ?? '', Number(m[2]))
+      if (m === null || at === undefined) return []
+      rows = this.db.prepare(`${sql} AND (ts, author, seq) < (?, ?, ?)${order}`).all(conv, at.ts as number, m[1] ?? '', Number(m[2]), limit)
+    }
     return rows.reverse().map((r) => ({ ...this.toEvent(r), recvAt: r.recv_at as number }))
+  }
+
+  /** When the newest text or bot message of a conversation was written (`ts`), for the sidebar's relative time; undefined while it is empty. */
+  lastTextAt(conv: string): number | undefined {
+    const r = this.db.prepare("SELECT ts FROM events WHERE conv = ? AND kind = 'text' AND (op IS NULL OR op = 'bot') ORDER BY ts DESC LIMIT 1").get(conv)
+    return r === undefined ? undefined : (r.ts as number)
   }
 
   /** Every document operation event, in the order they were written. */

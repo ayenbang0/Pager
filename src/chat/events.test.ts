@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import DHT from 'hyperdht'
-import { dmConvId, newGroupId, signEvent, verifyEvent } from './events.js'
+import { newGroupId } from './convId.js'
+import { signEvent, verifyEvent } from './events.js'
 
 const kp = DHT.keyPair()
 const author = kp.publicKey.toString('hex')
@@ -24,11 +25,4 @@ test('changing any signed field breaks verification', () => {
     assert.equal(verifyEvent(tampered), false)
   }
   assert.equal(verifyEvent({ ...e, sig: 'zz' }), false)
-})
-
-test('dmConvId is symmetric', () => {
-  const a = DHT.keyPair().publicKey.toString('hex')
-  const b = DHT.keyPair().publicKey.toString('hex')
-  assert.equal(dmConvId(a, b), dmConvId(b, a))
-  assert.match(dmConvId(a, b), /^dm:[0-9a-f]{32}$/)
 })

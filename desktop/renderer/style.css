@@ -9,16 +9,10 @@ html.is-mock, html.is-mock body { background: var(--page); }
   position: fixed; inset: 0;
   display: flex; flex-direction: column;
   overflow: hidden;
-  background:
-    radial-gradient(70% 60% at 0% 0%, var(--glow-a), transparent 70%),
-    radial-gradient(80% 50% at 40% 112%, var(--glow-b), transparent 70%),
-    color-mix(in srgb, var(--page) calc(var(--tint) * 100%), transparent);
+  background: color-mix(in srgb, var(--page) calc(var(--tint) * 100%), transparent);
 }
 html.mat-solid #app { background: var(--page); }
-html.mat-clear #app { background:
-    radial-gradient(70% 60% at 0% 0%, var(--glow-a), transparent 70%),
-    radial-gradient(80% 50% at 40% 112%, var(--glow-b), transparent 70%),
-    color-mix(in srgb, var(--page) calc(var(--tint) * 70%), transparent); }
+html.mat-clear #app { background: color-mix(in srgb, var(--page) calc(var(--tint) * 70%), transparent); }
 
 #stage { flex: 1; min-height: 0; display: flex; position: relative; }
 #panes { flex: 1; min-width: 0; position: relative; }

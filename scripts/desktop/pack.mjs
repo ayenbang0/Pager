@@ -1,4 +1,5 @@
 // Builds release/Pager (the own-window host) and release/Pager-<version>-win-x64.zip. No installer, no auto-updater.
+// PAGER_RELEASE_DIR builds somewhere else instead of release/ (which is emptied first), for when a Pager runs from release/Pager.
 // Set PAGER_SIGN_CMD (a command template containing {file}) to Authenticode-sign every PE that gets loaded.
 import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -8,7 +9,8 @@ import { fileURLToPath } from 'node:url'
 
 const root = path.resolve(fileURLToPath(new URL('../..', import.meta.url)))
 const desk = path.join(root, 'desktop')
-const out = path.join(root, 'release', 'Pager')
+const rel = path.resolve(process.env.PAGER_RELEASE_DIR ?? path.join(root, 'release'))
+const out = path.join(rel, 'Pager')
 const pkg = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'))
 const win = process.platform === 'win32'
 
@@ -41,7 +43,7 @@ run('npm', ['ci', '--no-audit', '--no-fund'], desk)
 run(process.execPath, [path.join(desk, 'node_modules', 'electron', 'install.js')], desk)
 
 console.log('3/6 stage electron')
-rmSync(path.join(root, 'release'), { recursive: true, force: true })
+rmSync(rel, { recursive: true, force: true })
 cpSync(must(path.join(desk, 'node_modules', 'electron', 'dist')), out, { recursive: true })
 renameSync(path.join(out, 'electron.exe'), path.join(out, 'Pager.exe'))
 // The exe's own resources are what the taskbar, a pinned shortcut, Alt+Tab and Task Manager show: without this they stay Electron's.
@@ -63,7 +65,8 @@ mkdirSync(app, { recursive: true })
 writeFileSync(path.join(app, 'package.json'), JSON.stringify({ name: 'pager-desktop', version: pkg.version, main: 'electron/main.cjs' }))
 cpSync(path.join(desk, 'electron'), path.join(app, 'electron'), { recursive: true })
 const renderer = path.join(app, 'renderer')
-cpSync(path.join(desk, 'renderer'), renderer, { recursive: true })
+// `blocks/_harness/` is dev-only (loopback servers and fixtures for the block pages); it stays out of the product.
+cpSync(path.join(desk, 'renderer'), renderer, { recursive: true, filter: (src) => path.basename(src) !== '_harness' })
 const nm = path.join(desk, 'node_modules', '@xterm')
 const vendor = path.join(renderer, 'vendor')
 mkdirSync(vendor, { recursive: true })
@@ -114,8 +117,8 @@ if (sign !== undefined && sign !== '') {
 }
 
 console.log('6/6 zip')
-const zip = path.join(root, 'release', `Pager-${pkg.version}-win-x64.zip`)
-run('tar', ['-a', '-c', '-f', zip, '-C', path.join(root, 'release'), 'Pager'])
+const zip = path.join(rel, `Pager-${pkg.version}-win-x64.zip`)
+run('tar', ['-a', '-c', '-f', zip, '-C', rel, 'Pager'])
 // install.ps1 checks the zip against this file before it unpacks anything.
 writeFileSync(`${zip}.sha256`, `${createHash('sha256').update(readFileSync(zip)).digest('hex')}  ${path.basename(zip)}\n`)
 const mb = (n) => `${(n / 1048576).toFixed(1)} MB`

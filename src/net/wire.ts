@@ -25,6 +25,8 @@ export const CALL_ROOM_RE = /^[a-z0-9][a-z0-9_-]{0,23}$/
 const room = z.string().regex(CALL_ROOM_RE)
 /** 16 kHz mono 16-bit PCM, base64; one frame carries well under a second. */
 const pcm = z.string().max(16_000).regex(/^[A-Za-z0-9+/]*={0,2}$/)
+const shareId = z.string().regex(/^[0-9a-f]{16}$/)
+const blockName = z.string().regex(/^[a-z][a-z0-9-]{0,23}$/)
 
 /** Drops terminal control characters from text a peer sent, keeping newlines and tabs. */
 export const cleanText = (s: string): string => s.replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, '')
@@ -107,6 +109,21 @@ const frameSchema = z.discriminatedUnion('t', [
   z.object({ t: z.literal('call-audio'), conv: convId, room, d: pcm }),
   // A nudge that plays a sound on the receiver's machine. Only sent to peers whose hello lists the 'ping' capability.
   z.object({ t: z.literal('ping'), conv: convId }),
+  // Live shared blocks (canvas, board, notebook …) inside a chat. Only sent to peers whose hello lists the 'share' capability, and only about conversations they are in.
+  // `d` is an opaque JSON text owned by the block (snapshot, operation, cursor); the host numbers and relays operations (`ver`, `from`).
+  z.object({
+    t: z.literal('share'),
+    k: z.enum(['offer', 'join', 'leave', 'end', 'snap', 'op', 'presence', 'members']),
+    id: shareId,
+    conv: convId.optional(),
+    block: blockName.optional(),
+    title: title.optional(),
+    mode: z.enum(['live', 'readonly', 'snapshot']).optional(),
+    args: z.string().max(2000).optional(),
+    from: pkHex.optional(),
+    ver: z.number().int().min(0).optional(),
+    d: z.string().max(200_000).optional(),
+  }),
 ])
 
 export type CollabEntry = z.infer<typeof collabEntry>

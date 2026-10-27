@@ -67,6 +67,16 @@ test('unreadCount counts only others\' text after read_at; listMessages ordering
   assert.equal(s.listMessages(G, 2).length, 2)
 })
 
+test('lastTextAt is the newest text or bot message of a conversation, not a membership event', () => {
+  const s = new Store(':memory:')
+  s.upsertConv(group())
+  assert.equal(s.lastTextAt(G), undefined)
+  s.insertEvent(ev(A, 1, { ts: 5 }), 10)
+  s.insertEvent(ev(B, 1, { ts: 9 }), 10)
+  s.insertEvent(ev(B, 2, { kind: 'member-leave', body: '', ts: 20 }), 30)
+  assert.equal(s.lastTextAt(G), 9)
+})
+
 test('upsertPeer updates only given fields', () => {
   const s = new Store(':memory:')
   s.upsertPeer(A, { name: 'ann', state: 'outgoing' }, 1)

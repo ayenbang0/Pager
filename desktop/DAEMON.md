@@ -53,7 +53,7 @@ Pane output (type-1 frames) goes to the clients that `pane.attach`ed, nobody els
 
 `kind` is `pager | shell | omp | claude | opencode | hermes | custom | block:<name>`. Block panes have no PTY. `argv` runs that program instead of a shell (kind defaults to `custom`).
 
-Defaults: `session.new`/`tab.new` without `kind` make a `pager` pane (the Ink TUI, `node dist/cli.js`) when no live pager pane exists, so the first pane of the first session is Pager and agents, chat and calls keep running with the window closed; else `shell`, or `omp` when `newBlocks` is `agent`. New tabs start in the focused pane's folder (`newTabsStartIn: current`) or home.
+Defaults: `session.new`/`tab.new` without `kind` make the Home block (`block:home`, no process) when no Home pane exists, so the first pane of the first session is Home; else `shell`, or `omp` when `newBlocks` is `agent` (`tab.new` with a `command` is a shell). The Home pane is pinned: `pane.close` and `tab.close` on it fail with `Pager home stays open`. The classic Pager TUI (`kind: 'pager'`, `node dist/cli.js`) is an ordinary closable pane, which agents, chat and calls keep running in with the window closed. State saved before Home was a block gets a Home tab put first in the first session on the next start. New tabs start in the focused pane's folder (`newTabsStartIn: current`) or home.
 
 ### Events
 

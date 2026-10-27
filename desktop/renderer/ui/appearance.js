@@ -2,10 +2,6 @@
 // - Pager's own palettes live in ui/tokens.css (pitch-black dark on :root, off-white light on html[data-theme="light"]).
 // - An omp theme (ui/themes.js) is applied by adding class `tn-themed` and writing the same tokens inline on <html>
 //   (mapping from the Tern spec, section 7). Reverting removes every inline property this module wrote.
-// - One tokens.css gap, handled here as an inline override: the built-in light palette wants a muted teal-grey accent
-//   (#5a7f80, per the ground-truth screenshots) but tokens.css still has the blue one. While no omp theme is active, in
-//   light mode with theme_light == null, LIGHT_BUILTIN_VARS is written inline. If tokens.css gets that accent itself,
-//   delete LIGHT_BUILTIN_VARS and its use in apply().
 import { app } from './store.js'
 import { THEMES } from './themes.js'
 
@@ -150,15 +146,6 @@ export function themeCssVars(theme, mode, opts = {}) {
   return out
 }
 
-/** Inline overrides for the built-in light palette (muted teal-grey accent from the ground-truth screenshots). */
-export const LIGHT_BUILTIN_VARS = {
-  '--accent': '#5a7f80',
-  '--accent-ink': '#3d6162',
-  '--accent-fill': '#4a6d6e',
-  '--rail': 'rgb(90, 127, 128)',
-  '--tv-sel': 'rgba(90, 127, 128, .22)',
-}
-
 // ---------------------------------------------------------------- runtime
 const root = () => document.documentElement
 const PREFIXES = ['lay-', 'dense-', 'tabs-', 'tn-heads-', 'mat-']
@@ -226,7 +213,6 @@ function apply() {
     vars = themeCssVars(theme, theme.mode, { contrast })
   } else {
     effective = mode
-    if (mode === 'light') vars = { ...LIGHT_BUILTIN_VARS }
   }
   el.dataset.theme = effective
   el.classList.toggle('tn-themed', !!theme)

@@ -1,4 +1,3 @@
-import { createHash, randomBytes } from 'node:crypto'
 import crypto from 'hypercore-crypto'
 
 export type EventKind = 'text' | 'member-add' | 'member-leave'
@@ -33,15 +32,4 @@ export function verifyEvent(e: PagerEvent): boolean {
   } catch {
     return false
   }
-}
-
-/** Same id on both sides: sha256 over the two public keys in sorted order. */
-export function dmConvId(a: string, b: string): string {
-  const [lo, hi] = a < b ? [a, b] : [b, a]
-  const digest = createHash('sha256').update(Buffer.from(lo, 'hex')).update(Buffer.from(hi, 'hex')).digest('hex')
-  return 'dm:' + digest.slice(0, 32)
-}
-
-export function newGroupId(): string {
-  return 'grp:' + randomBytes(16).toString('hex')
 }

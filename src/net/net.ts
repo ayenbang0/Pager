@@ -30,7 +30,7 @@ export interface NetOptions {
 }
 
 /** Optional protocol features this build speaks; peers that do not list one never receive its frames. */
-export const LOCAL_CAPS = ['read', 'collab', 'call', 'ping'] as const
+export const LOCAL_CAPS = ['read', 'collab', 'call', 'ping', 'share'] as const
 const HELLO_TIMEOUT_MS = 5000
 const CONNECT_TIMEOUT_MS = 60_000
 const LISTEN_RETRY_MS = 30_000

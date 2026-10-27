@@ -203,6 +203,20 @@ Voice calls go straight between peers over the same encrypted connections as cha
 
 **One-line install** (PowerShell, no administrator): `irm https://raw.githubusercontent.com/ayenbang0/Pager/main/scripts/install.ps1 | iex`. It downloads the release zip, checks its SHA-256 against the `.sha256` published next to it, unpacks to `%LOCALAPPDATA%\Programs\Pager` and runs `Pager.exe --install`. To pin a version and hash, save the script and run `.\install.ps1 -Version 1.6.0 -Sha256 <hash>`; `-Uninstall` removes it. Pushing a `v*` tag builds and publishes the zip through `.github/workflows/release-desktop.yml`. The script and the release are only as trustworthy as the repository: read the script before you pipe it into `iex`.
 
+## Web access (`pager serve`)
+
+`pager serve [--port N] [--host ADDR] [--read-only] [--tls-cert FILE --tls-key FILE] [--allow-host NAME]...` shows the session daemon's panes in a browser: the layout, live terminal output (xterm.js), typing, resizing, and new, split and close for panes, plus a Run box that opens a command in a new pane and a button that copies a pane's screen as text. It starts the daemon when none is running and listens on `127.0.0.1:8377`; `--port 0` picks a free port. `pager serve --status` and `pager serve --stop` find the running server from another terminal.
+
+It prints one URL, `http://127.0.0.1:8377/#token=...`, once per run. The token is in the fragment, so it never reaches a log or a `Referer`; the page swaps it for an `HttpOnly; SameSite=Strict` cookie and removes it from the address bar, and the cookie lasts 12 hours or until the server stops. What stands between the page and your shell:
+
+- tokens are random per run and compared in constant time; five wrong ones lock an address out for a minute (forty across all addresses)
+- `Host` must be a name the server answers to (loopback names, the bound address, this machine's addresses and name when bound to all interfaces, and any `--allow-host`), which stops DNS rebinding, and a login or WebSocket needs an `Origin` that is this very site; there are no CORS headers and no preflight is answered
+- a strict Content-Security-Policy on every response, WebSocket messages capped at 256 KiB (input at 64 KiB), the web client and xterm.js served from memory so nothing is fetched from elsewhere
+- `--read-only` lets browsers watch only: input, resize, new, split, close and run are refused by the server, and a browser's size is never sent to the program
+- `--host 0.0.0.0` (or another non-loopback address) is an explicit opt-in that prints a warning. Anyone who reaches the port and has the token controls your terminals, so prefer `--tls-cert`/`--tls-key` (PEM files; the cookie then also carries `Secure`) or a tunnel or reverse proxy that adds TLS, and name that proxy's host with `--allow-host`
+
+The server keeps a private `serve.json` (its pid, port and a control secret for `--stop` and `--status`, not the access token) in the data directory while it runs.
+
 ## Browser pane
 
 The desktop window has its own browser, docked beside the terminal. **Ctrl+Shift+B** (or the `web` button) shows and hides it; drag the divider to resize. It has tabs, an address bar (a host opens as https, anything else is a DuckDuckGo search), back, forward and reload.

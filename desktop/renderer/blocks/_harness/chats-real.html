@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>chats-real harness — real blocks shared into Chats</title>
+<!-- Dev-only structural harness (gitignored folder): mounts the REAL canvas/board/notebook/files/tasks/screen blocks
+     beside the chats mock (NO demo adapters — the real blocks register their own share adapters), then drives
+     shareables() / shareMenuItems / startShare / joinShare / op round-trip / dispose unregister through the mock. -->
+<link rel="stylesheet" href="../../ui/tokens.css">
+<link rel="stylesheet" href="../../ui/kit.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--page); color: var(--t1); font: 13px var(--sans); }
+  #app { display: flex; height: calc(100% - 132px); }
+  #chats { width: 460px; flex: none; border-right: 1px solid var(--l1); }
+  #panes { flex: 1; overflow: hidden; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(5, 1fr); gap: 6px; padding: 6px; }
+  .pane { border: 1px solid var(--l2); border-radius: 10px; overflow: hidden; background: var(--card); display: flex; flex-direction: column; min-height: 0; }
+  .pane h3 { margin: 0; padding: 4px 10px; font-size: 11px; font-weight: 600; color: var(--t3); border-bottom: 1px solid var(--l1); letter-spacing: .02em; }
+  .pane.guest h3 { color: var(--warn); }
+  .pbody { flex: 1; min-height: 0; position: relative; overflow: hidden; }
+  .pbody > * { position: absolute; inset: 0; }
+  #log { height: 132px; overflow: auto; border-top: 1px solid var(--l2); background: var(--panel); padding: 6px 12px; font: 11.5px/1.55 var(--mono); white-space: pre-wrap; color: var(--t1); }
+  #log .fail { color: var(--bad); font-weight: 600; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="chats"></div>
+  <div id="panes">
+    <section class="pane" data-p="rh-canvas"><h3>rh-canvas · host</h3><div class="pbody" id="rh-canvas"></div></section>
+    <section class="pane" data-p="rh-board"><h3>rh-board · host</h3><div class="pbody" id="rh-board"></div></section>
+    <section class="pane" data-p="rh-notebook"><h3>rh-notebook · host</h3><div class="pbody" id="rh-notebook"></div></section>
+    <section class="pane" data-p="rh-files"><h3>rh-files · host</h3><div class="pbody" id="rh-files"></div></section>
+    <section class="pane" data-p="rh-tasks"><h3>rh-tasks · host</h3><div class="pbody" id="rh-tasks"></div></section>
+    <section class="pane" data-p="rh-screen"><h3>rh-screen · host</h3><div class="pbody" id="rh-screen"></div></section>
+    <section class="pane guest" data-p="rg-canvas"><h3>rg-canvas · guest</h3><div class="pbody" id="rg-canvas"></div></section>
+    <section class="pane guest" data-p="rg-board"><h3>rg-board · guest</h3><div class="pbody" id="rg-board"></div></section>
+    <section class="pane guest" data-p="rg-notebook"><h3>rg-notebook · guest</h3><div class="pbody" id="rg-notebook"></div></section>
+    <section class="pane guest" data-p="rg-files"><h3>rg-files · guest</h3><div class="pbody" id="rg-files"></div></section>
+    <section class="pane guest" data-p="rg-tasks"><h3>rg-tasks · guest</h3><div class="pbody" id="rg-tasks"></div></section>
+    <section class="pane guest" data-p="rg-screen"><h3>rg-screen · guest</h3><div class="pbody" id="rg-screen"></div></section>
+    <section class="pane" data-p="rh-git"><h3>rh-git · host</h3><div class="pbody" id="rh-git"></div></section>
+    <section class="pane guest" data-p="rg-git"><h3>rg-git · guest</h3><div class="pbody" id="rg-git"></div></section>
+  </div>
+</div>
+<div id="log"></div>
+<script type="module">
+import { mountChats } from '../chats.js'
+import { createMockChats } from '../chats-mock.js'
+import { shareables, blocksFor, startShare, joinShare, sendOp, setMe } from '../share.js'
+import { shareMenuItems } from '../chats-share.js'
+import { DEFAULT_SETTINGS, DEFAULT_VIEW } from '../canvas-model.js'
+import * as canvasMod from '../canvas.js'
+import * as boardMod from '../board.js'
+import * as notebookMod from '../notebook.js'
+import * as filesMod from '../files.js'
+import * as tasksMod from '../tasks.js'
+import * as screenMod from '../screen.js'
+import * as gitMod from '../git.js'
+
+// NOTE: the real block modules register their own share factories at module evaluation (registerShare in each
+// block). This page registers NOTHING itself — that is the point: the Share menu is fed by real adapters.
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+const lines = []
+const pageErrs = []
+window.addEventListener('error', (e) => pageErrs.push(String((e && e.message) || e)))
+window.addEventListener('unhandledrejection', (e) => pageErrs.push('rejection: ' + String((e.reason && e.reason.message) || e.reason)))
+const logEl = document.getElementById('log')
+const check = (ok, name, detail) => {
+  lines.push((ok ? 'PASS' : 'FAIL') + ' ' + name + (detail === undefined || detail === '' ? '' : ' — ' + detail))
+  logEl.innerHTML = lines.map((l) => (l.startsWith('FAIL') ? '<span class="fail">' + l.replace(/</g, '&lt;') + '</span>' : l.replace(/</g, '&lt;'))).join('\n')
+  logEl.scrollTop = logEl.scrollHeight
+}
+
+// ---------------------------------------------------------------- fake daemon rpc per block (in-memory, JSON-able)
+
+function canvasRpc(seedShapes, seedName) {
+  let seq = 1
+  const doc = () => ({ shapes: JSON.parse(JSON.stringify(seedShapes)), view: { ...DEFAULT_VIEW }, settings: { ...DEFAULT_SETTINGS } })
+  return async (method) => {
+    if (method === 'open') return { id: 'cv-' + seedName, name: seedName, ephemeral: false, seq, doc: doc(), recovered: false }
+    if (method === 'save') { seq++; return { ok: true, seq } }
+    if (method === 'saveView' || method === 'flush') return { ok: true }
+    if (method === 'close' || method === 'getBlob') return {}
+    throw new Error('canvas fake rpc: no method ' + method)
+  }
+}
+
+function boardRpc(seedLanes, name) {
+  let seq = 0
+  const state = { board: 'bd-' + name, exists: true, path: '/demo/TODO.md', name, kanban: false, counts: { open: 0, done: 0 }, lanes: JSON.parse(JSON.stringify(seedLanes)) }
+  const recount = () => {
+    let o = 0, d = 0
+    for (const l of state.lanes) for (const c of l.cards) (c.done ? d++ : o++)
+    state.counts = { open: o, done: d }
+  }
+  recount()
+  const laneOf = (id) => state.lanes.find((l) => l.id === id) || null
+  const findCard = (cid) => {
+    for (const l of state.lanes) {
+      const i = l.cards.findIndex((c) => c.id === cid)
+      if (i >= 0) return { lane: l, i, card: l.cards[i] }
+    }
+    return null
+  }
+  const clone = () => JSON.parse(JSON.stringify(state))
+  return async (method, a = {}) => {
+    if (method === 'open' || method === 'load') return clone()
+    if (method === 'close') return {}
+    if (method === 'create') { state.exists = true; recount(); return clone() }
+    if (method === 'toggle') { const f = findCard(a.card); if (f) f.card.done = !f.card.done }
+    else if (method === 'add') {
+      const l = laneOf(a.lane)
+      if (l) {
+        const labels = []
+        let due = null
+        let text = String(a.text || '').replace(/#[\w-]+/g, (m) => (labels.push(m.slice(1)), '')).replace(/📅\s*(\d{4}-\d{2}-\d{2})/g, (m, d) => ((due = d), '')).trim()
+        l.cards.push({ id: (state.lanes.indexOf(l) + 1) + ':' + ++seq, title: text, done: false, labels, due, subtasks: [], notes: [] })
+      }
+    }
+    else if (method === 'update') { const f = findCard(a.card); if (f && a.title !== undefined) f.card.title = String(a.title) }
+    else if (method === 'move') { const f = findCard(a.card); const to = laneOf(a.lane); if (f && to) { f.lane.cards.splice(f.i, 1); to.cards.splice(Math.min(a.index == null ? to.cards.length : a.index, to.cards.length), 0, f.card) } }
+    else if (method === 'remove') { const f = findCard(a.card); if (f) f.lane.cards.splice(f.i, 1) }
+    else if (method === 'addSub') { const f = findCard(a.card); if (f) f.card.subtasks.push({ id: 's' + ++seq, text: String(a.text || ''), done: false }) }
+    else if (method === 'toggleSub') { const f = findCard(a.card); if (f) { const s = f.card.subtasks.find((x) => x.id === a.sub); if (s) s.done = !s.done } }
+    else if (method === 'removeSub') { const f = findCard(a.card); if (f) f.card.subtasks = f.card.subtasks.filter((x) => x.id !== a.sub) }
+    else if (method === 'renameLane') { const l = laneOf(a.lane); if (l) l.title = String(a.title || l.title) }
+    else if (method === 'addLane') { state.lanes.push({ id: 'lx' + ++seq, title: String(a.title || 'New lane'), done: false, archived: false, implicit: false, cards: [] }) }
+    else if (method === 'removeLane') { state.lanes = state.lanes.filter((l) => l.id !== a.lane) }
+    recount()
+    return clone()
+  }
+}
+
+function notebookRpc(cells, path, name) {
+  const nb = { nbformat: 4, nbformat_minor: 5, metadata: { kernelspec: { name: 'python3', display_name: 'Python 3' }, language_info: { name: 'python' } }, cells: JSON.parse(JSON.stringify(cells)) }
+  return async (method) => {
+    if (method === 'open') return { ok: true, path, name, format: 'ipynb', mtimeMs: 1, missing: false, nb: JSON.parse(JSON.stringify(nb)) }
+    if (method === 'interpreters') return { list: [{ exe: 'python3', label: 'Python 3' }] }
+    if (method === 'save') return { ok: true, path, name, mtimeMs: 2 }
+    if (method === 'shutdown') return {}
+    return {}
+  }
+}
+
+function filesRpc(content, path, root) {
+  return async (method) => {
+    if (method === 'grant') return { path, root }
+    if (method === 'read') return { kind: 'text', content, eol: 'lf', encoding: 'utf8', bom: false, size: content.length, mtimeMs: 1 }
+    if (method === 'info') return { repo: null }
+    if (method === 'editorconfig' || method === 'watch' || method === 'unwatch') return {}
+    if (method === 'save') return { ok: true, path, name: path.split('/').pop(), mtimeMs: 2 }
+    return {}
+  }
+}
+
+function tasksRpc(names) {
+  let pid = 100
+  let calls = 0
+  return async (method, a = {}) => {
+    if (method === 'sample') {
+      calls++ // the fake daemon spawns one more proc on every later sample, so a relayed op is distinguishable from the snapshot
+      const extra = calls > 1 ? Array.from({ length: calls - 1 }, (_, k) => 'host-proc-x' + (k + 1)) : [] // every later sample spawns one more proc, so a relayed op is always distinguishable from the snapshot
+      const all = names.concat(extra)
+      return {
+        procs: all.map((n, i) => ({ pid: pid + i, ppid: 4, name: n, cmd: n + ' (fake)', cpu: 14 - i * 2.5, mem: 1.2e8 * (i + 1), gpu: i * 0.5, kind: i === 0 ? 'pager' : '', create: Date.now() - i * 60000, critical: i === 1 })),
+        cpu: 18.5, mem: { used: 9.1e9, total: 16e9 }, gpu: 4.2,
+      }
+    }
+    if (method === 'detail') return { pid: a.pid, cmd: 'fake detail', cpu: 1.2, mem: 1.2e8, threads: 4 }
+    return { ok: true }
+  }
+}
+
+function screenRpc(base, extra) {
+  let calls = 0
+  return async (method, a = {}) => {
+    if (method === 'sources') { calls++; return JSON.parse(JSON.stringify(calls === 1 ? base : base.concat([extra]))) }
+    if (method === 'select') return { sid: 'sid-' + a.sourceId, source: base.find((s) => s.id === a.sourceId) || base[0] }
+    return {}
+  }
+}
+
+// ---------------------------------------------------------------- seed data (host and guest differ on purpose)
+
+const HOST_SHAPES = [
+  { id: 'r1', type: 'rect', x: 60, y: 40, w: 220, h: 120, stroke: '#4a9eff', fill: 'rgba(74,158,255,0.15)', sw: 2 },
+  { id: 'r2', type: 'rect', x: 340, y: 90, w: 160, h: 90, stroke: '#2fbf71', fill: 'transparent', sw: 2, round: true },
+  { id: 't1', type: 'text', x: 70, y: 60, text: 'Release warm-up', size: 20, font: 'sans', stroke: 'auto', w: 300, h: 28 },
+]
+const GUEST_SHAPES = [{ id: 'g1', type: 'rect', x: 20, y: 20, w: 90, h: 60, stroke: '#ff5c5c', fill: 'transparent', sw: 1 }]
+const lane = (id, title, cards) => ({ id, title, done: false, archived: false, implicit: false, cards })
+const card = (line, seq, title, done = false) => ({ id: line + ':' + seq, title, done, labels: [], due: null, subtasks: [], notes: [] })
+const HOST_LANES = [
+  lane('l1', 'Doing', [card(1, 1, 'Implement share adapters'), card(1, 2, 'Wire canvas ops')]),
+  lane('l2', 'Review', [card(2, 1, 'Harness page')]),
+  lane('l3', 'Done', [card(3, 1, 'Chats block + transport', true)]),
+]
+const GUEST_LANES = [lane('g1', 'Todo', [card(1, 1, 'Guest local task')]), lane('g2', 'Later', [card(2, 1, 'Guest later task')])]
+const HOST_CELLS = [
+  { cell_type: 'markdown', metadata: {}, source: ['# Shared notebook\n', '\n', 'Host cell text.'] },
+  { cell_type: 'code', metadata: {}, execution_count: null, outputs: [], source: ['print("hi")'] },
+]
+const GUEST_CELLS = [
+  { cell_type: 'markdown', metadata: {}, source: ['Guest local notes\n', '\n', 'Not shared yet.'] },
+  { cell_type: 'code', metadata: {}, execution_count: null, outputs: [], source: ['print("guest")'] },
+]
+const HOST_SCREEN = [
+  { id: 'disp-1', name: 'Built-in Retina Display', size: { w: 2560, h: 1600 }, primary: true, hostsPager: true, scale: 1 },
+  { id: 'disp-2', name: 'Dell U2722D', size: { w: 2560, h: 1440 }, primary: false, hostsPager: false, scale: 1 },
+]
+const SCREEN_EXTRA = { id: 'disp-3', name: 'HDMI-1', size: { w: 1920, h: 1080 }, primary: false, hostsPager: false, scale: 1 }
+const GUEST_SCREEN = [{ id: 'gdisp', name: 'Guest Virtual Display', size: { w: 1920, h: 1080 }, primary: true, hostsPager: false, scale: 1 }]
+const GIT_HOST = { root: '/demo/repo', name: 'pager repo', branch: { oid: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2', head: 'main', upstream: 'origin/main', ahead: 2, behind: 0, gone: false }, files: [{ path: 'src/cli.tsx', index: 'M', worktree: '.' }, { path: 'desktop.json', index: '.', worktree: 'M' }, { path: 'notes.txt', kind: 'untracked' }] }
+const GIT_GUEST = { root: '/demo/guest-repo', name: 'guest-repo', branch: { oid: 'f6e5d4c3b2a1f6e5d4c3b2a1f6e5d4c3b2a1f6e5', head: 'feature/x', upstream: 'origin/feature/x', ahead: 0, behind: 3, gone: false }, files: [{ path: 'host/app.ts', index: 'M', worktree: '.' }, { path: 'host/agent.ts', kind: 'unmerged' }, { path: 'host/readme.md', kind: 'untracked' }] }
+// Fake daemon rpc for the git block, returning the real open/status/refs/log shapes (porcelain-v2 files). Host and
+// guest repositories deliberately differ: different branch, tracking, and change groups.
+function gitRpc(cfg) {
+  return async (method, a = {}) => {
+    await new Promise((r) => setTimeout(r, 6)) // browser page: plain setTimeout, never Bun.*
+    if (method === 'open') return { ok: true, root: cfg.root, name: cfg.name }
+    if (method === 'status') return {
+      branch: cfg.branch, files: cfg.files,
+      staged: cfg.files.filter((f) => f.index && f.index !== '.' && f.kind !== 'untracked' && f.kind !== 'unmerged').length,
+      unstaged: cfg.files.filter((f) => f.worktree && f.worktree !== '.').length,
+      untracked: cfg.files.filter((f) => f.kind === 'untracked').length,
+      conflicted: cfg.files.filter((f) => f.kind === 'unmerged').length,
+      operation: null, undo: { undo: null, redo: null }, truncated: false,
+    }
+    if (method === 'refs') return { branches: [{ name: cfg.branch.head, current: true, hash: cfg.branch.oid, date: Date.now() - 60000, upstream: cfg.branch.upstream, ahead: cfg.branch.ahead, behind: cfg.branch.behind }], remotes: [], tags: [], stashes: [], remoteNames: ['origin'], remoteInfo: [] }
+    if (method === 'log') return { commits: [], hasMore: false }
+    return {}
+  }
+}
+
+// ---------------------------------------------------------------- mount the chats mock (no demo adapters)
+
+const mock = createMockChats({ seed: 7 })
+const chatsHost = document.getElementById('chats')
+const chatsCtx = {
+  cwd: '~/code/pager', args: {},
+  setTitle: (t) => { document.title = t },
+  toast: () => {},
+  openBlock: () => {},
+}
+const chatsApi = mountChats(chatsHost, chatsCtx, { api: mock.api, storage: localStorage })
+window.__chats = { mount: chatsApi, mock }
+// chats.js already did bindDaemonApi(mock.api) + routeEvents(mock.api) + setMe(me.pk) while mounting. One mock user
+// plays host AND guest on this page; clearing the identity makes relayed mock ops look remote (meta.mine=false), which
+// is what a real daemon does — it never echoes the host's own ops back to the host.
+setMe('')
+const dm = { id: mock.ids.grace, title: 'Grace Hopper' }
+for (let i = 0; i < 100 && !(document.getElementById('chats') || { textContent: '' }).textContent.includes('Grace Hopper'); i++) await sleep(50) // ChatsStore.init() must load the chat list before openChat, else openChat no-ops on an unknown id
+await chatsApi.ui.openChat(dm.id)
+await sleep(150)
+
+// ---------------------------------------------------------------- mount the REAL blocks
+
+const panes = []
+function mountPane(id, mod, rpc, args = {}) {
+  const el = document.getElementById(id)
+  const ctx = {
+    args, cwd: '/demo', paneId: id, theme: document.documentElement,
+    rpc: (m, a) => rpc(m, a),
+    onEvent: (fn) => { const set = new Set([fn]); return () => set.delete(fn) },
+    setTitle: () => {}, toast: () => {}, close: () => {}, openBlock: () => {}, openPath: () => {}, openUrl: () => {},
+  }
+  const block = mod.default.mount(el, ctx)
+  panes.push({ id, block })
+  return block
+}
+
+const rhCanvas = mountPane('rh-canvas', canvasMod, canvasRpc(HOST_SHAPES, 'Release warm-up'))
+const rhBoard = mountPane('rh-board', boardMod, boardRpc(HOST_LANES, 'Launch checklist'), { file: 'TODO.md' })
+const rhNotebook = mountPane('rh-notebook', notebookMod, notebookRpc(HOST_CELLS, '/demo/Ideas.ipynb', 'Ideas.ipynb'), { path: '/demo/Ideas.ipynb' })
+const rhFiles = mountPane('rh-files', filesMod, filesRpc('# Notes\n\n- alpha\n- beta\n', '/demo/notes.md', '/demo'), { path: '/demo/notes.md' })
+const rhTasks = mountPane('rh-tasks', tasksMod, tasksRpc(['host-proc-alpha', 'host-proc-beta', 'host-proc-gamma', 'host-proc-delta', 'host-proc-epsilon']))
+const rhScreen = mountPane('rh-screen', screenMod, screenRpc(HOST_SCREEN, SCREEN_EXTRA))
+const rgCanvas = mountPane('rg-canvas', canvasMod, canvasRpc(GUEST_SHAPES, 'Guest canvas'), { join: 1 })
+const rgBoard = mountPane('rg-board', boardMod, boardRpc(GUEST_LANES, 'Guest board'), { file: 'guest.md', join: 1 })
+const rgNotebook = mountPane('rg-notebook', notebookMod, notebookRpc(GUEST_CELLS, '/demo/Guest.ipynb', 'Guest.ipynb'), { path: '/demo/Guest.ipynb', join: 1 })
+const rgFiles = mountPane('rg-files', filesMod, filesRpc('# Guest notes\n\n- only local\n', '/demo/guest-notes.md', '/demo'), { path: '/demo/guest-notes.md', join: 1 })
+const rgTasks = mountPane('rg-tasks', tasksMod, tasksRpc(['guest-proc-one', 'guest-proc-two', 'guest-proc-three']))
+const rgScreen = mountPane('rg-screen', screenMod, screenRpc(GUEST_SCREEN, SCREEN_EXTRA), { join: 1 })
+const rhGit = mountPane('rh-git', gitMod, gitRpc(GIT_HOST), { cwd: GIT_HOST.root })
+const rgGit = mountPane('rg-git', gitMod, gitRpc(GIT_GUEST), { cwd: GIT_GUEST.root, join: 1 })
+
+// ---------------------------------------------------------------- driver
+
+const opsSeen = []
+mock.api.onEvent((ev) => { if (ev && ev.event === 'chat_share_op') opsSeen.push(ev) })
+const shareList = async () => (await mock.api.call('chats.share.list', { chatId: dm.id })) || []
+const text = (id) => (document.getElementById(id) || { textContent: '' }).textContent
+const scrollThread = () => { for (const e of document.querySelectorAll('#chats *')) { if (e.clientHeight > 100 && e.scrollHeight > e.clientHeight + 60) { e.scrollTop = e.scrollHeight; return } } }
+const cardSeen = (t) => { scrollThread(); return text('chats').includes(t) }
+// The mock daemon echoes the share's global op ver to every listener on this one page, and one mock user plays
+// host and guest. A real engine relays host ops to a guest renderer as REMOTE frames — a foreign pk (mine=false)
+// and ver 0 (arrival order; share.js: "guests see ver 0 and apply in arrival order"). relayOp() is that frame.
+const relayOp = (shareId, op) => mock.emit({ event: 'chat_share_op', shareId, type: 'op', from: 'engine-host', fromName: 'Mira', ver: 0, op: typeof op === 'string' ? op : JSON.stringify(op) })
+const FALLBACK_CAPS = { share: { transport: true, blocks: ['canvas', 'board', 'notebook', 'files', 'tasks', 'git', 'screen', 'agent'], modes: ['live', 'readonly', 'snapshot'], agent: 'live' } }
+
+async function runAll() {
+  lines.length = 0
+  check(true, 'setup: 14 real block panes + chats mock mounted (no demo adapters)', panes.length + ' panes')
+  await sleep(600) // let every block's async open/load settle
+
+  // (a) shareables() lists the real instances with correct block names and modes
+  const all = shareables()
+  const byId = Object.fromEntries(all.map((s) => [s.instanceId, s]))
+  const expectModes = { canvas: ['live', 'readonly', 'snapshot'], board: ['live', 'snapshot'], notebook: ['live', 'readonly'], files: ['snapshot'], tasks: ['readonly'], screen: ['readonly'], git: ['snapshot'] }
+  let aOk = true
+  for (const b of Object.keys(expectModes)) {
+    for (const pfx of ['rh-', 'rg-']) {
+      const rec = byId[pfx + b]
+      if (!rec) { aOk = false; check(false, 'a.' + pfx + b, 'instance missing'); continue }
+      const same = rec.block === b && JSON.stringify(rec.modes) === JSON.stringify(expectModes[b])
+      if (!same) aOk = false
+      check(same, 'a. ' + rec.instanceId + ' → ' + rec.block, JSON.stringify(rec.modes) + (rec.title ? ' · ' + rec.title : ''))
+    }
+  }
+  check(aOk && all.length === 14, 'a. shareables() = 14 real instances (7 host + 7 guest)', all.length + ' total')
+  const caps = (chatsApi.store && chatsApi.store.caps) || FALLBACK_CAPS
+  const kinds = blocksFor(caps).slice().sort()
+  check(JSON.stringify(kinds) === JSON.stringify(['board', 'canvas', 'files', 'git', 'notebook', 'screen', 'tasks']), 'a. blocksFor(caps) = the seven real kinds', kinds.join(','))
+
+  // (b) share menu items render for the real instances (git.js now registers a snapshot-mode adapter)
+  const items = shareMenuItems(caps, all, { kind: 'dm', id: dm.id }, () => {})
+  const labels = items.map((i) => i.label || '(separator)')
+  for (const w of ['Canvas', 'Board', 'Notebook', 'Files', 'Tasks', 'Screen']) check(items.some((i) => (i.label || '').startsWith(w)), 'b. menu entry: ' + w, '')
+  check(items.some((i) => (i.label || '').startsWith('Git')), 'b. menu entry: Git (git.js registers a snapshot-mode adapter; children carry the real instance titles)', labels.filter((l) => l.startsWith('Git')).join('|') || 'none')
+  check(items.filter((i) => i.children).length >= 4, 'b. multi-mode blocks offer mode children', items.filter((i) => i.children).map((i) => i.label.split(' · ')[0]).join(', '))
+
+  // ---- canvas: snapshot → join → delayed snapshot → live op round-trip → presence → readonly → dispose
+  try {
+    const hostC = rhCanvas.share
+    const snapC = hostC.snapshot()
+    check(snapC && Array.isArray(snapC.shapes) && snapC.shapes.length === 3 && snapC.name === 'Release warm-up', 'c.canvas snapshot() = {name,view,settings,shapes}', (snapC.shapes || []).length + ' shapes')
+    const rC = await startShare(mock.api, { chatId: dm.id, block: 'canvas', title: 'Host canvas · harness', mode: 'live', instanceId: 'rh-canvas', snapshot: JSON.stringify(snapC) })
+    const shareC = rC && rC.share
+    check(!!shareC && !!shareC.shareId, 'c.canvas startShare → share id', shareC && shareC.shareId)
+    await sleep(250)
+    check(cardSeen('Host canvas · harness'), 'c.canvas share card renders in the chats timeline', '')
+    const probeC = []
+    hostC.onLocalOp((op) => probeC.push(op))
+    const beforeC = rhCanvas.debug.shapes().length
+    rhCanvas.debug.commit([...rhCanvas.debug.shapes(), { id: 'probe1', type: 'rect', x: 5, y: 5, w: 40, h: 30, stroke: '#fff', fill: 'transparent', sw: 1 }], 'Share probe')
+    await sleep(150)
+    check(probeC.length === 1 && Array.isArray(probeC[0]) && probeC[0].length === beforeC + 1, 'd.canvas local edit fires onLocalOp with the shapes array', probeC.length + ' op(s), ' + probeC[0].length + ' shapes')
+    check(rhCanvas.debug.shapes().length === beforeC + 1, 'd.canvas host commit applied locally', '')
+    // guest joins; the mock's join returns a dummy snapshot, then the REAL snapshot arrives late (contract: "may arrive afterwards")
+    await joinShare(mock.api, shareC.shareId, 'rg-canvas')
+    await sleep(120)
+    check(rgCanvas.debug.shapes().length === 0, 'c.canvas dummy join snapshot applied (empty)', rgCanvas.debug.shapes().length + ' shapes')
+    mock.emit({ event: 'chat_share_op', shareId: shareC.shareId, type: 'snapshot', from: 'engine-host', fromName: 'Mira', op: JSON.stringify(snapC) })
+    await sleep(150)
+    const gShapes = rgCanvas.debug.shapes()
+    check(gShapes.length === 3 && gShapes.some((s) => s.id === 't1'), 'c.canvas delayed real snapshot renders on the guest', gShapes.length + ' shapes')
+    // (d) second host edit: onLocalOp fires on the host; the harness plays the engine and relays the op to the
+    // guest (one page hosts OR joins — after joinShare the mock's share record points at the guest pane, exactly
+    // like a real daemon relaying between two renderers; the first edit already proved the host's auto-sendOp)
+    rhCanvas.debug.commit([...rhCanvas.debug.shapes(), { id: 'share-drive-2', type: 'rect', x: 500, y: 300, w: 120, h: 80, stroke: '#b98cff', fill: 'transparent', sw: 1 }], 'Share drive 2')
+    await sleep(250)
+    check(probeC.length >= 2, 'd.canvas second local edit fires onLocalOp again', probeC.length + ' ops')
+    const r2 = await sendOp(mock.api, shareC.shareId, probeC[probeC.length - 1])
+    check(r2 && (r2.ver || 0) >= 2, 'd.canvas sendOp round-trips through the mock (ver)', 'ver=' + (r2 && r2.ver))
+    await sleep(100)
+    relayOp(shareC.shareId, probeC[probeC.length - 1]) // engine frame: foreign pk + ver 0 → guest applies in arrival order
+    await sleep(150)
+    const g2 = rgCanvas.debug.shapes()
+    check(g2.length === 5 && g2.some((s) => s.id === 'share-drive-2'), 'd.canvas op applied on the guest via applyOp', g2.length + ' guest shapes (3 seed + probe1 + share-drive-2)')
+    const verC = (await shareList()).find((s) => s.shareId === shareC.shareId)
+    check(verC && (verC.ver || 0) >= 2, 'd.canvas mock numbered the ops (ver ≥ 2)', 'ver=' + (verC && verC.ver))
+    check(opsSeen.filter((e) => e.shareId === shareC.shareId && e.type === 'op').length >= 2, 'd.canvas chat_share_op events flowed', opsSeen.filter((e) => e.shareId === shareC.shareId && e.type === 'op').length + ' events')
+    // presence: local pulse relays; remote cursor lands without crashing (painted in paintOverlay)
+    const pulses = []
+    hostC.presence.local((d) => pulses.push(d))
+    const stageCanvas = document.querySelector('#rh-canvas canvas') || document.querySelector('#rh-canvas .cv-stage') || document.getElementById('rh-canvas')
+    stageCanvas.dispatchEvent(new PointerEvent('pointermove', { clientX: 40, clientY: 30, bubbles: true }))
+    await sleep(120)
+    check(pulses.length >= 1 && typeof pulses[0].x === 'number' && typeof pulses[0].y === 'number', 'd.canvas presence.local fires on pointer move', JSON.stringify(pulses[0] || null))
+    rgCanvas.share.presence.remote({ pk: 'pk-ada', name: 'Ada', hue: 200 }, { x: 120, y: 80 })
+    await sleep(60)
+    check(true, 'd.canvas presence.remote accepted a peer cursor (painted by paintOverlay)', '')
+    // readonly mode blocks guest edits
+    rgCanvas.share.readonly(true)
+    const blocked = rgCanvas.debug.commit([...rgCanvas.debug.shapes(), { id: 'ro-x', type: 'rect', x: 1, y: 1, w: 2, h: 2, stroke: '#000', fill: 'none', sw: 1 }], 'must not apply')
+    rgCanvas.share.readonly(false)
+    check(blocked === false, 'd.canvas readonly(true) makes the guest pane reject edits', String(blocked))
+  } catch (e) { check(false, 'canvas leg', String((e && e.stack) || e)) }
+
+  // ---- board: snapshot → join → delayed snapshot → DOM-driven toggle op round-trips
+  try {
+    const hostB = rhBoard.share
+    const snapB = hostB.snapshot()
+    check(snapB && Array.isArray(snapB.lanes) && snapB.lanes.length === 3, 'c.board snapshot() = {exists,path,name,lanes,counts,kanban}', (snapB.lanes || []).length + ' lanes')
+    const probeB = []
+    hostB.onLocalOp((op) => probeB.push(op))
+    const rB = await startShare(mock.api, { chatId: dm.id, block: 'board', title: 'Host board · harness', mode: 'live', instanceId: 'rh-board', snapshot: JSON.stringify(snapB) })
+    const shareB = rB && rB.share
+    check(!!shareB && !!shareB.shareId, 'c.board startShare → share id', shareB && shareB.shareId)
+    await sleep(250)
+    check(cardSeen('Host board · harness'), 'c.board share card renders in the chats timeline', '')
+    // host edit through the REAL DOM: click a card check → call('toggle') → apply + emitShare
+    const hostCheck = document.querySelector('#rh-board .bd-check')
+    check(!!hostCheck, 'c.board host board rendered cards', '')
+    hostCheck.click()
+    await sleep(200)
+    check(probeB.length === 1 && Array.isArray(probeB[0].lanes), 'd.board DOM toggle fires onLocalOp with the board document', probeB.length + ' op(s)')
+    await joinShare(mock.api, shareB.shareId, 'rg-board')
+    await sleep(150)
+    check(text('rg-board').includes('No TODO.md'), 'c.board dummy join snapshot applied (empty doc)', '')
+    mock.emit({ event: 'chat_share_op', shareId: shareB.shareId, type: 'snapshot', from: 'engine-host', fromName: 'Mira', op: JSON.stringify(snapB) })
+    await sleep(200)
+    check(text('rg-board').includes('Review') && text('rg-board').includes('Harness page') && !text('rg-board').includes('Guest later task'), 'c.board delayed real snapshot renders host lanes on the guest', '')
+    const doneBefore = document.querySelectorAll('#rg-board .bd-card.done').length
+    const hostCheck2 = [...document.querySelectorAll('#rh-board .bd-check')].find((b) => !b.closest('.bd-card').classList.contains('done'))
+    hostCheck2.click()
+    await sleep(250)
+    check(probeB.length >= 2, 'd.board second DOM toggle fires onLocalOp again', probeB.length + ' op(s)')
+    await sendOp(mock.api, shareB.shareId, probeB[probeB.length - 1]) // host transport leg (ver numbering + event flow)
+    relayOp(shareB.shareId, probeB[probeB.length - 1]) // engine frame: foreign pk + ver 0 → guest applies in arrival order
+    await sleep(200)
+    const doneAfter = document.querySelectorAll('#rg-board .bd-card.done').length
+    const hostDone = document.querySelectorAll('#rh-board .bd-card.done').length
+    check(doneAfter === hostDone && doneAfter >= 2, 'd.board host DOM toggle round-trips → guest converges to the host board', doneBefore + ' → ' + doneAfter + ' done cards (host: ' + hostDone + ')')
+  } catch (e) { check(false, 'board leg', String((e && e.stack) || e)) }
+
+  // ---- notebook: snapshot → join → delayed snapshot → textarea edit op round-trips
+  try {
+    const hostN = rhNotebook.share
+    await sleep(300) // notebook open/interpreters settle; markdown renders
+    check(text('rh-notebook').includes('Shared notebook') && text('rh-notebook').includes('Host cell text'), 'c.notebook host notebook rendered its doc', '')
+    const snapN = hostN.snapshot()
+    check(snapN && Array.isArray(snapN.cells) && snapN.cells.length === 2, 'c.notebook snapshot() = the .ipynb doc', (snapN.cells || []).length + ' cells')
+    const probeN = []
+    hostN.onLocalOp((op) => probeN.push(op))
+    const rN = await startShare(mock.api, { chatId: dm.id, block: 'notebook', title: 'Host notebook · harness', mode: 'live', instanceId: 'rh-notebook', snapshot: JSON.stringify(snapN) })
+    const shareN = rN && rN.share
+    check(!!shareN && !!shareN.shareId, 'c.notebook startShare → share id', shareN && shareN.shareId)
+    await sleep(250)
+    check(cardSeen('Host notebook · harness'), 'c.notebook share card renders in the chats timeline', '')
+    // host edit through the REAL DOM: type into the code cell textarea → markDirty → coalesced op
+    const hostTas = document.querySelectorAll('#rh-notebook textarea')
+    check(hostTas.length >= 1, 'c.notebook host code cell textarea present', hostTas.length + ' textarea(s)')
+    const ta1 = hostTas[hostTas.length - 1]
+    ta1.value = ta1.value + ' + host edit 1'
+    ta1.dispatchEvent(new Event('input', { bubbles: true }))
+    await sleep(500) // 250 ms coalesce
+    check(probeN.length >= 1 && Array.isArray(probeN[0].cells), 'd.notebook textarea edit fires coalesced onLocalOp {cells}', probeN.length + ' op(s)')
+    await joinShare(mock.api, shareN.shareId, 'rg-notebook')
+    await sleep(150)
+    check(text('rg-notebook').includes('Guest local notes'), 'c.notebook guest kept its own doc (mock dummy snapshot is not cells)', '')
+    mock.emit({ event: 'chat_share_op', shareId: shareN.shareId, type: 'snapshot', from: 'engine-host', fromName: 'Mira', op: JSON.stringify(snapN) })
+    await sleep(250)
+    check(text('rg-notebook').includes('Shared notebook') && text('rg-notebook').includes('Host cell text') && !text('rg-notebook').includes('Guest local notes'), 'c.notebook delayed real snapshot renders host cells on the guest', '')
+    const ta2 = document.querySelectorAll('#rh-notebook textarea')
+    const taHost = ta2[ta2.length - 1]
+    taHost.value = taHost.value + ' + host edit 2'
+    taHost.dispatchEvent(new Event('input', { bubbles: true }))
+    await sleep(600) // coalesce
+    check(probeN.length >= 2, 'd.notebook second edit fires coalesced onLocalOp again', probeN.length + ' op(s)')
+    await sendOp(mock.api, shareN.shareId, probeN[probeN.length - 1]) // host transport leg (ver numbering + event flow)
+    relayOp(shareN.shareId, probeN[probeN.length - 1]) // engine frame: foreign pk + ver 0 → guest applies in arrival order
+    await sleep(200)
+    const guestTa = document.querySelectorAll('#rg-notebook textarea')
+    const gta = guestTa[guestTa.length - 1]
+    check(!!gta && gta.value.includes('host edit 2'), 'd.notebook host edit round-trips → guest code cell updated', JSON.stringify(gta && gta.value.slice(0, 60)))
+  } catch (e) { check(false, 'notebook leg', String((e && e.stack) || e)) }
+
+  // ---- files: snapshot-only share (no session, no onLocalOp)
+  try {
+    const hostF = rhFiles.share
+    await sleep(250)
+    check(text('rh-files').includes('alpha'), 'c.files host file view rendered', '')
+    const snapF = hostF.snapshot()
+    check(snapF && snapF.path === '/demo/notes.md' && snapF.kind === 'text' && typeof snapF.text === 'string' && snapF.text.includes('- alpha') && !!snapF.cursor, 'c.files snapshot() = {path,root,name,kind,mode,size,cursor,text?}', snapF.path)
+    check(typeof hostF.onLocalOp !== 'function', 'c.files snapshot-mode adapter carries no onLocalOp', '')
+    const rF = await startShare(mock.api, { chatId: dm.id, block: 'files', title: 'Files pane · harness', mode: 'snapshot', instanceId: 'rh-files', snapshot: JSON.stringify(snapF) })
+    check(!!rF && !!rF.share && rF.share.shareId, 'c.files startShare (snapshot mode) → share id', rF && rF.share && rF.share.shareId)
+    await sleep(250)
+    check(cardSeen('Files pane · harness'), 'c.files share card renders in the chats timeline', '')
+  } catch (e) { check(false, 'files leg', String((e && e.stack) || e)) }
+
+  // ---- tasks: readonly live share; guest pane stays quiet, stops sampling after foreign data
+  try {
+    document.getElementById('rh-tasks').scrollIntoView({ block: 'center' })
+    document.getElementById('rg-tasks').scrollIntoView({ block: 'nearest' })
+    await sleep(500) // boot sample (IntersectionObserver) + fake rpc
+    const hostT = rhTasks.share
+    const snapT = hostT.snapshot()
+    check(snapT && Array.isArray(snapT.procs) && snapT.procs.length > 0 && typeof snapT.cpu === 'number', 'c.tasks snapshot() = trimmed procs payload', (snapT.procs || []).length + ' procs')
+    const probeT = []
+    hostT.onLocalOp((op) => probeT.push(op))
+    const rT = await startShare(mock.api, { chatId: dm.id, block: 'tasks', title: 'Task manager · harness', mode: 'readonly', instanceId: 'rh-tasks', snapshot: JSON.stringify(snapT) })
+    const shareT = rT && rT.share
+    check(!!shareT && !!shareT.shareId, 'c.tasks startShare → share id', shareT && shareT.shareId)
+    await sleep(250)
+    check(cardSeen('Task manager · harness'), 'c.tasks share card renders in the chats timeline', '')
+    await joinShare(mock.api, shareT.shareId, 'rg-tasks')
+    await sleep(150)
+    mock.emit({ event: 'chat_share_op', shareId: shareT.shareId, type: 'snapshot', from: 'engine-host', fromName: 'Mira', op: JSON.stringify(snapT) })
+    await sleep(200)
+    check(text('rg-tasks').includes('host-proc-alpha'), 'c.tasks delayed snapshot renders host processes on the guest', '')
+    check(!text('rg-tasks').includes('guest-proc'), 'c.tasks guest pane never leaked its own local sample into the share', '')
+    // (d) next host sampler tick produces a bigger payload (fake daemon added a proc); the harness relays it (engine role)
+    await sleep(2400) // INTERVAL = 2000 ms
+    check(probeT.length >= 1, 'd.tasks onLocalOp fired from the sampler', probeT.length + ' payload(s)')
+    const fresh = (probeT[probeT.length - 1].procs || []).map((p) => p.name).find((n) => !(snapT.procs || []).some((q) => q.name === n))
+    check(!!fresh, 'd.tasks sampler produced a proc the snapshot lacks (fake daemon spawns one per sample)', fresh || 'none')
+    await sendOp(mock.api, shareT.shareId, probeT[probeT.length - 1]) // host transport leg (ver numbering + event flow)
+    relayOp(shareT.shareId, probeT[probeT.length - 1]) // engine frame to the guest
+    await sleep(200)
+    check(!!fresh && text('rg-tasks').includes(fresh) && !text('rg-tasks').includes('guest-proc'), 'd.tasks op round-trips through the mock → guest readonly view converges', 'new proc: ' + fresh)
+  } catch (e) { check(false, 'tasks leg', String((e && e.stack) || e)) }
+
+  // ---- screen: readonly live share of the display list
+  try {
+    const hostS = rhScreen.share
+    const showBtn = document.querySelector('#rh-screen .sc-btn.primary')
+    check(!!showBtn, 'c.screen host picker rendered ("Show my displays")', '')
+    showBtn.click()
+    await sleep(300)
+    check(text('rh-screen').includes('Built-in Retina Display'), 'c.screen host display list rendered', '')
+    const snapS = hostS.snapshot()
+    check(snapS && Array.isArray(snapS.sources) && snapS.sources.length === 2, 'c.screen snapshot() = {sources}', (snapS.sources || []).length + ' sources')
+    const probeS = []
+    hostS.onLocalOp((op) => probeS.push(op))
+    const rS = await startShare(mock.api, { chatId: dm.id, block: 'screen', title: 'Screen · harness', mode: 'readonly', instanceId: 'rh-screen', snapshot: JSON.stringify(snapS) })
+    const shareS = rS && rS.share
+    check(!!shareS && !!shareS.shareId, 'c.screen startShare → share id', shareS && shareS.shareId)
+    await sleep(250)
+    check(text('chats').includes('Screen · harness'), 'c.screen share card renders in the chats timeline', '')
+    await joinShare(mock.api, shareS.shareId, 'rg-screen')
+    await sleep(150)
+    mock.emit({ event: 'chat_share_op', shareId: shareS.shareId, type: 'snapshot', from: 'engine-host', fromName: 'Mira', op: JSON.stringify(snapS) })
+    await sleep(200)
+    check(document.querySelectorAll('#rg-screen .sc-card').length === 2 && text('rg-screen').includes('Dell U2722D'), 'c.screen delayed snapshot renders host displays on the guest', document.querySelectorAll('#rg-screen .sc-card').length + ' cards')
+    // (d) host refreshes its list (fake daemon now reports a 3rd display); the harness plays the engine and relays
+    // the op (one page hosts OR joins — after joinShare the mock's share record points at the guest pane)
+    const refreshBtn = [...document.querySelectorAll('#rh-screen .sc-btn')].find((b) => b.textContent.includes('Refresh'))
+    check(!!refreshBtn, 'c.screen host Refresh button present', '')
+    refreshBtn.click()
+    await sleep(350)
+    check(probeS.length >= 1, 'd.screen onLocalOp fired from loadSources', probeS.length + ' payload(s)')
+    await sendOp(mock.api, shareS.shareId, probeS[probeS.length - 1]) // host transport leg (ver numbering + event flow)
+    relayOp(shareS.shareId, probeS[probeS.length - 1]) // engine frame to the guest
+    await sleep(200)
+    check(document.querySelectorAll('#rg-screen .sc-card').length === 3 && text('rg-screen').includes('HDMI-1'), 'd.screen sources op round-trips → guest list updated', document.querySelectorAll('#rg-screen .sc-card').length + ' cards')
+    check(!text('rg-screen').includes('Guest Virtual Display'), 'd.screen guest kept showing the shared list, not its own', '')
+  } catch (e) { check(false, 'screen leg', String((e && e.stack) || e)) }
+
+  // ---------------------------------------------------------------- git: snapshot-mode share — no op stream by design
+  try {
+    const hostG = rhGit.share
+    const snapG = hostG.snapshot()
+    check(snapG && snapG.path === '/demo/repo' && snapG.branch === 'main' && snapG.ahead === 2 && snapG.behind === 0 && snapG.staged === 1 && snapG.unstaged === 1 && snapG.untracked === 1 && snapG.conflicts === 0, 'c.git snapshot() = repo status summary {path,branch,upstream,ahead,behind,staged,unstaged,untracked,conflicts,operation,truncated}', JSON.stringify(snapG))
+    const rt = JSON.parse(JSON.stringify(snapG))
+    check(rt.path === snapG.path && rt.branch === snapG.branch && rt.staged === snapG.staged && rt.conflicts === snapG.conflicts, 'c.git snapshot JSON round-trips intact', rt.branch + ' staged=' + rt.staged)
+    const rG = await startShare(mock.api, { chatId: dm.id, block: 'git', title: 'pager repo · git', mode: 'snapshot', instanceId: 'rh-git', snapshot: JSON.stringify(snapG) })
+    const shareG = rG && rG.share
+    check(!!shareG && !!shareG.shareId, 'c.git startShare (snapshot mode) → share id', shareG && shareG.shareId)
+    await sleep(250)
+    check(cardSeen('pager repo · git'), 'c.git share card renders in the chats timeline', '')
+    await joinShare(mock.api, shareG.shareId, 'rg-git')
+    await sleep(120)
+    mock.emit({ event: 'chat_share_op', shareId: shareG.shareId, type: 'snapshot', from: 'engine-host', fromName: 'Mira', op: JSON.stringify(snapG) })
+    await sleep(150)
+    const gGit = text('rg-git')
+    check(gGit.includes('feature/x') && gGit.includes('guest-repo'), 'c.git join + applySnapshot: the guest pane keeps its own repo (snapshot mode = one-time copy in the offer, no live mirror)', gGit.split('\n').filter(Boolean).slice(0, 3).join(' | '))
+  } catch (e) { check(false, 'git leg', String((e && e.stack) || e)) }
+
+  // (e) dispose unregisters the instance
+  try {
+    for (const p of panes.filter((p) => p.id.startsWith('rg-'))) p.block.dispose()
+    await sleep(150)
+    const afterGuests = shareables()
+    check(afterGuests.length === 7 && afterGuests.every((s) => s.instanceId.startsWith('rh-')), 'e. disposing guest panes unregisters their instances', afterGuests.map((s) => s.instanceId).join(','))
+    for (const p of panes.filter((p) => p.id.startsWith('rh-'))) p.block.dispose()
+    await sleep(150)
+    check(shareables().length === 0, 'e. disposing host panes empties shareables()', shareables().length + ' left')
+  } catch (e) { check(false, 'dispose leg', String((e && e.stack) || e)) }
+
+  const fails = lines.filter((l) => l.startsWith('FAIL')).length
+  check(fails === 0, '=== ALL LEGS PASSED ===', fails + ' failure(s), ' + pageErrs.length + ' page error(s)')
+  window.__real.done = true
+}
+
+window.__real = { lines, runAll, pageErrs, done: false, shareables, blocksFor, shareMenuItems }
+void runAll()
+</script>
+</body>
+</html>

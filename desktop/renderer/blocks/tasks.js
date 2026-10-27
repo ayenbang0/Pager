@@ -2,6 +2,8 @@
 // card for the selection and Stop / Force Quit behind a confirmation. Sampling is pull-based and runs only while
 // the pane is on screen: a hidden Task manager makes no requests and keeps no timer.
 import { h, fromHTML, reconcile } from '../ui/dom.js'
+import { segmented } from '../ui/controls.js'
+import { registerInstance, registerShare } from './share.js'
 
 const CSS = new URL('./tasks.css', import.meta.url).href
 if (!document.querySelector(`link[href="${CSS}"]`)) document.head.append(h('link', { rel: 'stylesheet', href: CSS }))
@@ -22,7 +24,6 @@ const ico = (k) => fromHTML(ICONS[k])
 
 const ROW = 28
 const INTERVAL = 2000
-const TILE_COLORS = ['#5a8cff', '#3ecf8e', '#f5a524', '#b98cff', '#35c7e6', '#ff7040', '#e5487f', '#8a8a92']
 
 const KiB = 1024
 function fmtMem(b) {
@@ -32,11 +33,6 @@ function fmtMem(b) {
   return Math.round(b / KiB) + ' KB'
 }
 const fmtPct = (v) => (v >= 10 ? Math.round(v) + '%' : v > 0 ? v.toFixed(1) + '%' : '0%')
-const hue = (s) => {
-  let n = 0
-  for (let i = 0; i < s.length; i++) n = (n * 31 + s.charCodeAt(i)) >>> 0
-  return TILE_COLORS[n % TILE_COLORS.length]
-}
 const shortName = (n) => n.replace(/\.exe$/i, '')
 /** Command line minus its executable (quoted or not). */
 function argsOf(cmd) {
@@ -90,18 +86,13 @@ function mount(el, ctx) {
     const fill = h('i')
     return { el: h('div', { class: 'tk-m' }, h('span', { class: 'tk-m-l' }, label), val, h('span', { class: 'tk-m-bar' }, fill)), val, fill }
   }
-  const seg = h(
-    'div',
-    { class: 'seg' },
-    ...['list', 'tree'].map((v) =>
-      h(
-        'button',
-        { class: 'seg-b' + (v === state.view ? ' on' : ''), dataset: { view: v }, title: v === 'list' ? 'List' : 'Tree', onClick: () => setView(v) },
-        ico(v),
-        h('span', null, v === 'list' ? 'List' : 'Tree'),
-      ),
-    ),
-  )
+  const seg = segmented({
+    options: [{ value: 'list', label: 'List', icon: 'list' }, { value: 'tree', label: 'Tree', icon: 'table' }],
+    value: state.view,
+    sm: true,
+    label: 'Process view',
+    onChange: (v) => setView(v),
+  })
   const search = h('input', {
     class: 'tk-search',
     placeholder: 'Filter processes',
@@ -115,7 +106,6 @@ function mount(el, ctx) {
 
   function setView(v) {
     state.view = v
-    seg.querySelectorAll('.seg-b').forEach((b) => b.classList.toggle('on', b.dataset.view === v))
     rebuild()
   }
 
@@ -127,6 +117,7 @@ function mount(el, ctx) {
     const pct = (s.mem.used / s.mem.total) * 100
     mMem.val.textContent = `${fmtMem(s.mem.used)} · ${Math.round(pct)}%`
     mMem.fill.style.transform = `scaleX(${Math.min(1, pct / 100)})`
+    mGpu.el.hidden = s.gpu === false
     if (s.gpu === false) {
       mGpu.val.textContent = 'n/a'
       mGpu.fill.style.transform = 'scaleX(0)'
@@ -282,7 +273,6 @@ function mount(el, ctx) {
     R.chev.style.display = state.view === 'tree' ? '' : 'none'
     const nm = shortName(p.name)
     setText(R.name, nm)
-    R.tile.style.setProperty('--c', hue(nm))
     setText(R.tile, (nm[0] || '?').toUpperCase())
     setText(R.args, argsOf(p.cmd))
     R.badge.hidden = !p.kind
@@ -360,7 +350,7 @@ function mount(el, ctx) {
     const d = state.detail && state.detail.pid === p.pid ? state.detail : null
     const locked = protection(p)
     const nm = shortName(p.name)
-    const tile = h('span', { class: 'tk-tile big', style: { '--c': hue(nm) } }, (nm[0] || '?').toUpperCase())
+    const tile = h('span', { class: 'tk-tile big' }, (nm[0] || '?').toUpperCase())
     const facts = [
       ['PID', String(p.pid)],
       ['Parent', d && d.parent ? `${shortName(d.parent)} (${p.ppid})` : String(p.ppid)],
@@ -500,9 +490,49 @@ function mount(el, ctx) {
     }
   }
 
+  // ---- sharing (local://chats-contract.md, "Sharing") -----------------------------------------------------------
+  // Read-only live view. A pane that joined a share stays quiet and, once foreign data lands, stops sampling: its own
+  // sampler would fight the host's stream. A normal pane relays every sample.
+  const shareEmitters = new Set()
+  let shareForeign = false
+  let shareArmed = !(ctx.args && ctx.args.join)
+  const shareEmit = (payload) => { if (shareArmed && !shareForeign) for (const cb of shareEmitters) cb(payload) }
+  const trimProc = (p) => ({ pid: p.pid, ppid: p.ppid, name: p.name, cmd: p.cmd, cpu: p.cpu, mem: p.mem, gpu: p.gpu, kind: p.kind, create: p.create, critical: p.critical })
+  const sharePayload = () => {
+    const s = state.snap
+    if (!s || !Array.isArray(s.procs)) return null
+    let procs = s.procs.slice().sort((a, b) => b.cpu - a.cpu || b.mem - a.mem).map(trimProc)
+    let json = JSON.stringify(procs)
+    let take = procs.length
+    while (json.length > 60000 && take > 50) { take = Math.max(50, (take * 3) >> 2); procs = procs.slice(0, take); json = JSON.stringify(procs) }
+    return { procs, cpu: s.cpu, mem: s.mem, gpu: s.gpu }
+  }
+  const shareApply = (s) => {
+    if (!s || !Array.isArray(s.procs)) return // opaque peer text this build does not understand
+    shareForeign = true
+    shareArmed = true
+    clearTimeout(timer)
+    timer = 0
+    state.snap = s
+    state.error = null
+    if (state.selected !== null && !s.procs.some((p) => p.pid === state.selected)) {
+      state.selected = null
+      state.detail = null
+    }
+    paintAll()
+  }
+
+  function paintAll() {
+    paintMeters()
+    rebuild()
+    paintDetail()
+    if (state.confirm) paintDialog()
+    paintFoot()
+  }
+
   // ------------------------------------------------------------ sampling (only while visible)
   async function sampleNow() {
-    if (disposed || inflight || !visible) return
+    if (disposed || inflight || !visible || shareForeign) return
     inflight = true
     try {
       const snap = await ctx.rpc('sample', { gpu: true })
@@ -513,11 +543,9 @@ function mount(el, ctx) {
         state.selected = null
         state.detail = null
       }
-      paintMeters()
-      rebuild()
-      paintDetail()
-      if (state.confirm) paintDialog()
-      paintFoot()
+      paintAll()
+      const payload = sharePayload()
+      if (payload) shareEmit(payload)
     } catch (e) {
       state.error = cleanErr(e)
       paintFoot()
@@ -553,8 +581,7 @@ function mount(el, ctx) {
     }
     foot.classList.remove('err')
     if (!s) return (foot.textContent = 'Sampling…')
-    const c = s.cost
-    foot.textContent = `${s.procs.length} processes · every ${INTERVAL / 1000} s${c && c.helperCpuPct !== null ? ` · sampler ${c.helperCpuPct}% CPU, ${c.roundTripMs} ms, ${c.kbPerSample} KB per sample` : ''} · paused while hidden`
+    foot.textContent = `${s.procs.length} processes`
   }
 
   const io = new IntersectionObserver((entries) => setVisible(entries[entries.length - 1].isIntersecting && document.visibilityState === 'visible'))
@@ -590,8 +617,18 @@ function mount(el, ctx) {
   paintFoot()
   sampleNow()
 
+  const shareAdapter = tasksShare({
+    snapshot: () => sharePayload(),
+    applyOp: (op, meta) => { if (!(meta && meta.mine)) shareApply(op) },
+    applySnapshot: (s) => shareApply(s),
+    onLocalOp: (cb) => (shareEmitters.add(cb), () => shareEmitters.delete(cb)),
+  })
+  const unshare = ctx.paneId ? registerInstance(ctx.paneId, 'tasks', 'Task manager', TASKS_SHARE_MODES, shareAdapter) : null
+
   return {
+    share: shareAdapter,
     dispose() {
+      if (typeof unshare === 'function') { try { unshare() } catch { /* already unregistered */ } }
       disposed = true
       clearTimeout(timer)
       io.disconnect()
@@ -604,3 +641,22 @@ function mount(el, ctx) {
 }
 
 export default { id: 'tasks', title: 'Task manager', icon: ICONS.tasks, mount }
+
+// ---------------------------------------------------------------------------------------------------- sharing
+
+const TASKS_SHARE_MODES = ['readonly']
+
+/**
+ * The share adapter for one mounted Task manager (local://chats-contract.md, "Sharing"). Read-only live view: the op
+ * is one sampled payload (top processes by CPU, trimmed under the 64 KiB op cap).
+ */
+function tasksShare(hooks = {}) {
+  return {
+    modes: TASKS_SHARE_MODES,
+    snapshot: () => (hooks.snapshot ? hooks.snapshot() : null),
+    applyOp: (op, meta) => { if (hooks.applyOp) hooks.applyOp(op, meta) },
+    applySnapshot: (s) => { if (hooks.applySnapshot) hooks.applySnapshot(s) },
+    onLocalOp: (cb) => (hooks.onLocalOp ? hooks.onLocalOp(cb) : () => {}),
+  }
+}
+registerShare('tasks', tasksShare)

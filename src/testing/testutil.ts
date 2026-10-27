@@ -3,10 +3,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 
-/** Polls `cond` until truthy; throws on timeout. */
-export async function waitFor(cond: () => boolean, timeoutMs = 15_000, what = 'condition'): Promise<void> {
+/** Polls `cond` until truthy (async conditions are awaited); throws on timeout. */
+export async function waitFor(cond: () => boolean | Promise<boolean>, timeoutMs = 15_000, what = 'condition'): Promise<void> {
   const deadline = Date.now() + timeoutMs
-  while (!cond()) {
+  while (!(await cond())) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`)
     await sleep(25)
   }

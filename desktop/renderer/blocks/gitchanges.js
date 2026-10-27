@@ -1,8 +1,11 @@
-// The sidebar's Changes tab: the focused terminal's repository as staged / unstaged lists with stage, unstage and
-// discard buttons, the branch status and a one-line commit box. Embedded by the shell through mountChanges().
+// The sidebar's Changes tab: the focused terminal's repository as conflicted / staged / changes / untracked groups
+// with stage, unstage, discard and take-ours/theirs buttons, the branch status and a one-line commit box.
+// Embedded by the shell through mountChanges().
 import { h } from '../ui/dom.js'
 import { icon } from './giticons.js'
-import { announce, errorText, onAnnounce, plural, splitPath, splitStatus, STATUS_NAME, statusClass, subscribe, trackText } from './gitmodel.js'
+import { announce, errorText, GROUPS, groupStatus, onAnnounce, plural, splitPath, STATUS_NAME, statusClass, subscribe, trackText } from './gitmodel.js'
+
+const GROUP_TITLE = { conflicted: 'Conflicted', staged: 'Staged', unstaged: 'Changes', untracked: 'Untracked' }
 
 /**
  * @param {HTMLElement} el container (the sidebar body)
@@ -19,7 +22,7 @@ export function mountChanges(el, ctx) {
   let disposed = false
   let loading = true
   let token = 0
-  const collapsed = { staged: false, unstaged: false }
+  const collapsed = { conflicted: false, staged: false, unstaged: false, untracked: false }
   const box = { summary: '', busy: false, writing: false }
   let discardArmed = null // 'path' of the row waiting for a second click
 
@@ -117,60 +120,95 @@ export function mountChanges(el, ctx) {
     if (ctx.openBlock) ctx.openBlock('git', { cwd: root, path, staged })
   }
 
-  function fileRow(f, side) {
+  /** Staged entries are unstaged first; a staged-new file (or a staged rename's target) is untracked afterwards. */
+  async function discardEntry(f, staged) {
+    if (!staged) return call('discard', f.untracked ? { untracked: [f.path] } : { paths: [f.path] })
+    await call('unstage', { paths: [f.path] })
+    if (f.status === 'A' || f.status === 'R') {
+      await call('discard', { untracked: [f.path] })
+      if (f.orig) await call('discard', { paths: [f.orig] })
+    } else {
+      await call('discard', { paths: [f.path] })
+    }
+  }
+
+  function discardBtn(f, staged) {
+    const armed = discardArmed === f.path
+    return h(
+      'button',
+      {
+        class: 'gt-ibtn' + (armed ? ' armed' : ''),
+        type: 'button',
+        title: armed ? 'Click again to discard' : f.untracked ? 'Delete this untracked file' : 'Discard changes',
+        onClick: (e) => {
+          e.stopPropagation()
+          if (!armed) {
+            discardArmed = f.path
+            render()
+            setTimeout(() => discardArmed === f.path && ((discardArmed = null), !disposed && render()), 2500)
+            return
+          }
+          discardArmed = null
+          act(() => discardEntry(f, staged), 'Discarded the change')
+        },
+      },
+      armed ? h('span', { class: 'gt-armed' }, 'Discard?') : icon('trash'),
+    )
+  }
+
+  function fileRow(f, group) {
     const { dir, name } = splitPath(f.path)
     const actions = h('span', { class: 'gt-row-actions' })
-    if (side === 'staged') actions.append(h('button', { class: 'gt-ibtn', title: 'Unstage', onClick: (e) => (e.stopPropagation(), act(() => call('unstage', { paths: [f.path] }))) }, icon('minus')))
-    else {
-      const armed = discardArmed === f.path
+    if (f.conflict) {
       actions.append(
-        h(
-          'button',
-          {
-            class: 'gt-ibtn' + (armed ? ' armed' : ''),
-            title: armed ? 'Click again to discard' : f.untracked ? 'Delete this untracked file' : 'Discard changes',
-            onClick: (e) => {
-              e.stopPropagation()
-              if (!armed) {
-                discardArmed = f.path
-                render()
-                setTimeout(() => discardArmed === f.path && ((discardArmed = null), !disposed && render()), 2500)
-                return
-              }
-              discardArmed = null
-              act(() => call('discard', f.untracked ? { untracked: [f.path] } : { paths: [f.path] }))
-            },
-          },
-          armed ? h('span', { class: 'gt-armed' }, 'Discard?') : icon('trash'),
-        ),
-        h('button', { class: 'gt-ibtn', title: 'Stage', onClick: (e) => (e.stopPropagation(), act(() => call('stage', { paths: [f.path] }))) }, icon('plus')),
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'Keep your version (ours) and stage it', onClick: (e) => (e.stopPropagation(), act(() => call('resolve', { path: f.path, side: 'ours' }), 'Took ours')) }, icon('check')),
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'Keep their version (theirs) and stage it', onClick: (e) => (e.stopPropagation(), act(() => call('resolve', { path: f.path, side: 'theirs' }), 'Took theirs')) }, icon('copy')),
+      )
+    } else if (group === 'staged') {
+      actions.append(
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'Unstage', onClick: (e) => (e.stopPropagation(), act(() => call('unstage', { paths: [f.path] }))) }, icon('minus')),
+        discardBtn(f, true),
+      )
+    } else {
+      actions.append(
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'Stage', onClick: (e) => (e.stopPropagation(), act(() => call('stage', { paths: [f.path] }))) }, icon('plus')),
+        discardBtn(f, false),
       )
     }
     return h(
       'div',
-      { class: 'gt-frow', title: `${STATUS_NAME[f.status] ?? ''}${f.orig ? ` from ${f.orig}` : ''}\n${f.path}`, onClick: () => open(f.path, side === 'staged'), onDblclick: () => ctx.openPath?.(`${root.replace(/[\\/]+$/, '')}/${f.path}`) },
+      { class: 'gt-frow', title: `${STATUS_NAME[f.status] ?? ''}${f.orig ? ` from ${f.orig}` : ''}\n${f.path}`, onClick: () => open(f.path, group === 'staged'), onDblclick: () => ctx.openPath?.(`${root.replace(/[\\/]+$/, '')}/${f.path}`) },
       h('span', { class: `gt-st ${statusClass(f.status)}` }, f.status),
       h('span', { class: 'gt-fname' }, dir ? h('span', { class: 'dim' }, dir) : null, h('b', {}, name)),
       actions,
     )
   }
 
-  function section(key, title, items, bulk) {
-    const open$ = !collapsed[key]
+  const BULK = { staged: 'Unstage all', unstaged: 'Stage all', untracked: 'Stage all', conflicted: null }
+
+  function section(group, items) {
+    const open$ = !collapsed[group]
     return h(
       'section',
       { class: 'gt-sec' },
       h(
         'div',
-        { class: 'gt-sec-head', onClick: () => ((collapsed[key] = !collapsed[key]), render()) },
+        { class: 'gt-sec-head', role: 'button', tabIndex: -1, title: group === 'conflicted' ? 'Resolve each file, then stage it' : 'Collapse or expand', onClick: () => ((collapsed[group] = !collapsed[group]), render()) },
         h('span', { class: 'gt-chev' + (open$ ? ' open' : '') }, icon('chevR')),
-        h('span', { class: 'gt-sec-title' }, title),
-        h('span', { class: 'gt-count' }, items.length),
+        h('span', { class: 'gt-sec-title' }, GROUP_TITLE[group]),
+        h('span', { class: 'gt-count' + (group === 'conflicted' ? ' bad' : '') }, items.length),
         h('span', { class: 'gt-grow' }),
-        items.length ? h('button', { class: 'gt-link', onClick: (e) => (e.stopPropagation(), bulk.run()) }, bulk.label) : null,
+        BULK[group] && items.length ? h('button', { class: 'gt-link', type: 'button', onClick: (e) => (e.stopPropagation(), bulkRun(group, items)) }, BULK[group]) : null,
       ),
-      open$ ? h('div', { class: 'gt-sec-body' }, items.map((f) => fileRow(f, key))) : null,
+      open$ ? h('div', { class: 'gt-sec-body' }, items.map((f) => fileRow(f, group))) : null,
     )
+  }
+
+  function bulkRun(group, items) {
+    const paths = items.map((f) => f.path)
+    if (!paths.length) return
+    if (group === 'staged') act(() => call('unstage', { paths }), `Unstaged ${plural(paths.length, 'file')}`)
+    else act(() => call('stage', { paths }), `Staged ${plural(paths.length, 'file')}`)
   }
 
   function render() {
@@ -189,7 +227,7 @@ export function mountChanges(el, ctx) {
           icon('branch'),
           h('div', { class: 'gt-ch-empty-title' }, cwd ? 'Not a Git repository' : 'No folder'),
           h('div', { class: 'gt-ch-note' }, cwd ? 'Changes appear here when the focused terminal is inside a repository.' : 'Focus a terminal to follow its folder.'),
-          cwd ? h('button', { class: 'gt-btn sm', onClick: () => ctx.rpc('init', { cwd }).then(() => (toast('info', 'Initialized an empty repository'), load()), (e) => toast('error', errorText(e))) }, 'Initialize repository') : null,
+          cwd ? h('button', { class: 'gt-btn sm', type: 'button', onClick: () => ctx.rpc('init', { cwd }).then(() => (toast('info', 'Initialized an empty repository'), load()), (e) => toast('error', errorText(e))) }, 'Initialize repository') : null,
         ),
       )
       renderFoot()
@@ -205,24 +243,21 @@ export function mountChanges(el, ctx) {
         h('b', {}, b.head ?? (b.oid ? `detached ${b.oid.slice(0, 7)}` : 'no commits yet')),
         track ? h('span', { class: 'gt-track' }, track) : null,
         h('span', { class: 'gt-grow' }),
-        h('button', { class: 'gt-ibtn', title: 'Refresh', onClick: () => load() }, icon('fetch')),
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'Refresh', onClick: () => load() }, icon('fetch')),
       ),
     )
-    const { staged, unstaged } = splitStatus(status.files)
-    if (!staged.length && !unstaged.length) {
+    const g = groupStatus(status.files)
+    if (!g.conflicted.length && !g.staged.length && !g.unstaged.length && !g.untracked.length) {
       lists.append(h('div', { class: 'gt-ch-empty small' }, icon('check'), h('div', { class: 'gt-ch-note' }, 'Working tree clean')))
     } else {
-      lists.append(
-        section('staged', 'Staged', staged, { label: 'Unstage all', run: () => act(() => call('unstage', { all: true })) }),
-        section('unstaged', 'Changes', unstaged, { label: 'Stage all', run: () => act(() => call('stage', { all: true })) }),
-      )
+      for (const group of GROUPS) if (g[group].length) lists.append(section(group, g[group]))
     }
     if (status.truncated) lists.append(h('div', { class: 'gt-ch-note pad' }, 'The list is cut off: too many changed files.'))
     renderFoot()
   }
 
   function renderFoot() {
-    const staged = status ? splitStatus(status.files).staged.length : 0
+    const staged = status ? groupStatus(status.files).staged.length : 0
     foot.hidden = !root || !status
     if (foot.hidden) return
     const msg = box.summary.trim()

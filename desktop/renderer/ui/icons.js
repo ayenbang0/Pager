@@ -9,7 +9,6 @@
 //                                            with per-instance unique gradient ids
 //   MARK_SVG                 -> string       pager-mark.svg verbatim (keep in sync with the file)
 //   agentTile(kind, size = 20) -> SVGElement rounded-square brand tile: omp claude opencode hermes custom pager shell
-//   ompWordmark(height = 44) -> SVGElement   big two-column "TT" omp mark (fill currentColor)
 //   pagerWordmark(size = 22) -> HTMLElement  mark + "pager" in Geist 600
 //
 // Names (aliases in brackets):
@@ -275,16 +274,6 @@ export function agentTile(kind, size = 20) {
 }
 
 // --------------------------------------------------------------- wordmarks
-/** The big omp "TT" mark (two columns). Inherits currentColor; ~44px high. */
-export function ompWordmark(height = 44) {
-  const w = (height * 60) / 44
-  return fromHTML(
-    `<svg class="omp-wordmark" viewBox="0 0 60 44" width="${w.toFixed(2)}" height="${height}" fill="currentColor" aria-hidden="true" focusable="false">` +
-      `<rect x="0" y="0" width="26" height="9.5" rx="2.2"/><rect x="8.25" y="0" width="9.5" height="44" rx="2.2"/>` +
-      `<rect x="34" y="0" width="26" height="9.5" rx="2.2"/><rect x="42.25" y="0" width="9.5" height="44" rx="2.2"/></svg>`,
-  )
-}
-
 /** Pager mark + "pager" in Geist 600. */
 export function pagerWordmark(size = 22) {
   const el = document.createElement('span')

@@ -48,6 +48,7 @@ const d = {
 contextBridge.exposeInMainWorld('pager', {
   d,
   title: (t) => ipcRenderer.send('title', String(t)),
+  chrome: (cmd, arg) => ipcRenderer.send('chrome', String(cmd), arg),
   hotkey: (name) => ipcRenderer.send('hotkey', String(name)),
   browser: (cmd, arg) => ipcRenderer.send('browser', String(cmd), arg),
   onBrowser: (fn) => ipcRenderer.on('browser', (_e, s) => fn(s)),

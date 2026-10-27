@@ -37,7 +37,7 @@ export class DaemonClient extends EventEmitter {
   readonly pid: number
   readonly build: string
   private nextId = 0
-  private readonly pending = new Map<number, Pending>()
+  private readonly pending = new Map<number | string, Pending>()
   private readonly seqs = new Map<number, number>()
   private closed = false
 
@@ -112,7 +112,7 @@ export class DaemonClient extends EventEmitter {
       this.emit('data', f.paneId, f.data)
     } else if (f.kind === 'json') {
       const m = f.json as Partial<Reply> & Partial<DaemonEvent>
-      if (typeof m.id === 'number') {
+      if (typeof m.id === 'number' || typeof m.id === 'string') {
         const p = this.pending.get(m.id)
         if (p === undefined) return
         this.pending.delete(m.id)
@@ -140,7 +140,10 @@ export class DaemonClient extends EventEmitter {
 
   call<T = unknown>(type: string, args: Record<string, unknown> = {}, timeoutMs = 30_000): Promise<T> {
     if (this.closed) return Promise.reject(new Error('the connection to the daemon closed'))
-    const id = ++this.nextId
+    // Some requests carry their own string `id` argument (chats.request.accept, chats.docs.* …). The envelope has one
+    // `id` slot, so a string argument id doubles as the call id: it travels to the daemon intact and the reply, which
+    // echoes the frame's id, still finds this call. Two such calls with the same id string cannot be in flight at once.
+    const id = typeof args.id === 'string' ? args.id : ++this.nextId
     const { promise, resolve, reject } = Promise.withResolvers<unknown>()
     const timer = setTimeout(() => {
       this.pending.delete(id)

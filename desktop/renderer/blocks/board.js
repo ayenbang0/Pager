@@ -2,6 +2,8 @@
 // edit goes through the main-process handler (electron/blocks/board.cjs), which rewrites just the lines it means to
 // change and tells us when the file changes on disk.
 import { h, fromHTML } from '../ui/dom.js'
+import { segmented } from '../ui/controls.js'
+import { registerInstance, registerShare } from './share.js'
 
 // The block's stylesheet loads itself, so any host that imports the module gets the styling.
 const CSS = new URL('./board.css', import.meta.url).href
@@ -22,7 +24,7 @@ const ICONS = {
 }
 const ico = (k) => fromHTML(ICONS[k])
 
-const LABEL_COLORS = ['#8e5cf7', '#e5487f', '#e8752d', '#2fae74', '#159c9c', '#6b7280']
+const LABEL_COLORS = ['var(--live)', 'var(--bad)', 'var(--warn)', 'var(--ok)', 'var(--ansi6)', 'var(--t3)']
 const labelColor = (name) => {
   let n = 0
   for (let i = 0; i < name.length; i++) n = (n * 31 + name.charCodeAt(i)) >>> 0
@@ -81,7 +83,10 @@ function mount(el, ctx) {
   async function call(method, a) {
     try {
       const data = await ctx.rpc(method, { board: boardId, ...a })
-      if (!disposed) apply(data)
+      if (!disposed) {
+        apply(data)
+        if (data && shareEmitters.size) emitShare(data) // every call() is a mutation; boot/reload paths do not come through here
+      }
       return data
     } catch (e) {
       return fail(e)
@@ -149,32 +154,24 @@ function mount(el, ctx) {
     const d = state.data
     bar.replaceChildren()
     if (!d || !d.exists) return
-    const seg = h(
-      'div',
-      { class: 'seg', role: 'tablist' },
-      ...['board', 'list'].map((v) =>
-        h(
-          'button',
-          {
-            class: 'seg-b' + (state.view === v ? ' on' : ''),
-            role: 'tab',
-            'aria-selected': state.view === v,
-            title: v === 'board' ? 'Board' : 'List',
-            onClick: () => {
-              state.view = v
-              try {
-                localStorage.setItem('pager.board.view', v)
-              } catch {
-                /* private mode */
-              }
-              render()
-            },
-          },
-          ico(v),
-          h('span', null, v === 'board' ? 'Board' : 'List'),
-        ),
-      ),
-    )
+    const seg = segmented({
+      options: [
+        { value: 'board', label: 'Board', icon: 'board' },
+        { value: 'list', label: 'List', icon: 'list' },
+      ],
+      value: state.view,
+      label: 'Board view',
+      sm: true,
+      onChange: (v) => {
+        state.view = v
+        try {
+          localStorage.setItem('pager.board.view', v)
+        } catch {
+          /* private mode */
+        }
+        render()
+      },
+    })
     const archived = d.lanes.filter((l) => l.archived).reduce((n, l) => n + l.cards.length, 0)
     bar.append(...[
       h('div', { class: 'bd-file', title: d.path }, ico('file'), h('span', { class: 'bd-name' }, d.name)),
@@ -347,22 +344,27 @@ function mount(el, ctx) {
     input.select()
   }
 
+  function addLaneInput() {
+    const input = h('input', {
+      class: 'bd-input',
+      placeholder: 'Lane name',
+      'aria-label': 'Lane name',
+      onKeydown: (e) => {
+        if (e.key === 'Enter' && input.value.trim()) call('addLane', { title: input.value })
+        else if (e.key === 'Escape') render()
+      },
+      onBlur: () => setTimeout(() => !disposed && render(), 0),
+    })
+    return input
+  }
+
   function addLaneEl() {
-    const wrap = h('div', { class: 'bd-lane ghost' })
     const btn = h(
       'button',
       {
         class: 'bd-add lane',
         onClick: () => {
-          const input = h('input', {
-            class: 'bd-input',
-            placeholder: 'Lane name',
-            onKeydown: (e) => {
-              if (e.key === 'Enter' && input.value.trim()) call('addLane', { title: input.value })
-              else if (e.key === 'Escape') render()
-            },
-            onBlur: () => setTimeout(() => !disposed && render(), 0),
-          })
+          const input = addLaneInput()
           btn.replaceWith(input)
           input.focus()
         },
@@ -370,14 +372,19 @@ function mount(el, ctx) {
       ico('plus'),
       h('span', null, 'Add lane'),
     )
-    wrap.append(btn)
-    return wrap
+    return h('div', { class: 'bd-lane ghost' }, btn)
   }
 
   function renderBoard() {
     const visible = lanes().filter((l) => state.showArchived || !l.archived)
     if (!visible.length) {
-      body.append(emptyState('No lanes yet', 'Add a lane; each `## Heading` in the file is one.', h('button', { class: 'bd-primary', onClick: () => addLaneEl().querySelector('button').click() }, 'Add lane'), addLaneEl()))
+      const add = h('button', { class: 'btn sm accent', type: 'button' }, 'Add lane')
+      add.addEventListener('click', () => {
+        const input = addLaneInput()
+        add.replaceWith(input)
+        input.focus()
+      })
+      body.append(emptyState('No lanes yet', 'Add a lane to start.', add))
       return
     }
     body.append(h('div', { class: 'bd-lanes' }, visible.map(laneEl), addLaneEl()))
@@ -605,6 +612,27 @@ function mount(el, ctx) {
     window.addEventListener('pointercancel', cancel)
   }
 
+  // ---- sharing (local://chats-contract.md, "Sharing") -------------------------------------------------------------
+  // Op = the whole board document (lanes/cards/counts/name); a TODO.md is small, so full-state ops are cheap and
+  // idempotent. The host's main-process writes stay authoritative; a guest's edits live in memory only.
+  const shareEmitters = new Set()
+  const emitShare = (data) => { for (const cb of shareEmitters) cb(data) }
+  const shareHooks = {
+    snapshot: () => state.data,
+    applyOp: (op, meta) => {
+      if (meta && meta.mine) return // my own op coming back through the relay: already applied locally
+      if (!op || !Array.isArray(op.lanes)) return // opaque peer text this build does not understand
+      apply(op)
+    },
+    applySnapshot: (s) => {
+      if (!s || !Array.isArray(s.lanes)) return
+      apply(s)
+    },
+    onLocalOp: (cb) => (shareEmitters.add(cb), () => shareEmitters.delete(cb)),
+  }
+  const shareAdapter = boardShare(shareHooks)
+  const unshare = ctx.paneId ? registerInstance(ctx.paneId, 'board', args.file || 'Board', BOARD_SHARE_MODES, shareAdapter) : null
+
   // ------------------------------------------------------------ render
   function render() {
     if (disposed || state.drag) return
@@ -651,7 +679,9 @@ function mount(el, ctx) {
   init()
 
   return {
+    share: shareAdapter,
     dispose() {
+      if (typeof unshare === 'function') { try { unshare() } catch { /* already unregistered */ } }
       disposed = true
       if (typeof offEvent === 'function') offEvent()
       if (boardId) ctx.rpc('close', { board: boardId }).catch(() => {})
@@ -665,3 +695,23 @@ function mount(el, ctx) {
 }
 
 export default { id: 'board', title: 'Board', icon: ICONS.board, hotkey: 'Alt+Mod+K', mount }
+
+// ---------------------------------------------------------------------------------------------------- sharing
+
+const BOARD_SHARE_MODES = ['live', 'snapshot']
+
+/**
+ * The share adapter for one mounted board (local://chats-contract.md, "Sharing"). `hooks` carries the mount's live
+ * closures; each is optional so the registry factory always returns a well-formed adapter. The op is the whole
+ * board document — TODO.md is small, so full-state ops are cheap and idempotent.
+ */
+function boardShare(hooks = {}) {
+  return {
+    modes: BOARD_SHARE_MODES,
+    snapshot: () => (hooks.snapshot ? hooks.snapshot() : null),
+    applyOp: (op, meta) => { if (hooks.applyOp) hooks.applyOp(op, meta) },
+    applySnapshot: (s) => { if (hooks.applySnapshot) hooks.applySnapshot(s) },
+    onLocalOp: (cb) => (hooks.onLocalOp ? hooks.onLocalOp(cb) : () => {}),
+  }
+}
+registerShare('board', boardShare)

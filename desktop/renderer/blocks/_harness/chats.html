@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>chats block harness</title>
+<link rel="stylesheet" href="../../ui/tokens.css">
+<link rel="stylesheet" href="../../ui/kit.css">
+<style>
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--page); color: var(--t1); font: 13.5px var(--sans); }
+  .stage { position: fixed; inset: 0; padding: 6px; background:
+    radial-gradient(900px 500px at 10% -10%, var(--glow-a), transparent 60%), radial-gradient(700px 400px at 90% 110%, var(--glow-b), transparent 60%), var(--page); }
+  #host { height: 100%; background: var(--card); border-radius: 12px; box-shadow: 0 0 0 1px var(--l2); overflow: hidden; display: flex; }
+  #host > .cm { flex: 1 1 auto; min-width: 0; }
+  /* Mock-only demo pane: stands in for a shared block (canvas, board, …) opened beside the chat. The real block
+     modules render themselves here in the app; this page just proves the open + presence flow. */
+  #demoPane { width: 400px; flex: none; display: flex; flex-direction: column; box-shadow: inset 1px 0 0 var(--l1); }
+  #demoPane .dp-head { display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 12px; box-shadow: inset 0 -1px 0 var(--l1); font-size: 13px; font-weight: 550; }
+  #demoPane .dp-head .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #demoPane .dp-body { position: relative; flex: 1; min-height: 0; background:
+    radial-gradient(600px 300px at 20% 0%, var(--glow-a), transparent 60%), var(--panel); }
+  #demoPane .dp-doc { position: absolute; inset: 18px; border-radius: 12px; background: var(--card); box-shadow: inset 0 0 0 1px var(--l2), 0 8px 24px -12px rgba(0,0,0,.25); padding: 18px; overflow: hidden; }
+  #demoPane .dp-doc h4 { margin: 0 0 8px; font-size: 14px; font-weight: 550; }
+  #demoPane .dp-doc p { margin: 0 0 10px; font-size: 12.5px; color: var(--t2); max-width: 70%; }
+  #demoPane .dp-doc .ln { height: 8px; border-radius: 4px; background: var(--l1); margin-bottom: 8px; }
+  #demoPane .dp-pres { position: absolute; left: 12px; top: 10px; display: flex; gap: 6px; align-items: center; font-size: 11.5px; color: var(--t3); }
+  .cur { position: absolute; width: 0; height: 0; z-index: 2; }
+  .cur i { position: absolute; left: 0; top: 0; width: 0; height: 0; border-left: 7px solid transparent; border-right: 7px solid transparent; border-bottom: 11px solid var(--c); transform: rotate(-45deg); }
+  .cur b { position: absolute; left: 8px; top: 9px; padding: 1px 7px; border-radius: 999px; background: var(--c); color: #fff; font: 550 10.5px/1.6 var(--sans); font-style: normal; white-space: nowrap; }
+  .cur.a { --c: #4a9eff; animation: curA 9s ease-in-out infinite alternate; }
+  .cur.b { --c: #2fbf71; animation: curB 11s ease-in-out infinite alternate; }
+  @keyframes curA { 0% { transform: translate(30px, 90px); } 30% { transform: translate(180px, 150px); } 60% { transform: translate(90px, 230px); } 100% { transform: translate(220px, 90px); } }
+  @keyframes curB { 0% { transform: translate(240px, 260px); } 40% { transform: translate(120px, 320px); } 70% { transform: translate(280px, 190px); } 100% { transform: translate(60px, 140px); } }
+  #toasts { position: fixed; right: 14px; bottom: 14px; display: flex; flex-direction: column; gap: 6px; z-index: 99; }
+  .tst { padding: 7px 12px; border-radius: 10px; background: var(--pop-bg); color: var(--t1); font-size: 12.5px; box-shadow: 0 0 0 1px var(--l2), 0 12px 32px -12px rgba(0,0,0,.4); backdrop-filter: blur(20px); animation: tstIn .2s var(--out); }
+  .tst.ok { color: var(--ok); } .tst.warn { color: var(--warn); } .tst.error { color: var(--bad); }
+  @keyframes tstIn { from { opacity: 0; transform: translateY(6px); } }
+  @media (prefers-reduced-motion: reduce) { .cur, .tst { animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="stage"><div id="host"></div></div>
+<div id="toasts"></div>
+<script type="module">
+import { mountChats } from '../chats.js'
+import { createMockChats } from '../chats-mock.js'
+import { registerShare, registerInstance } from '../share.js'
+
+const q = new URLSearchParams(location.search)
+document.documentElement.dataset.theme = q.get('theme') || 'dark'
+const host = document.getElementById('host')
+if (q.get('w')) host.style.width = q.get('w') + 'px'
+
+// Mock-only: the real canvas/board/notebook/… modules register their own share adapters inside the app. Here the
+// harness registers inert demo adapters (and demo mounted instances, so the Share menu has entries) against the mock.
+const DEMO_MODES = { canvas: ['live', 'readonly', 'snapshot'], board: ['live', 'snapshot'], notebook: ['live', 'readonly'], files: ['snapshot'], tasks: ['readonly'], git: ['readonly'], screen: ['readonly'] }
+const demoAdapter = (name) => ({
+  modes: DEMO_MODES[name] || ['live'],
+  snapshot: () => ({ doc: name, ver: 1 }),
+  applyOp() {}, applySnapshot() {},
+  onLocalOp() { return () => {} },
+  presence: { local() { return () => {} }, remote() {} },
+})
+for (const [name, modes] of Object.entries(DEMO_MODES)) registerShare(name, () => demoAdapter(name))
+registerInstance('demo-canvas', 'canvas', 'Release warm-up', ['live', 'readonly', 'snapshot'], demoAdapter('canvas'))
+registerInstance('demo-board', 'board', 'Launch checklist', ['live', 'snapshot'], demoAdapter('board'))
+registerInstance('demo-notebook', 'notebook', 'Ideas', ['live', 'readonly'], demoAdapter('notebook'))
+
+const mock = createMockChats({ seed: 7, long: 420 })
+
+// Demo shared-block pane (mock-only): proves "open beside the chat" plus live presence names + cursors.
+let pane = null
+function openBlock(name, args = {}) {
+  if (!pane) {
+    pane = document.createElement('div')
+    pane.id = 'demoPane'
+    host.appendChild(pane)
+  }
+  const share = args.share || {}
+  const members = share.members || []
+  const who = [{ n: share.hostName || 'host', online: true }, ...members.filter((m) => !m.me).map((m) => ({ n: m.name, online: m.active }))]
+  pane.replaceChildren()
+  const head = document.createElement('div')
+  head.className = 'dp-head'
+  const t = document.createElement('span')
+  t.className = 'grow'
+  t.textContent = (name === 'agent' ? 'Agent session' : name[0].toUpperCase() + name.slice(1)) + (share.title ? ' — ' + share.title : '')
+  const close = document.createElement('button')
+  close.className = 'icon-btn'
+  close.type = 'button'
+  close.setAttribute('aria-label', 'Close pane')
+  close.textContent = '✕'
+  close.addEventListener('click', () => { pane.remove(); pane = null })
+  head.append(t, close)
+  const body = document.createElement('div')
+  body.className = 'dp-body'
+  const doc = document.createElement('div')
+  doc.className = 'dp-doc'
+  const h4 = document.createElement('h4')
+  h4.textContent = share.title || (name + ' opened from the share card')
+  const p = document.createElement('p')
+  p.textContent = share.readOnly ? 'Opened read-only — the host is driving.' : 'Live: edits and cursors flow over the share transport.'
+  doc.append(h4, p)
+  for (let i = 0; i < 8; i++) {
+    const ln = document.createElement('div')
+    ln.className = 'ln'
+    ln.style.width = 40 + ((i * 37) % 55) + '%'
+    doc.appendChild(ln)
+  }
+  const pres = document.createElement('div')
+  pres.className = 'dp-pres'
+  pres.textContent = who.length ? who.map((w) => `${w.n}${w.online ? '' : ' (away)'}`).join(' · ') : 'just you'
+  doc.append(pres)
+  if (!share.readOnly) {
+    for (const [cls, label] of [['a', who[0]?.n || 'Ada'], ['b', 'omp']]) {
+      const c = document.createElement('div')
+      c.className = 'cur ' + cls
+      const i = document.createElement('i')
+      const b = document.createElement('b')
+      b.textContent = label
+      c.append(i, b)
+      doc.appendChild(c)
+    }
+  }
+  body.appendChild(doc)
+  pane.append(head, body)
+}
+
+const toasts = document.getElementById('toasts')
+const ctx = {
+  cwd: '~/code/pager',
+  args: {},
+  setTitle: (t) => (document.title = t),
+  toast: (level, text) => {
+    const d = document.createElement('div')
+    d.className = 'tst ' + (level === 'success' ? 'ok' : level === 'error' ? 'error' : level)
+    d.textContent = text
+    toasts.appendChild(d)
+    setTimeout(() => d.remove(), 4200)
+  },
+  openBlock,
+}
+
+const api = mountChats(host, ctx, { api: mock.api, storage: localStorage })
+window.__chats = { mount: api, mock, store: api.store, ui: api.ui, openChat: (id) => api.ui.openChat(id) }
+
+const chat = q.get('chat')
+if (chat) void api.ui.openChat(chat)
+</script>
+</body>
+</html>

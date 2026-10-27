@@ -276,6 +276,8 @@ function paintGit() {
 }
 
 function paintFoot() {
+  footEl.hidden = !!app.settings.status_bar
+  if (footEl.hidden) return
   const s = S.summary
   if (!s) return footEl.replaceChildren(h('span', { class: 'ab' }, shortPath(S.root)))
   const n = s.changed ?? (s.modified || 0) + (s.staged || 0)

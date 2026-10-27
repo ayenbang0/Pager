@@ -177,6 +177,23 @@ export function createOverlay(root) {
       })
     })
   }
+  /**
+   * Modal card with owner-built content (the shortcuts list). `node` gets the dialog chrome; Escape and the dimmed
+   * backdrop close it like a dialog.
+   */
+  function modal(node) {
+    close()
+    returnFocus = document.activeElement
+    layer.hidden = false
+    layer.className = 'gt-layer modal'
+    node.classList.add('gt-dialog')
+    layer.append(node)
+    queueMicrotask(() => {
+      const b = node.querySelector('button')
+      if (b) b.focus({ preventScroll: true })
+    })
+    return node
+  }
 
-  return { popover, menu, dialog, close, get open() { return !layer.hidden } }
+  return { popover, menu, dialog, modal, close, get open() { return !layer.hidden } }
 }

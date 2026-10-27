@@ -128,6 +128,35 @@ export function formatChangelog(sections: readonly ChangelogSection[], width: nu
   return out
 }
 
+/** One highlight of a release: the kind it came from and a one-line summary. */
+export interface Highlight {
+  kind: ChangelogKind
+  text: string
+}
+
+/** An entry as one short line: markdown marks dropped, cut at its first clause (`: `, `; ` or a sentence end). */
+export function summarize(text: string): string {
+  const plain = text.replace(/[`*]/g, '').replace(/\s+/g, ' ').trim()
+  const cut = /(?::|;|\.)(?:\s|$)/.exec(plain)
+  const head = cut === null || cut.index < 12 ? plain : plain.slice(0, cut.index)
+  return head.replace(/[.:;,\s]+$/, '')
+}
+
+/**
+ * A few lines to read at a glance from one release: the first entry of each kind in order (Added, Changed, Fixed, ...), then more
+ * Added entries, at most `max`. Entries keep their order within a kind.
+ */
+export function highlights(section: ChangelogSection, max = 4): Highlight[] {
+  const byKind = CHANGELOG_KINDS.map((kind) => section.entries.filter((e) => e.kind === kind))
+  const picked = new Set<ChangelogEntry>()
+  for (const entries of byKind) {
+    const first = entries[0]
+    if (first !== undefined && picked.size < max) picked.add(first)
+  }
+  for (const entry of byKind.flat()) if (picked.size < max) picked.add(entry)
+  return section.entries.filter((e) => picked.has(e)).map((e) => ({ kind: e.kind, text: summarize(e.text) })).filter((h) => h.text !== '')
+}
+
 export function loadChangelog(): ChangelogSection[] {
   try {
     return parseChangelog(fs.readFileSync(new URL('../../CHANGELOG.md', import.meta.url), 'utf8'))

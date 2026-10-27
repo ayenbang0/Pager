@@ -3,9 +3,12 @@
 // module is the notebook UI: cells, outputs, the toolbar, the kernel chip, keyboard (command / edit mode).
 // Pure logic (outputs from kernel events, ANSI, Python highlighting, Markdown) lives in notebook-model.js.
 import { h, fromHTML } from '../ui/dom.js'
+import { select } from '../ui/controls.js'
+import { icon } from '../ui/icons.js'
 import { closeMenus, showMenu } from '../ui/popover.js'
 import { confirmDialog, promptDialog } from '../ui/dialog.js'
 import * as M from './notebook-model.js'
+import { registerInstance, registerShare } from './share.js'
 
 // The block's stylesheet loads itself, so any host that imports the module gets the styling.
 const CSS = new URL('./notebook.css', import.meta.url).href
@@ -201,6 +204,21 @@ class Notebook {
     window.addEventListener('pagehide', this.onHide)
     this.timers = [setInterval(() => this.tick(), 250)]
     this.off = ctx.onEvent ? ctx.onEvent((ev, payload) => this.onHostEvent(ev, payload)) : null
+    // ---- sharing (local://chats-contract.md, "Sharing") -----------------------------------------------------------
+    // Op = the whole cells array (coalesced 250 ms trailing); guests rebuild with setCells. A remote application is
+    // not a local edit: shareApplying suppresses its re-emit.
+    this.shareEmitters = new Set()
+    this.shareCoalesce = null
+    this.shareApplying = false
+    this.readOnly = false
+    this.shareAdapter = notebookShare({
+      snapshot: () => this.shareSnapshot(),
+      applyOp: (op, meta) => { if (!(meta && meta.mine)) this.shareApply(op) },
+      applySnapshot: (s) => this.shareApply(s),
+      onLocalOp: (cb) => (this.shareEmitters.add(cb), () => this.shareEmitters.delete(cb)),
+      readonly: (on) => { this.readOnly = !!on },
+    })
+    this.unshare = ctx.paneId ? registerInstance(ctx.paneId, 'notebook', this.name, NOTEBOOK_SHARE_MODES, this.shareAdapter) : null
     this.init()
   }
 
@@ -356,11 +374,7 @@ class Notebook {
     this.nb = r.nb
     this.format = r.format
     this.mtimeMs = r.mtimeMs
-    this.cells = []
-    this.cellsEl.replaceChildren()
-    for (const raw of this.nb.cells) this.cells.push(this.buildCell(raw))
-    if (!this.cells.length) this.cells.push(this.buildCell(this.freshRaw('code')))
-    this.cellsEl.append(...this.cells.map((c) => c.el))
+    this.setCells(this.nb.cells)
     this.stateEl.hidden = true
     this.dirty = !!r.missing
     this.dirtySince = r.missing ? Date.now() : 0
@@ -369,6 +383,16 @@ class Notebook {
     this.applyFolds()
     this.select(0, { keepFocus: true, scroll: false })
     this.setBar()
+  }
+
+  /** Rebuild the cell list from raw .ipynb cells (shared by load and remote share applications). */
+  setCells(raws) {
+    this.cells = []
+    this.cellsEl.replaceChildren()
+    for (const raw of raws) this.cells.push(this.buildCell(raw))
+    if (!this.cells.length) this.cells.push(this.buildCell(this.freshRaw('code')))
+    this.cellsEl.append(...this.cells.map((c) => c.el))
+    this.syncCells()
   }
 
   kernelDir() {
@@ -392,7 +416,7 @@ class Notebook {
     }
     cell.gut = h('div', { class: 'nb-gut' })
     cell.timeEl = h('div', { class: 'nb-time' })
-    cell.mdEl = h('div', { class: 'nb-md', attrs: { 'data-placeholder': 'Empty markdown cell. Double-click or press Enter to edit.' } })
+    cell.mdEl = h('div', { class: 'nb-md', attrs: { 'data-placeholder': 'Double-click to edit' } })
     cell.outsEl = h('div', { class: 'nb-outs' })
     cell.edWrap = this.buildEditor(cell)
     cell.tools = h(
@@ -519,6 +543,7 @@ class Notebook {
   }
 
   editCell(cell) {
+    if (this.readOnly) return
     const i = this.cells.indexOf(cell)
     if (i < 0) return
     if (cell.kind === 'markdown') {
@@ -847,9 +872,24 @@ class Notebook {
     if (!this.dirty) this.dirtySince = Date.now()
     this.dirty = true
     this.setBar()
+    this.scheduleShareOp()
+  }
+
+  /** Coalesce local edits into one share op (250 ms trailing). Kernel output streams through markDirty as well, so
+   *  live shares converge on the guest's screen too. Oversized docs skip ops; guests converge via snapshot instead. */
+  scheduleShareOp() {
+    if (!this.shareEmitters.size || this.shareApplying) return
+    clearTimeout(this.shareCoalesce)
+    this.shareCoalesce = setTimeout(() => {
+      if (this.shareApplying || this.disposed) return
+      const op = { cells: this.cells.map((c) => c.raw) }
+      if (JSON.stringify(op).length > 60000) return // op transport cap is 64 KiB
+      for (const cb of this.shareEmitters) cb(op)
+    }, 250)
   }
 
   insertCell(kind, after, edit) {
+    if (this.readOnly) return
     const raw = this.freshRaw(kind)
     const cell = this.buildCell(raw)
     const at = Math.max(-1, Math.min(this.cells.length - 1, after)) + 1
@@ -868,6 +908,7 @@ class Notebook {
   }
 
   deleteCell(cell, { remember = true } = {}) {
+    if (this.readOnly) return
     const i = this.cells.indexOf(cell)
     if (i < 0) return
     if (cell.state !== 'idle') this.interrupt()
@@ -888,6 +929,7 @@ class Notebook {
   }
 
   undeleteCell() {
+    if (this.readOnly) return
     const d = this.deleted.pop()
     if (!d) return
     const cell = this.buildCell(d.raw)
@@ -904,6 +946,7 @@ class Notebook {
   }
 
   pasteCell() {
+    if (this.readOnly) return
     if (!this.clip) return
     const raw = JSON.parse(JSON.stringify(this.clip))
     if (raw.id !== undefined) raw.id = M.cellId()
@@ -917,6 +960,7 @@ class Notebook {
   }
 
   move(cell, dir) {
+    if (this.readOnly) return
     const i = this.cells.indexOf(cell)
     const j = i + dir
     if (i < 0 || j < 0 || j >= this.cells.length) return
@@ -929,6 +973,7 @@ class Notebook {
   }
 
   setKind(cell, kind) {
+    if (this.readOnly) return
     if (!cell || cell.kind === kind) return
     const i = this.cells.indexOf(cell)
     const raw = cell.raw
@@ -1276,6 +1321,7 @@ class Notebook {
   // ------------------------------------------------------------------------------------------------- running
 
   runSelected({ advance = false } = {}) {
+    if (this.readOnly) return
     const cell = this.cur()
     if (!cell) return
     const i = this.sel
@@ -1333,6 +1379,7 @@ class Notebook {
   }
 
   runAll() {
+    if (this.readOnly) return
     return this.runCells(this.cells.slice())
   }
 
@@ -1383,6 +1430,7 @@ class Notebook {
   }
 
   clearOutputs(cells = this.cells) {
+    if (this.readOnly) return
     for (const c of cells) {
       if (c.kind !== 'code' || c.state !== 'idle') continue
       c.raw.outputs = []
@@ -1499,6 +1547,31 @@ class Notebook {
     return this.nb
   }
 
+  /** Share snapshot: a DETACHED copy of the .ipynb doc (cell sources mutate in place, so the snapshot must not alias the live doc); outputs dropped first when it nears the 180 KB transport cap. */
+  shareSnapshot() {
+    const nb = JSON.parse(JSON.stringify(this.snapshot())) // detached copy: the live doc keeps mutating under us
+    if (JSON.stringify(nb).length <= 160000) return nb
+    for (const raw of nb.cells || []) if (raw && raw.outputs) raw.outputs = []
+    return JSON.stringify(nb).length <= 180000 ? nb : null
+  }
+
+  /** Apply a peer op or snapshot: rebuild cells from the raws. Remote applications never re-emit and never dirty
+   *  (a readonly guest must not autosave a foreign document; a live guest's own edits mark dirty as usual). */
+  shareApply(s) {
+    if (!s || !Array.isArray(s.cells)) return
+    if (this.shareApplying) return
+    if (!this.nb) this.nb = { nbformat: 4, nbformat_minor: 5, metadata: {}, cells: [] } // guest applied before its own open resolved
+    this.shareApplying = true
+    try {
+      this.setCells(s.cells)
+      this.sel = Math.min(this.sel, Math.max(0, this.cells.length - 1))
+      this.select(this.sel, { keepFocus: false, scroll: false })
+      if (!this.readOnly) this.markDirty()
+    } finally {
+      this.shareApplying = false
+    }
+  }
+
   async save({ as = false, force = false, silent = false } = {}) {
     if (!this.nb) return false
     let file = this.path
@@ -1557,6 +1630,8 @@ class Notebook {
   // ------------------------------------------------------------------------------------------------- lifecycle
 
   dispose() {
+    if (typeof this.unshare === 'function') { try { this.unshare() } catch { /* already unregistered */ } }
+    clearTimeout(this.shareCoalesce)
     this.disposed = true
     for (const t of this.timers) clearInterval(t)
     window.removeEventListener('pagehide', this.onHide)
@@ -1582,6 +1657,27 @@ export default {
   icon: ICONS.notebook,
   mount(el, ctx) {
     const nb = new Notebook(el, ctx)
-    return { dispose: () => nb.dispose(), focus: () => nb.focus(), resize() {} }
+    return { dispose: () => nb.dispose(), focus: () => nb.focus(), resize() {}, share: nb.shareAdapter }
   },
 }
+
+// ---------------------------------------------------------------------------------------------------- sharing
+
+const NOTEBOOK_SHARE_MODES = ['live', 'readonly']
+
+/**
+ * The share adapter for one mounted notebook (local://chats-contract.md, "Sharing"). `hooks` carries the instance's
+ * live closures; each is optional so the registry factory always returns a well-formed adapter. The op is the whole
+ * cells array (coalesced 250 ms trailing); guests rebuild with setCells.
+ */
+function notebookShare(hooks = {}) {
+  return {
+    modes: NOTEBOOK_SHARE_MODES,
+    snapshot: () => (hooks.snapshot ? hooks.snapshot() : null),
+    applyOp: (op, meta) => { if (hooks.applyOp) hooks.applyOp(op, meta) },
+    applySnapshot: (s) => { if (hooks.applySnapshot) hooks.applySnapshot(s) },
+    onLocalOp: (cb) => (hooks.onLocalOp ? hooks.onLocalOp(cb) : () => {}),
+    readonly: (on) => { if (hooks.readonly) hooks.readonly(on) },
+  }
+}
+registerShare('notebook', notebookShare)

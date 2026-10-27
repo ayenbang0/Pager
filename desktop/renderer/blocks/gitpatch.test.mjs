@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { buildPatch, changeCount, diffStat, parseDiff } from './gitpatch.js'
+import { buildPatch, changeCount, diffStat, lineTotal, parseDiff, splitRows } from './gitpatch.js'
 
 const MODIFIED = [
   'diff --git a/a.txt b/a.txt',
@@ -99,4 +99,27 @@ test('empty or binary input parses to an empty diff', () => {
   const b = parseDiff('diff --git a/i.png b/i.png\nindex 1..2 100644\nBinary files a/i.png and b/i.png differ\n')
   assert.equal(b.binary, true)
   assert.equal(b.hunks.length, 0)
+})
+
+test('lineTotal counts every hunk line', () => {
+  assert.equal(lineTotal(parseDiff(MODIFIED)), 12)
+  assert.equal(lineTotal(parseDiff('')), 0)
+})
+
+test('splitRows pairs a deletion run with the addition run after it and keeps line indexes', () => {
+  const d = parseDiff(MODIFIED)
+  const rows = splitRows(d.hunks[0])
+  const text = rows.map((r) => (r.meta ? 'meta' : `${r.l ? r.l.line.t + r.l.line.text : '_'}|${r.r ? r.r.line.t + r.r.line.text : '_'}`))
+  assert.deepEqual(text, [' one| one', '-two|+TWO', ' three| three', ' four| four', '-five|+FIVE', ' six| six'])
+  assert.deepEqual(rows[1].l.li, 1)
+  assert.deepEqual(rows[1].r.li, 2)
+  // uneven runs leave the shorter side empty; pure additions and pure deletions stand alone
+  const uneven = { lines: [{ t: '-', text: 'a' }, { t: '-', text: 'b' }, { t: '+', text: 'c' }, { t: ' ', text: 'x' }, { t: '+', text: 'd' }, { t: '-', text: 'e' }] }
+  assert.deepEqual(splitRows(uneven).map((r) => `${r.l ? r.l.li : '_'}|${r.r ? r.r.li : '_'}`), ['0|2', '1|_', '3|3', '_|4', '5|_'])
+})
+
+test('splitRows turns "no newline" markers into full-width meta rows', () => {
+  const rows = splitRows({ lines: [{ t: '-', text: 'a' }, { t: '\\', text: 'No newline at end of file' }, { t: '+', text: 'b' }, { t: '\\', text: 'No newline at end of file' }] })
+  assert.deepEqual(rows.map((r) => (r.meta ? `meta${r.meta.li}` : `${r.l ? r.l.li : '_'}|${r.r ? r.r.li : '_'}`)), ['0|_', 'meta1', '_|2', 'meta3'])
+  assert.deepEqual(splitRows({ lines: [] }), [])
 })

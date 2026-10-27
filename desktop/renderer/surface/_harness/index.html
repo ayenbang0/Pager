@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<title>surface harness</title>
+<link rel="stylesheet" href="../../ui/tokens.css">
+<link rel="stylesheet" href="../../vendor/xterm.css">
+<style>
+  @font-face { font-family: 'Geist'; src: url('../../fonts/Geist.woff2') format('woff2'); font-weight: 100 900; }
+  @font-face { font-family: 'Geist Mono'; src: url('../../fonts/GeistMono.woff2') format('woff2'); font-weight: 100 900; }
+  html, body { height: 100%; margin: 0; }
+  body { background: var(--page); color: var(--t1); font: 13.5px var(--sans); }
+  .stage { position: fixed; inset: 0; display: flex; gap: 6px; padding: 6px; background:
+    radial-gradient(900px 500px at 10% -10%, var(--glow-a), transparent 60%), radial-gradient(700px 400px at 90% 110%, var(--glow-b), transparent 60%), var(--page); }
+  .card { position: relative; flex: 1; min-width: 0; min-height: 0; background: var(--tv-bg); border-radius: 12px; box-shadow: 0 0 0 1px var(--l2); overflow: hidden; }
+  #term { position: absolute; inset: 10px 4px 6px 12px; }
+  #pane { flex: 0 0 0; width: 0; overflow: hidden; transition: none; }
+  #pane.open { flex: 0 0 46%; width: auto; }
+  .xterm .xterm-viewport { background: transparent !important; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="card" id="termcard"><div id="term"></div></div>
+  <div class="card" id="pane"></div>
+</div>
+<script src="../../vendor/xterm.js"></script>
+<script type="module">
+import { attachSurface } from '../index.js'
+import { encodeSurface, rowsOf } from '../protocol.js'
+import block from '../block.js'
+
+const q = new URLSearchParams(location.search)
+document.documentElement.dataset.theme = q.get('theme') || 'dark'
+window.__errors = []
+window.__opened = []
+
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim()
+await document.fonts.load('13px "Geist Mono"')
+const term = new Terminal({
+  fontFamily: '"Geist Mono", Consolas, monospace', fontSize: 13, lineHeight: 1.28, allowProposedApi: true, allowTransparency: true, scrollback: 2000, cursorBlink: false,
+  theme: { background: css('--tv-bg'), foreground: css('--tv-fg'), cursor: css('--tv-cur'), selectionBackground: css('--tv-sel'),
+    black: css('--ansi0'), red: css('--ansi1'), green: css('--ansi2'), yellow: css('--ansi3'), blue: css('--ansi4'), magenta: css('--ansi5'), cyan: css('--ansi6'), white: css('--ansi7'),
+    brightBlack: css('--ansi8'), brightGreen: css('--ansi10'), brightBlue: css('--ansi12'), brightWhite: css('--ansi15') },
+})
+term.open(document.getElementById('term'))
+
+const paneEl = document.getElementById('pane')
+let paneView = null
+const surface = attachSurface(term, {
+  onError: (m) => window.__errors.push(m),
+  // The real shell opens a `surface` block pane; here the same block module mounts into the right-hand card.
+  openBlock: async (name, args) => {
+    const { takeSurface } = await import('../stash.js')
+    window.__opened.push({ name, stash: args.stash, kind: (takeSurface(args.stash) || {}).kind })
+    if (paneView) paneView.dispose()
+    paneEl.classList.add('open')
+    paneEl.replaceChildren()
+    paneView = block.mount(paneEl, { args, setTitle: (t) => (document.title = t) })
+    fit()
+  },
+})
+
+function fit() {
+  const el = document.getElementById('term')
+  const cell = term._core._renderService.dimensions.css.cell
+  term.resize(Math.max(20, Math.floor((el.clientWidth - 14) / cell.width)), Math.max(5, Math.floor(el.clientHeight / cell.height)))
+}
+fit()
+new ResizeObserver(() => fit()).observe(document.getElementById('termcard'))
+
+const write = (s) => new Promise((r) => term.write(s, r))
+const prompt = (cmd) => `\x1b[38;5;78m~/pager\x1b[0m \x1b[38;5;244m$\x1b[0m ${cmd}\r\n`
+const show = (msg) => encodeSurface(msg) + '\r\n'.repeat(rowsOf(msg))
+
+// ---- samples ----
+const MERMAID = `flowchart LR
+  A([Program]) -->|OSC 7777| B{xterm parser}
+  B -->|valid| C[Marker + decoration]
+  B -->|too big / bad| D[[Refused]]
+  C --> E[(Scrollback)]
+  E -->|reflow| C`
+const MATH = String.raw`\mathcal{L}(\theta)=\sum_{i=1}^{n}\log p_\theta(x_i)\qquad \nabla_\theta \mathcal{L} = \int_{0}^{\infty} e^{-t}\,t^{x-1}\,dt = \Gamma(x)`
+const DIFF = `diff --git a/src/term/surface.ts b/src/term/surface.ts
+index 3f9a1c2..8be4d07 100644
+--- a/src/term/surface.ts
++++ b/src/term/surface.ts
+@@ -12,9 +12,13 @@ export function attach(term: Terminal) {
+ import { decode } from './protocol.js'
+ 
+-const MAX = 64 * 1024
++// One mebibyte of JSON, as the protocol says
++const MAX = 1024 * 1024
+ 
+ export function place(msg: Message) {
+-  const marker = term.registerMarker()
++  const marker = term.registerMarker(0)
++  if (!marker) return false // nothing to anchor to
+   const rows = msg.height ?? 12
+-  return mount(marker, rows)
++  return mount(marker, rows, { layer: 'top' })
+ }
+@@ -40,4 +44,5 @@ function drop(id: string) {
+   blocks.delete(id)
+   deco.dispose()
++  marker.dispose()
+ }
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1,3 +1,3 @@
+ # Pager
+-A terminal.
++A terminal that draws.
+ See docs.
+diff --git a/src/old.txt b/src/new.txt
+similarity index 100%
+rename from src/old.txt
+rename to src/new.txt
+`
+function makePng() {
+  const c = document.createElement('canvas')
+  c.width = 640; c.height = 360
+  const g = c.getContext('2d')
+  const bg = g.createLinearGradient(0, 0, 640, 360)
+  bg.addColorStop(0, '#0b1020'); bg.addColorStop(.5, '#1b2f6b'); bg.addColorStop(1, '#3b6cff')
+  g.fillStyle = bg; g.fillRect(0, 0, 640, 360)
+  for (let i = 0; i < 9; i++) {
+    const r = g.createRadialGradient(100 + i * 62, 180 + Math.sin(i) * 90, 4, 100 + i * 62, 180 + Math.sin(i) * 90, 90)
+    r.addColorStop(0, `hsla(${190 + i * 14},90%,70%,.9)`); r.addColorStop(1, 'hsla(220,90%,60%,0)')
+    g.fillStyle = r; g.fillRect(0, 0, 640, 360)
+  }
+  g.fillStyle = 'rgba(255,255,255,.92)'; g.font = '600 34px system-ui, sans-serif'; g.fillText('pager show image', 34, 318)
+  return c.toDataURL('image/png')
+}
+const HTML = '<h3 style="margin:0 0 6px">Sandboxed page</h3><p>Scripts, forms and navigation are off. <a href="https://example.com">links</a> do nothing here.</p><script>window.parent.__xss = "html-sandbox script ran"<\/script><img src="https://example.com/x.png"><style>p{color:#8fb6ff}</style>'
+
+const DEMOS = {
+  mermaid: () => ({ cmd: 'pager show mermaid flow.mmd', msg: { kind: 'mermaid', id: 'mmd1', title: 'flow.mmd', source: MERMAID, height: 16 } }),
+  math: () => ({ cmd: 'echo "\\mathcal{L}(\\theta)=…" | pager show math -', msg: { kind: 'math', id: 'math1', title: 'loss', source: MATH, height: 5 } }),
+  diff: () => ({ cmd: 'git diff | pager show diff -', msg: { kind: 'diff', id: 'diff1', title: 'git diff', source: DIFF, height: 20 } }),
+  image: () => ({ cmd: 'pager show image banner.png', msg: { kind: 'image', id: 'img1', title: 'banner.png', source: makePng(), height: 14 } }),
+  html: () => ({ cmd: 'pager show html page.html', msg: { kind: 'html-sandbox', id: 'html1', title: 'page.html', source: HTML, height: 8 } }),
+}
+
+// hostile payloads: nothing may run, everything must show up as text or inert
+const XSS = {
+  diff: () => ({ kind: 'diff', id: 'xss-diff', title: '<img src=x onerror="window.__xss=\'title\'">', height: 8, source:
+    `diff --git a/"><img src=x onerror="window.__xss='file'"> b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@ <svg onload="window.__xss='section'">\n-<script>window.__xss='del'<\/script>\n+<img src=x onerror="window.__xss='add'">\n` }),
+  math: () => ({ kind: 'math', id: 'xss-math', height: 5, source: String.raw`\href{javascript:window.__xss='href'}{click me} \htmlClass{x}{y} \includegraphics{https://evil.example/x.png} \url{javascript:1} <img src=x onerror="window.__xss='math'">` }),
+  mermaid: () => ({ kind: 'mermaid', id: 'xss-mmd', height: 10, source: `graph TD\n  A["<img src=x onerror=window.__xss='label'>"] --> B[<script>window.__xss='script'<\/script>]\n  click A call alert(1)\n  click B href "javascript:window.__xss='click'"` }),
+  html: () => ({ kind: 'html-sandbox', id: 'xss-html', height: 6, source: HTML }),
+  image: () => ({ kind: 'image', id: 'xss-img', height: 6, source: 'data:image/svg+xml;base64,' + btoa('<svg xmlns="http://www.w3.org/2000/svg" onload="window.__xss=\'svg\'"/>') }),
+}
+
+async function demo(name) {
+  const d = DEMOS[name]()
+  await write(prompt(d.cmd))
+  await write(show(d.msg))
+}
+window.__demo = demo
+window.__term = term
+window.__surface = surface
+window.__write = write
+window.__fit = fit
+window.__feed = async (msg) => write(show(msg))
+window.__raw = async (osc) => write(osc)
+window.__openFirst = () => document.querySelector('.xterm-decoration [aria-label="Open in a pane"]').click()
+window.__xssRun = async () => {
+  delete window.__xss
+  for (const k of Object.keys(XSS)) {
+    await write(prompt(`# hostile ${k}`))
+    // hand-made bytes: the decoder must refuse what the encoder would not even build
+    if (k === 'image') await write(`\x1b]7777;pager-surface;${btoa(JSON.stringify(XSS[k]()))}\x1b\\` + '\r\n'.repeat(6))
+    else try { await write(show(XSS[k]())) } catch (e) { window.__errors.push(String(e)) }
+  }
+  // a hand-made over-size and a malformed sequence go through the same handler
+  await write(`\x1b]7777;pager-surface;${'A'.repeat(1_500_000)}\x07`)
+  await write('\x1b]7777;pager-surface;%%%\x07')
+  await new Promise((r) => setTimeout(r, 2500))
+  return { xss: window.__xss ?? null, errors: window.__errors, blocks: surface.count() }
+}
+
+const which = q.get('demo') || 'all'
+await write('\x1b[38;5;244mPager surface protocol: OSC 7777 ; pager-surface ; <base64 json> ST\x1b[0m\r\n\r\n')
+if (which === 'xss') await window.__xssRun()
+else for (const k of which === 'all' ? ['mermaid', 'math', 'diff', 'image'] : [which]) await demo(k)
+await write(prompt(''))
+window.__ready = true
+</script>
+</body>
+</html>

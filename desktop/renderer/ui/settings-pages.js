@@ -4,7 +4,7 @@
 
 import { h, uid } from './dom.js'
 import { app, DEFAULT_SETTINGS } from './store.js'
-import { icon, agentTile } from './icons.js'
+import { icon } from './icons.js'
 import { toast } from './toast.js'
 import { confirmDialog } from './dialog.js'
 import { allCommands, chordFromEvent, commandForChord } from './commands.js'
@@ -127,7 +127,6 @@ function general() {
   return [
     section('Shell', [R('Shell', 'What new blocks on this PC run, as a login shell. Empty runs your login shell.', fld('shell', { mono: true, placeholder: 'Default login shell', live: true, label: 'Shell' }), { block: true })]),
     section('Tabs and splits', [
-      R('New blocks open', 'What Ctrl+Shift+T, Ctrl+Shift+Enter and Ctrl+Shift+O start. Ctrl+Shift+A always opens an agent block.', seg('new_blocks', [{ value: 'shell', label: 'Shell' }, { value: 'agent', label: 'Agent' }], { label: 'New blocks open' })),
       R('New tabs start in', 'Splits always start in the directory of the block they split.', seg('new_tabs_start', [{ value: 'current', label: 'Current directory' }, { value: 'home', label: 'Home' }], { label: 'New tabs start in' }), { block: true }),
     ]),
     section('Selection', [R('Copy on select', 'Finishing a selection puts it on the clipboard.', tog('copy_on_select', 'Copy on select'))]),
@@ -141,31 +140,7 @@ function general() {
 
 /* ------------------------------------------------------------------ 02 Agents */
 
-const AGENTS = [
-  { id: 'omp', name: 'omp' },
-  { id: 'claude', name: 'Claude Code' },
-  { id: 'opencode', name: 'OpenCode' },
-  { id: 'hermes', name: 'Hermes' },
-  { id: 'custom', name: 'Custom' },
-]
-
-function agentTiles() {
-  const grid = h('div', { class: 'agent-grid', attrs: { role: 'radiogroup', 'aria-label': 'Agent' } })
-  for (const a of AGENTS) {
-    const b = h('button', { class: 'pf-ag', type: 'button', attrs: { role: 'radio', 'aria-checked': 'false' }, onClick: () => put('agent', a.id) }, agentTile(a.id, 20), h('span', null, a.name))
-    const paint = () => {
-      const on = get('agent') === a.id
-      b.classList.toggle('on', on)
-      b.setAttribute('aria-checked', String(on))
-    }
-    bound.push(paint)
-    paint()
-    grid.append(b)
-  }
-  return grid
-}
-
-/** Editor for a list of {id, name, <second>} entries stored in a setting (custom agents, hosts). */
+/** Editor for a list of {id, name, <second>} entries stored in a setting (hosts). */
 function listEditor({ key, q, title, desc, second, secondPlaceholder, nameLabel, empty, addLabel, mk }) {
   const list = h('div', { class: 'ed-list' })
   const items = () => (Array.isArray(app.settings[key]) ? app.settings[key] : [])
@@ -216,15 +191,7 @@ function listEditor({ key, q, title, desc, second, secondPlaceholder, nameLabel,
 
 function agents() {
   return [
-    section('Default', [
-      R('Agent', 'What agent blocks (Ctrl+Shift+A) run.', agentTiles(), { block: true, kw: 'omp claude opencode hermes custom' }),
-      R('Agent opens', "Where a new agent block goes. Replace takes the tab's only pane when it is a shell idle at its prompt, and splits otherwise.", seg('agent_opens', [{ value: 'split', label: 'Split' }, { value: 'replace', label: 'Replace' }, { value: 'tab', label: 'New tab' }], { label: 'Agent opens' }), { block: true }),
-      R('Open agents with the composer', 'New agent panes open with the wordmark and composer until you send the first prompt.', tog('agent_composer', 'Open agents with the composer')),
-    ]),
     section('ACP chats', [R('Open agent commands as ACP chats', "Typing claude, codex or copilot in a new shell opens it in Pager's chat over ACP. `command claude` runs its own interface.", tog('auto_acp', 'Open agent commands as ACP chats'))]),
-    section('Custom agents', [
-      listEditor({ key: 'agents_custom', q: 'custom agents commands that run as an agent block', title: 'Agents', desc: 'Commands that run as a Custom agent block. Environment variables are set in settings.json.', second: 'command', secondPlaceholder: 'Command', nameLabel: 'Name', empty: 'No custom agents yet.', addLabel: 'Add', mk: (x) => x }),
-    ]),
   ]
 }
 
@@ -241,7 +208,7 @@ const LAYOUTS = [
 
 const DEFAULT_LOOK = {
   dark: { page: '#000000', accent: '#5a8cff', dots: ['#ff6166', '#f5b13d', '#3ecf8e', '#35c7e6', '#5b8dff', '#b98cff', '#5a8cff'] },
-  light: { page: '#efefec', accent: '#5a7f80', dots: ['#cf3a3f', '#a86a00', '#1d8a5a', '#0f7f93', '#2f5fe0', '#8a4fd8', '#5a7f80'] },
+  light: { page: '#efefec', accent: '#4a6d6e', dots: ['#b63337', '#8b5800', '#18714a', '#0d6d7e', '#2c59d3', '#7b46c0', '#4a6d6e'] },
 }
 
 function themeSection() {
@@ -711,7 +678,7 @@ function files() {
 
 export const PAGES = [
   { id: 'general', name: 'General', icon: 'sliders', title: 'Shell, tabs and selection', blurb: 'What new blocks run, where new tabs start, and what a selection does.', build: general },
-  { id: 'agents', name: 'Agents', icon: 'user', title: 'Coding agents', blurb: 'What agent blocks run and where they open.', build: agents },
+  { id: 'agents', name: 'Agents', icon: 'user', title: 'Coding agents', blurb: 'How agent commands typed in a terminal open.', build: agents },
   { id: 'appearance', name: 'Appearance', icon: 'sun', title: 'Themes and interface style', blurb: 'Hover a theme to try it on the whole window; click to keep it. Layout, material and density change the chrome around the terminals.', build: appearance },
   { id: 'terminal', name: 'Terminal', icon: 'terminal', title: 'The terminal itself', blurb: 'Type, cursor, scrolling, rendering and the prompt line.', build: terminal },
   { id: 'databases', name: 'Databases', icon: 'database', title: 'SQLite databases', blurb: 'How database blocks page through tables and guard destructive changes.', build: databases },

@@ -160,8 +160,9 @@ export async function runOneShot(turn: OneShotTurn): Promise<Reply> {
 
 export type Probe = { ok: true; commands: AcpCommand[]; options: AcpConfigOption[] } | { ok: false; error: string }
 
-/** Starts an agent's ACP server in `dir` and handshakes; also captures the first command list the agent advertises. */
-export async function probeAcp(bin: string, args: string[], dir: string, env: NodeJS.ProcessEnv, waitMs = COMMANDS_WAIT_MS): Promise<Probe> {
+/** Starts an agent's ACP server in `dir` and handshakes; also captures the first command list the agent advertises. `signal` kills the agent at once, so a shutdown does not wait out the handshake timeout. */
+export async function probeAcp(bin: string, args: string[], dir: string, env: NodeJS.ProcessEnv, opts: { waitMs?: number; signal?: AbortSignal } = {}): Promise<Probe> {
+  const { waitMs = COMMANDS_WAIT_MS, signal } = opts
   const child = startProcess(bin, args, { cwd: dir, env, stdin: 'pipe' })
   let commands: AcpCommand[] = []
   const got = Promise.withResolvers<void>()
@@ -171,6 +172,9 @@ export async function probeAcp(bin: string, args: string[], dir: string, env: No
       got.resolve()
     },
   })
+  const abort = (): void => killTree(child)
+  signal?.addEventListener('abort', abort, { once: true })
+  if (signal?.aborted === true) abort()
   try {
     const session = await openSession(conn, { cwd: dir, timeoutMs: ACP_PROBE_TIMEOUT_MS })
     const wait = setTimeout(() => got.resolve(), waitMs)
@@ -180,6 +184,7 @@ export async function probeAcp(bin: string, args: string[], dir: string, env: No
   } catch (err) {
     return { ok: false, error: errMsg(err) }
   } finally {
+    signal?.removeEventListener('abort', abort)
     await endChild(child, 0)
   }
 }

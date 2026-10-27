@@ -1,4 +1,5 @@
 import { DAEMON_VERBS, parseDaemonArgs, type DaemonArgs } from '../daemon/args.js'
+import { parseShowArgs, type ShowArgs } from '../surface/emit.js'
 
 export type DesktopAction = 'install' | 'uninstall' | 'launch' | 'status'
 
@@ -14,7 +15,7 @@ export interface DesktopArgs {
 
 export interface ParsedArgs {
   /** `run` starts the UI; `exec` hands a command to the running pager (or starts one with it). */
-  command: 'run' | 'exec' | 'desktop' | 'daemon' | 'update' | 'docs' | 'studio' | 'lock' | 'unlock' | 'help' | 'version'
+  command: 'run' | 'exec' | 'desktop' | 'daemon' | 'show' | 'update' | 'docs' | 'studio' | 'lock' | 'unlock' | 'help' | 'version'
   lan: boolean
   lanTarget?: string
   noAgents: boolean
@@ -22,6 +23,7 @@ export interface ParsedArgs {
   words?: string[]
   desktop?: DesktopArgs
   daemon?: DaemonArgs
+  show?: ShowArgs
 }
 
 const TARGET = /^[^\s:]+:\d{1,5}$/
@@ -34,6 +36,10 @@ export function parseArgs(argv: string[]): ParsedArgs | { error: string } {
   }
   if (argv[0] === 'run') return parseExec(argv.slice(1), out)
   if (argv[0] === 'desktop') return parseDesktop(argv.slice(1), out)
+  if (argv[0] === 'show') {
+    const show = parseShowArgs(argv.slice(1))
+    return 'error' in show ? show : { ...out, command: 'show', show }
+  }
   if (argv[0] !== undefined && DAEMON_VERBS.includes(argv[0])) {
     const daemon = parseDaemonArgs(argv[0], argv.slice(1))
     return 'error' in daemon ? daemon : { ...out, command: 'daemon', daemon }

@@ -1,14 +1,13 @@
 // The pane host (#panes): lays the active tab's split tree out as cards, runs terminals and blocks inside them,
 // and owns pane focus, dividers (pane.ratio) and the pane context menus.
 import { h, clamp } from './dom.js'
-import { app, layoutTree, tabPaneIds, isBlock, blockName } from './store.js'
+import { app, layoutTree, tabPaneIds, isBlock, blockName, isHome } from './store.js'
 import { TerminalView } from './terminal.js'
 import { icon } from './icons.js'
 import { BLOCKS } from '../blocks/index.js'
 import { runCommand } from './commands.js'
-import { mountAgent } from './agent.js'
 import { showMenu } from './popover.js'
-import { isAgent, paneLabel, paneGlyph, shortPath } from './labels.js'
+import { paneLabel, paneGlyph, shortPath } from './labels.js'
 
 const seenFocus = new Map() // tabId -> the focus the daemon last reported
 const views = new Map() // paneId -> PaneView
@@ -23,7 +22,6 @@ class PaneView {
     this.visible = false
     this.term = null
     this.block = null
-    this.agent = null
     this.exitShown = false
     this.focusEl = h('i', { class: 'tn-focus' })
     this.grip = h('button', { class: 'tn-grip', type: 'button', attrs: { 'data-tip': 'Pane menu' }, onClick: (e) => this.menu(e.currentTarget) }, icon('drag-grip'))
@@ -42,7 +40,7 @@ class PaneView {
         { class: 'hbtns' },
         h('button', { type: 'button', attrs: { 'data-tip': 'Split right', 'data-tip-keys': 'Ctrl+Shift+Enter' }, onClick: () => runCommand('pane.split.right', { paneId: this.id }) }, icon('split-right')),
         h('button', { type: 'button', attrs: { 'data-tip': 'Split down', 'data-tip-keys': 'Ctrl+Alt+Shift+Enter' }, onClick: () => runCommand('pane.split.down', { paneId: this.id }) }, icon('split-down')),
-        h('button', { type: 'button', attrs: { 'data-tip': 'Close pane', 'data-tip-keys': 'Ctrl+Shift+W' }, onClick: () => runCommand('pane.close', { paneId: this.id }) }, icon('close')),
+        isHome(pane) ? null : h('button', { type: 'button', attrs: { 'data-tip': 'Close pane', 'data-tip-keys': 'Ctrl+Shift+W' }, onClick: () => runCommand('pane.close', { paneId: this.id }) }, icon('close')),
       ),
     )
     this.content = h('div', { class: isBlock(pane) ? 'tn-block' : 'tn-term' })
@@ -54,6 +52,13 @@ class PaneView {
       this.body.addEventListener('contextmenu', (e) => {
         e.preventDefault()
         this.menu({ x: e.clientX, y: e.clientY }, true)
+      })
+    } else {
+      // Right-click anywhere on a block offers the pane menu (with Close), unless the block handled the click itself or it landed in a text field.
+      this.body.addEventListener('contextmenu', (e) => {
+        if (e.defaultPrevented || (e.target instanceof Element && e.target.closest('input, textarea, select, [contenteditable="true"], .cm-editor'))) return
+        e.preventDefault()
+        this.menu({ x: e.clientX, y: e.clientY }, false)
       })
     }
   }
@@ -82,7 +87,7 @@ class PaneView {
     const tab = app.activeTab()
     const others = (app.activeSession() ? app.activeSession().tabs : []).filter((t) => !tab || t.id !== tab.id)
     if (others.length) items.push({ label: 'Move to tab', icon: 'arrow-right', children: others.map((t) => ({ label: t.title || t.id, onClick: () => app.call('pane.move', { paneId: this.id, toTab: t.id }) })) })
-    items.push({ sep: true }, { label: 'Copy folder path', icon: 'copy', disabled: !pane.cwd, onClick: () => navigator.clipboard.writeText(pane.cwd).catch(() => {}) }, { label: 'Close pane', icon: 'close', keys: 'Ctrl+Shift+W', danger: true, onClick: () => runCommand('pane.close', { paneId: this.id }) })
+    items.push({ sep: true }, { label: 'Copy folder path', icon: 'copy', disabled: !pane.cwd, onClick: () => navigator.clipboard.writeText(pane.cwd).catch(() => {}) }, { label: isBlock(pane) ? 'Close block' : 'Close pane', icon: 'close', keys: 'Ctrl+Shift+W', danger: true, disabled: isHome(pane), onClick: () => runCommand('pane.close', { paneId: this.id }) })
     showMenu({ anchor, items, align: 'start' })
   }
 
@@ -108,18 +113,15 @@ class PaneView {
     this.endedEl = h(
       'div',
       { class: 'tn-ended' },
+      h('h4', {}, code ? 'Process ended with an error' : 'Process ended'),
+      h('p', {}, code === undefined ? paneLabel(pane) : `${paneLabel(pane)} · exit code ${code}`),
       h(
         'div',
-        { class: 'tn-card' },
-        h('span', { class: 'disc' }, icon(code ? 'error' : 'check-circle', 18)),
-        h('h4', {}, code ? 'Process ended with an error' : 'Process ended'),
-        h('p', {}, code === undefined ? paneLabel(pane) : `${paneLabel(pane)} · exit code ${code}`),
-        h(
-          'div',
-          { class: 'acts' },
-          h('button', { class: 'btn sm accent', type: 'button', onClick: () => runCommand('pane.split.right', { paneId: this.id, kind: 'shell' }) }, 'New shell beside'),
-          h('button', { class: 'btn sm', type: 'button', onClick: () => runCommand('pane.close', { paneId: this.id }) }, 'Close pane'),
-        ),
+        { class: 'acts' },
+        h('button', { class: 'btn sm accent', type: 'button', onClick: () => runCommand('pane.split.right', { paneId: this.id, kind: 'shell' }) }, 'New shell beside'),
+        pane.kind === 'pager'
+          ? h('button', { class: 'btn sm', type: 'button', onClick: () => app.call('pane.restart', { paneId: this.id }) }, 'Restart Pager')
+          : h('button', { class: 'btn sm', type: 'button', onClick: () => runCommand('pane.close', { paneId: this.id }) }, 'Close pane'),
       ),
     )
     this.body.append(this.endedEl)
@@ -161,19 +163,6 @@ class PaneView {
     this.term.start().catch((e) => {
       this.content.append(h('div', { class: 'tn-nope' }, `Terminal failed to start: ${e && e.message ? e.message : e}`))
     })
-    if (isAgent(pane) && pane.state === 'running' && app.settings.agent_composer !== false) {
-      this.agent = mountAgent(pane, this.term, () => this.revealTerminal())
-      this.body.append(this.agent.el)
-      if (app.focusedPaneId === this.id) requestAnimationFrame(() => this.agent && this.agent.focus())
-    }
-  }
-
-  revealTerminal() {
-    if (this.agent) {
-      this.agent.dispose()
-      this.agent = null
-    }
-    this.focus()
   }
 
   async mountBlock(pane) {
@@ -197,6 +186,7 @@ class PaneView {
     const view = this
     const ctx = {
       args,
+      paneId: view.id, // blocks/share.js keys mounted block instances by pane (registerInstance on mount, unregister on dispose)
       get cwd() {
         const p = view.pane
         return (p && p.cwd) || pane.cwd || ''
@@ -224,14 +214,12 @@ class PaneView {
   }
 
   focus() {
-    if (this.agent) this.agent.focus()
-    else if (this.term) this.term.focus()
+    if (this.term) this.term.focus()
     else if (this.block && this.block.focus) this.block.focus()
   }
 
   dispose() {
     this.disposed = true
-    if (this.agent) this.agent.dispose()
     if (this.term) this.term.dispose()
     if (this.ro) this.ro.disconnect()
     if (this.block && this.block.dispose) {

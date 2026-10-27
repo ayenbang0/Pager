@@ -30,8 +30,8 @@ html.lay-studio #sidebar { margin: 0; border-radius: 0; background: transparent;
 html.lay-studio .tn-head { height: 30px; }
 html.lay-studio.dense-islands #stage { padding: 4px; }
 html.lay-studio.dense-islands .tn-pane { padding: 4px; box-shadow: none; }
-html.lay-studio.dense-islands .tn-body { border-radius: 12px; background: var(--panel); box-shadow: 0 0 0 1px var(--l2); }
-html.lay-studio.dense-islands .tn-head { border-radius: 12px 12px 0 0; }
+html.lay-studio.dense-islands .tn-body { border-radius: var(--r-card); background: var(--panel); box-shadow: 0 0 0 1px var(--l2); }
+html.lay-studio.dense-islands .tn-head { border-radius: var(--r-card) var(--r-card) 0 0; }
 
 /* ------------------------------------------------------------ Float: glass pill that fades while typing */
 html.lay-float #app::before { content: ''; position: absolute; top: 0; left: 0; right: var(--wco); height: var(--tn-bar); -webkit-app-region: drag; z-index: 1; }
@@ -39,17 +39,17 @@ html.lay-float #stage { margin-top: var(--tn-bar); }
 html.lay-float #bar {
   position: absolute; z-index: 30; top: 6px; left: 50%; transform: translateX(-50%);
   height: 32px; padding: 0 4px; gap: 2px; width: max-content; max-width: calc(100% - 2 * var(--wco) - 24px);
-  border-radius: 11px; background: var(--pop-bg);
+  border-radius: var(--r-card); background: var(--pop-bg);
   backdrop-filter: blur(24px) saturate(180%);
   box-shadow: 0 0 0 1px var(--l2), 0 14px 40px -14px rgba(0, 0, 0, .5), inset 0 1px 0 var(--glass-hi);
-  transition: opacity .25s var(--ease), transform .25s var(--ease);
+  transition: opacity var(--dur) var(--ease), transform var(--dur) var(--ease);
 }
 html.lay-float #bar .avatar, html.lay-float #bar .bar-fill, html.lay-float #bar .skel { display: none; }
 html.lay-float .bar-l { gap: 2px; }
 html.lay-float .tt { height: 24px; }
 html.lay-float .session-chip { height: 24px; }
 html.lay-float .bar-tools { margin-left: 2px; box-shadow: inset 1px 0 0 var(--l2); padding-left: 4px; }
-html.lay-float .bar-tools .icon-btn { width: 24px; height: 24px; border-radius: 7px; }
+html.lay-float .bar-tools .icon-btn { width: 24px; height: 24px; border-radius: var(--r-ctl); }
 html.lay-float.tn-typing #bar { opacity: 0; transform: translate(-50%, -6px); pointer-events: none; }
 html.lay-float.tn-typing #bar:hover, html.lay-float.tn-typing #bar:focus-within { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; }
 html.lay-float .tn-pane { padding: 0; }
@@ -61,9 +61,10 @@ html.lay-float .tn-div.col::after { left: 0; right: 0; top: 4px; }
 html.lay-float #sidebar { margin: 0; border-radius: 0; box-shadow: inset -1px 0 0 var(--l2); }
 
 /* ------------------------------------------------------------ Rail: tabs down the left edge, no top bar */
+html.lay-rail .tb-add { white-space: nowrap; flex: none; }
 html.lay-rail #app { display: grid; grid-template-columns: var(--rail-w) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) auto; }
 html.lay-rail #bar { grid-column: 1; grid-row: 1 / 3; flex-direction: column; align-items: stretch; gap: 2px; height: auto; padding: 10px 0 10px 10px; }
-html.lay-rail #stage { grid-column: 2; grid-row: 1; margin-top: 30px; background: var(--panel); border-radius: 12px 0 0 0; box-shadow: inset 1px 1px 0 var(--l1); }
+html.lay-rail #stage { grid-column: 2; grid-row: 1; margin-top: 30px; background: var(--panel); border-radius: var(--r-card) 0 0 0; box-shadow: inset 1px 1px 0 var(--l1); }
 html.lay-rail #statusline { grid-column: 2; grid-row: 2; background: var(--panel); }
 html.lay-rail #app::before { content: ''; position: absolute; top: 0; left: var(--rail-w); right: var(--wco); height: 30px; -webkit-app-region: drag; }
 html.lay-rail .bar-l { padding: 2px 10px 8px 0; }
@@ -71,12 +72,12 @@ html.lay-rail .bar-fill { flex: 1; }
 html.lay-rail .bar-sep { display: none; }
 html.lay-rail .tabs { flex-direction: column; align-items: stretch; gap: 2px; overflow: visible; }
 html.lay-rail .tb-pill { display: none; }
-html.lay-rail .tt { height: 46px; max-width: none; padding: 0 12px; border-radius: 10px 0 0 10px; gap: 10px; flex-wrap: wrap; align-content: center; }
+html.lay-rail .tt { height: 46px; max-width: none; padding: 0 12px; border-radius: var(--r-ctl) 0 0 var(--r-ctl); gap: 10px; flex-wrap: wrap; align-content: center; }
 html.lay-rail .tt .ico { width: 18px; height: 18px; }
 html.lay-rail .tt .ttl { font-size: 13px; font-weight: 500; flex: 1; }
 html.lay-rail .tt .tt-sub { display: block; flex-basis: 100%; margin-left: 28px; margin-top: -14px; font: 11px var(--mono); color: var(--t4); overflow: hidden; text-overflow: ellipsis; }
 html.lay-rail .tt.on { background: var(--panel); box-shadow: inset 1px 0 0 var(--l1), inset 0 1px 0 var(--l1), inset 0 -1px 0 var(--l1); }
-html.lay-rail .tb-add { display: flex; align-items: center; gap: 8px; width: auto; height: 30px; margin-right: 10px; padding: 0 10px; border-radius: 8px; font-size: 12.5px; color: var(--t2); }
+html.lay-rail .tb-add { display: flex; align-items: center; gap: 8px; width: auto; height: 30px; margin-right: 10px; padding: 0 10px; border-radius: var(--r-ctl); font-size: 12.5px; color: var(--t2); }
 html.lay-rail .tb-add .lbl, html.lay-rail .tb-add .kbds { display: inline-flex; }
 html.lay-rail .bar-tools { flex-wrap: wrap; padding: 6px 10px 0 0; }
 html.lay-rail #sidebar { margin: 0; border-radius: 0; background: transparent; box-shadow: inset -1px 0 0 var(--l1); }
@@ -96,9 +97,9 @@ html.tabs-v:not(.lay-rail) .tb-pill { display: none; }
 html.tabs-auto.tabs-v:not(.lay-rail) #vtabs {
   position: absolute; z-index: 25; left: 0; top: 0; bottom: 0; transform: translateX(calc(-100% + 8px));
   background: var(--pop-bg); backdrop-filter: blur(24px) saturate(180%); box-shadow: 1px 0 0 var(--l2), 18px 0 50px -18px rgba(0, 0, 0, .45);
-  transition: transform .3s var(--out);
+  transition: transform var(--dur-slow) var(--out);
 }
-html.tabs-auto.tabs-v:not(.lay-rail) #vtabs > * { opacity: 0; transition: opacity .16s; }
+html.tabs-auto.tabs-v:not(.lay-rail) #vtabs > * { opacity: 0; transition: opacity var(--dur-fast); }
 html.tabs-auto.tabs-v:not(.lay-rail) #vtabs:hover { transform: none; }
 html.tabs-auto.tabs-v:not(.lay-rail) #vtabs:hover > * { opacity: 1; }
 

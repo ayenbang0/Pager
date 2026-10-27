@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { CHANGELOG_KINDS, compareVersions, formatChangelog, getChangesSince, isNewer, latestVersion, loadChangelog, parseChangelog } from './changelog.js'
+import { CHANGELOG_KINDS, compareVersions, formatChangelog, getChangesSince, highlights, isNewer, latestVersion, loadChangelog, parseChangelog, summarize } from './changelog.js'
 import { VERSION } from './version.js'
 
 const SAMPLE = `# Changelog
@@ -141,4 +141,31 @@ test('CRLF line endings (a Windows checkout) parse the same as LF', () => {
   const crlf = parseChangelog(SAMPLE.replace(/\n/g, '\r\n'))
   assert.deepEqual(crlf, lf)
   assert.ok((crlf[0]?.entries.length ?? 0) > 0)
+})
+
+test('summarize keeps the first clause of an entry, without markdown', () => {
+  assert.equal(summarize('a real browser docked beside the terminal, toggled with Ctrl+Shift+B or the `web` button: tabs, address bar'), 'a real browser docked beside the terminal, toggled with Ctrl+Shift+B or the web button')
+  assert.equal(summarize('**Bold** start; then more'), 'Bold start; then more', 'a clause shorter than a dozen characters is not the whole summary')
+  assert.equal(summarize('Ends with a sentence. And another one.'), 'Ends with a sentence')
+  assert.equal(summarize('short: x'), 'short: x', 'a tiny first clause is not all that is kept')
+  assert.equal(summarize('  spaced \n out  '), 'spaced out')
+  assert.equal(summarize(''), '')
+})
+
+test('highlights take the first entry of each kind, then more Added ones, at most max, in file order', () => {
+  const [newest] = parseChangelog(SAMPLE)
+  assert.ok(newest !== undefined)
+  assert.deepEqual(highlights(newest, 3), [
+    { kind: 'Added', text: 'with CRDT-based shared documents' },
+    { kind: 'Added', text: 'Agent orchestration' },
+    { kind: 'Changed', text: 'Rebuilt UI with ink 8' },
+  ])
+  assert.equal(highlights(newest, 1).length, 1)
+  assert.equal(highlights(newest, 0).length, 0)
+  const real = loadChangelog()[0]
+  assert.ok(real !== undefined)
+  const shown = highlights(real)
+  assert.ok(shown.length >= 3 && shown.length <= 4, `${shown.length} highlights`)
+  assert.ok(new Set(shown.map((h) => h.kind)).size >= 2)
+  for (const h of shown) assert.ok(h.text !== '' && !/[`*]/.test(h.text))
 })

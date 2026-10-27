@@ -2,10 +2,14 @@
 // source view with a git change bar, a block-editing Rendered Markdown view, image / PDF / audio / video previews and a hex view.
 // All disk access goes through ctx.rpc -> desktop/electron/blocks/files.cjs (path-validated, mtime-checked).
 import { h } from '../ui/dom.js'
+import { segmented } from '../ui/controls.js'
+import { confirmDialog } from '../ui/dialog.js'
+import { showMenu } from '../ui/popover.js'
 import * as U from './files-util.js'
 import { createCodeEditor } from './files-code.js'
 import { createMarkdownView } from './files-md.js'
 import { createImageView, createAvView, createPdfView, createHexView } from './files-media.js'
+import { registerInstance, registerShare } from './share.js'
 
 const ico = (d, extra = '') => `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round"${extra}>${d}</svg>`
 const I = {
@@ -111,20 +115,23 @@ function mountFiles(host, ctx) {
   let cursor = { label: '', line: 1, col: 1 }
   let disposed = false
   const timers = { gutter: 0, journal: 0, auto: 0 }
-  const popovers = []
+  let moreMenu = null
   const cleanups = []
 
   // ---------------------------------------------------------------- DOM
-  const btnBack = h('button', { class: 'fb-nav', title: kbd('Alt+Left'), 'aria-label': 'Back', html: I.back, onClick: () => go(-1) })
-  const btnFwd = h('button', { class: 'fb-nav', title: kbd('Alt+Right'), 'aria-label': 'Forward', html: I.fwd, onClick: () => go(1) })
+  const btnBack = h('button', { class: 'icon-btn fb-nav', title: kbd('Alt+Left'), 'aria-label': 'Back', html: I.back, onClick: () => go(-1) })
+  const btnFwd = h('button', { class: 'icon-btn fb-nav', title: kbd('Alt+Right'), 'aria-label': 'Forward', html: I.fwd, onClick: () => go(1) })
   const crumb = h('div', { class: 'fb-crumb' })
   const dot = h('span', { class: 'fb-dirty', title: 'Unsaved changes', hidden: true })
-  const chip = h('button', { class: 'fb-chip', hidden: true, title: 'Changes against the index', onClick: () => openGit() })
+  const chip = h('button', { class: 'chip fb-chip', hidden: true, title: 'Changes against the index', onClick: () => openGit() })
   const status = h('div', { class: 'fb-status mono' })
-  const segRendered = h('button', { class: 'fb-seg-b', title: 'Rendered (' + kbd('Ctrl+Shift+M') + ')', 'aria-label': 'Rendered', html: I.eye, onClick: () => setMode('rendered') })
-  const segSource = h('button', { class: 'fb-seg-b', title: 'Source (' + kbd('Ctrl+Shift+M') + ')', 'aria-label': 'Source', html: I.code, onClick: () => setMode('source') })
-  const seg = h('div', { class: 'fb-seg', hidden: true }, segRendered, segSource)
-  const btnMore = h('button', { class: 'fb-more', title: 'More', 'aria-label': 'More', 'aria-haspopup': 'menu', html: I.more, onClick: () => toggleMenu() })
+  const seg = segmented({
+    options: [{ value: 'rendered', icon: 'eye', label: '', tip: 'Rendered' }, { value: 'source', icon: 'code', label: '', tip: 'Source' }],
+    value: S.mode, sm: true, label: 'File view', onChange: (value) => setMode(value),
+  })
+  seg.classList.add('fb-seg')
+  seg.hidden = true
+  const btnMore = h('button', { class: 'icon-btn fb-more', title: 'More', 'aria-label': 'More', 'aria-haspopup': 'menu', html: I.more, onClick: () => toggleMenu() })
   const header = h('div', { class: 'fb-head' }, btnBack, btnFwd, crumb, dot, chip, h('div', { class: 'fb-sp' }), status, seg, btnMore)
   const banner = h('div', { class: 'fb-banner', hidden: true })
   const body = h('div', { class: 'fb-body' })
@@ -160,8 +167,7 @@ function mountFiles(host, ctx) {
     ctx.setTitle && ctx.setTitle((S.name || 'Files') + (S.dirty ? ' •' : ''))
     seg.hidden = !((S.kind === 'text' && U.hasRendered(S.path)) || (S.kind === 'image' && S.svg))
     const rendered = S.kind === 'image' || (S.kind === 'text' && S.mode === 'rendered')
-    segRendered.classList.toggle('on', rendered)
-    segSource.classList.toggle('on', !rendered)
+    seg.setValue(rendered ? 'rendered' : 'source')
     renderChip()
     renderStatus()
   }
@@ -273,13 +279,12 @@ function mountFiles(host, ctx) {
     body.textContent = ''
   }
 
-  function empty(icon, title, sub, actions = []) {
+  function empty(_icon, title, sub, actions = []) {
     clearView()
-    body.append(h('div', { class: 'fb-empty' },
-      h('div', { class: 'fb-empty-i', html: icon }),
+    body.append(h('div', { class: 'fb-empty empty-state' },
       h('div', { class: 'fb-empty-t' }, title),
       sub ? h('div', { class: 'fb-empty-s' }, sub) : null,
-      actions.length ? h('div', { class: 'fb-empty-a' }, actions.map((a) => h('button', { class: 'fb-btn' + (a.primary ? ' primary' : ''), onClick: a.run }, a.label))) : null))
+      actions.length ? h('div', { class: 'fb-empty-a' }, actions.map((a) => h('button', { class: 'fb-btn btn sm' + (a.primary ? ' accent' : ''), onClick: a.run }, a.label))) : null))
   }
 
   const wrapOn = () => (S.wrap !== null ? S.wrap : (U.isMarkdownPath(S.path) ? prefs.wrapProse : prefs.wrapCode))
@@ -940,8 +945,23 @@ function mountFiles(host, ctx) {
     }
   })()
 
+  // ---- sharing (local://chats-contract.md, "Sharing") -----------------------------------------------------------
+  // Snapshot-only: a file view is not an editable document over the wire. The snapshot carries the view (path, root,
+  // cursor) plus the text of small files; large/binary views share path + metadata only.
+  const shareAdapter = filesShare({
+    snapshot: () => {
+      const text = S.kind === 'text' ? currentText() : ''
+      const snap = { path: S.path, root: S.root, name: S.name, kind: S.kind, mode: S.mode, size: S.size, cursor: { ...cursor } }
+      if (text && text.length < 65536) snap.text = text
+      return snap
+    },
+  })
+  const unshare = ctx.paneId ? registerInstance(ctx.paneId, 'files', S.name || 'Files', FILES_SHARE_MODES, shareAdapter) : null
+
   return {
+    share: shareAdapter,
     dispose() {
+      if (typeof unshare === 'function') { try { unshare() } catch { /* already unregistered */ } }
       disposed = true
       seq++
       if (S.dirty) writeJournal()
@@ -966,3 +986,22 @@ function mountFiles(host, ctx) {
     },
   }
 }
+
+// ---------------------------------------------------------------------------------------------------- sharing
+
+const FILES_SHARE_MODES = ['snapshot']
+
+/**
+ * The share adapter for one mounted files pane (local://chats-contract.md, "Sharing"). Snapshot-only: a file view is
+ * not an editable document over the wire, so there is no op stream — applyOp/applySnapshot are defensive no-ops and
+ * a snapshot share is a one-shot copy into the chat.
+ */
+function filesShare(hooks = {}) {
+  return {
+    modes: FILES_SHARE_MODES,
+    snapshot: () => (hooks.snapshot ? hooks.snapshot() : null),
+    applyOp: () => {},
+    applySnapshot: () => {},
+  }
+}
+registerShare('files', filesShare)

@@ -53,11 +53,12 @@ export interface DaemonState {
 }
 
 export interface Request {
-  id: number
+  /** The envelope's call id; a request whose own arguments carry a string `id` uses it in this slot too (the client keeps both by folding them together). */
+  id: number | string
   type: string
   [key: string]: unknown
 }
-export type Reply = { id: number; ok: true; result?: unknown } | { id: number; ok: false; error: string }
+export type Reply = { id: number | string; ok: true; result?: unknown } | { id: number | string; ok: false; error: string }
 export interface DaemonEvent {
   event: string
   [key: string]: unknown
@@ -81,6 +82,16 @@ export const EVENT_NAMES = [
   'open_path',
   'client_attached',
   'client_detached',
+  'chats_changed',
+  'chat_message',
+  'chat_typing',
+  'chat_presence',
+  'chat_call',
+  'chat_request',
+  'chat_toast',
+  'chat_status',
+  'chat_share',
+  'chat_share_op',
 ] as const
 
 export type Frame = { kind: 'json'; json: unknown } | { kind: 'data'; paneId: number; data: Buffer } | { kind: 'other'; type: number; payload: Buffer }

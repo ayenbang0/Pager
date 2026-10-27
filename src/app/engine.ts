@@ -10,7 +10,7 @@ import { Orchestrator, ROOM_ID, type AgentStats, type RoomView, type SetupRow } 
 import type { AnswerMap, QuestionView } from '../agents/run/questions.js'
 import { COMMANDS, MOVED, parseCommand, SETTINGS_ARGUMENTS } from './commands.js'
 import type { ControlReply } from './control.js'
-import { formatChangelog, getChangesSince, isNewer as isNewerChangelog, latestVersion as latestChangelogVersion, loadChangelog } from './changelog.js'
+import { getChangesSince, highlights, isNewer as isNewerChangelog, latestVersion as latestChangelogVersion, loadChangelog, formatChangelog, type Highlight } from './changelog.js'
 import type { CommandBlock } from '../tools/terminal/blocks.js'
 import { explainPrompt } from '../tools/terminal/explain.js'
 import { isTermTab, TERM_ID, Terminals } from '../tools/terminal/sessions.js'
@@ -22,6 +22,7 @@ import type { BotLine } from '../bots/prompt.js'
 import { encodeBotMessage, parseBotMessage } from '../chat/botMessage.js'
 import { findSox, soxAudio, type AudioIo } from '../calls/audio.js'
 import { Calls } from '../calls/calls.js'
+import { BlockShares } from '../chat/blockShare.js'
 import { installSox, soxInstaller } from '../calls/setup.js'
 import { CALL_ROOM_RE } from '../net/wire.js'
 import { readPage } from '../tools/web/read.js'
@@ -31,7 +32,8 @@ import { ContactCodeError, decodeContactCode, encodeContactCode } from '../chat/
 import { Store, type Conv } from '../chat/db.js'
 import { COLOR_WORDS, parseColor } from '../ui/theme/colors.js'
 import { expandEmoji } from '../chat/emoji.js'
-import { dmConvId, newGroupId, signEvent, type EventKind, type PagerEvent } from '../chat/events.js'
+import { dmConvId, newGroupId } from '../chat/convId.js'
+import { signEvent, type EventKind, type PagerEvent } from '../chat/events.js'
 import { loadOrCreateIdentity, saveName } from '../chat/identity.js'
 import type { Secrets } from '../chat/secrets.js'
 import type { EnvLock } from './envSettings.js'
@@ -45,7 +47,7 @@ import { NetLog } from '../net/netlog.js'
 import { HISTORY_MAX, loadHistory, saveHistory } from './history.js'
 import { Suggester } from './suggest.js'
 import { buildRecap } from './recap.js'
-import { formatSearch, readRoomLines, searchDocs, SEARCH_SCAN_LIMIT, type SearchDoc } from './search.js'
+import { formatSearch, readRoomLines, searchDocs, SEARCH_MAX_HITS, SEARCH_SCAN_LIMIT, type SearchDoc, type SearchResult } from './search.js'
 import { DENSITIES, isDensity, MAX_FOLDERS, SOUND_MODES, validFolderName, loadLastSeen, loadSettings, parseBadge, saveLastSeen, saveSettings, type Settings } from './settings.js'
 import { allThemes, findTheme, THEMES } from '../ui/theme/themes.js'
 import { loadCustomThemes, saveCustomTheme, themesFile } from '../ui/theme/customThemes.js'
@@ -78,6 +80,8 @@ export interface ConvView {
   thinking?: boolean
   /** People in this conversation's call rooms (me included), when anyone is in one. */
   call?: number
+  /** When its newest message was written (ms since the epoch); absent while the conversation is empty. */
+  last?: number
 }
 /** The group screen: who is in the group, which bots talk there and who is in which call room. */
 export interface GroupView {
@@ -169,6 +173,8 @@ export interface EngineOptions {
   lan?: { hosting: boolean; address: string }
   /** Test seam: replaces SoX as the microphone and speakers of calls. */
   audio?: () => Promise<AudioIo | string>
+  /** Conversations whose messages must not raise desktop alerts or toasts (the desktop app's local mute). */
+  isMuted?: (convId: string) => boolean
 }
 
 interface PendingItem {
@@ -234,7 +240,10 @@ export class Engine extends EventEmitter {
   /** AI bots in groups; absent in a run without agents. */
   private readonly bots: GroupBots | undefined
   private readonly calls: Calls
+  /** Live shared blocks (canvas, board …) offered inside chats; the daemon's chat host drives it. */
+  readonly blockShares: BlockShares
   private readonly webFetch: typeof fetch | undefined
+  private readonly mutedConv: ((convId: string) => boolean) | undefined
   readonly docs: DocStore
   private openDocId: string | null = null
   private readonly termUsage: TermUsageLog
@@ -244,8 +253,14 @@ export class Engine extends EventEmitter {
   /** Stamps `last-seen.json` every LAST_SEEN_MS while open, for the "since you left" recap. */
   private seenTimer: NodeJS.Timeout | undefined
   private activeId: string | null = null
-  /** Text set by /help and /code; null shows the welcome banner. */
+  /** Text set by /help, /code, /search and /changelog; null shows the welcome screen. */
   private homeLines: string[] | null = null
+  /** The one-line "since you left" recap the welcome screen shows; the welcome never gives its place to it. */
+  private recap: string | undefined
+  /** True when this start is the first one of a newer version, so the welcome marks its What's new as fresh. */
+  private releaseNew = false
+  /** The welcome screen's What's new, read from CHANGELOG.md once (null when the file is missing). */
+  private newest: { version: string; date: string | null; items: Highlight[] } | null | undefined
   private closed = false
   private update: string | null = null
   private prefs: Settings
@@ -315,6 +330,7 @@ export class Engine extends EventEmitter {
     this.net.on('close', (pk: string) => {
       this.share.onClose(pk)
       this.calls.onClose(pk)
+      this.blockShares.onClose(pk)
       this.online.delete(pk)
       for (const key of this.sentTo.keys()) if (key.endsWith(`:${pk}`)) this.sentTo.delete(key)
       this.emit('change')
@@ -400,7 +416,23 @@ export class Engine extends EventEmitter {
       ring: (convId, room, pk, started) => this.ringCall(convId, room, pk, started),
       changed: () => this.emit('change'),
     })
+    this.blockShares = new BlockShares({
+      me: this.me.pk,
+      link: (pk) => this.net.link(pk),
+      others: (convId) => {
+        const conv = this.store.getConv(convId)
+        if (!conv || conv.state !== 'active' || (conv.kind === 'dm' && this.store.getPeer(conv.peer ?? '')?.state !== 'accepted')) return []
+        return this.otherMembers(conv)
+      },
+      entitled: (pk, convId) => {
+        const conv = this.store.getConv(convId)
+        return conv !== undefined && conv.state === 'active' && this.entitled(pk, conv)
+      },
+      nameOf: (pk) => this.nameOf(pk),
+      file: path.join(opts.dir, 'shares.json'),
+    })
     this.webFetch = opts.fetch
+    this.mutedConv = opts.isMuted
     this.termUsage = new TermUsageLog(path.join(opts.dir, 'terminal-usage.jsonl'))
     this.terms.on('finished', (_id: string, b: CommandBlock) => {
       if (b.endedAt !== null && b.exit !== null) this.termUsage.append({ ts: b.endedAt, program: programOf(b.command), ms: b.endedAt - b.startedAt, exit: b.exit })
@@ -424,7 +456,7 @@ export class Engine extends EventEmitter {
         return title === undefined ? [] : [{ title, count }]
       })
       const line = buildRecap({ now, lastSeen, chats, room: readRoomLines(this.roomFile()) })
-      if (line !== undefined) this.homeLines = this.homeLines === null ? [line] : [...this.homeLines, '', line]
+      this.recap = line
     }
     saveLastSeen(this.dir, now)
     this.seenTimer = setInterval(() => saveLastSeen(this.dir, Date.now()), LAST_SEEN_MS)
@@ -444,24 +476,13 @@ export class Engine extends EventEmitter {
   private cmdSearch(query: string): void {
     const q = query.trim()
     if (q === '') return this.toast('error', 'Usage: /search <text>  (case-insensitive; chat history and the agent room, newest 20 matches)')
-    const labels = this.convLabels()
-    const docs: SearchDoc[] = []
-    for (const e of this.store.recentTexts(SEARCH_SCAN_LIMIT)) {
-      const where = labels.get(e.conv)
-      const bot = parseBotMessage(e.body)
-      if (where !== undefined) docs.push({ where, author: bot?.name ?? this.nameOf(e.author), ts: e.ts, text: bot?.text ?? e.body })
-    }
-    for (const l of readRoomLines(this.roomFile())) docs.push({ where: 'agents', author: l.author, ts: l.ts, text: l.text })
-    this.setHome(formatSearch(q, searchDocs(docs, q), Date.now()))
+    this.setHome(formatSearch(q, this.searchChats(q), Date.now()))
   }
 
+  /** A newer version than the one last seen: the welcome screen marks its What's new as new (it always shows the newest section). */
   private showNewRelease(): void {
     if (!isNewerChangelog(VERSION, this.prefs.lastSeenVersion)) return
-    const sections = loadChangelog()
-    if (sections.length === 0) return
-    const recent = getChangesSince(sections, this.prefs.lastSeenVersion)
-    const lines = recent.length > 0 ? formatChangelog(recent, 72) : formatChangelog(sections, 72, 1)
-    this.homeLines = [`What's new in pager ${VERSION}`, '', ...lines]
+    this.releaseNew = true
     this.markChangelogSeen()
   }
 
@@ -498,6 +519,7 @@ export class Engine extends EventEmitter {
           peer: peer.pk,
           online: this.net.link(peer.pk) !== undefined,
           unread: this.store.unreadCount(conv.id, this.me.pk),
+          ...this.lastOf(conv.id),
           ...this.callCount(conv.id),
         })
       } else if (conv.state === 'active') {
@@ -508,12 +530,18 @@ export class Engine extends EventEmitter {
           peer: null,
           online: null,
           unread: this.store.unreadCount(conv.id, this.me.pk),
+          ...this.lastOf(conv.id),
           ...(this.bots?.busy(conv.id) === true ? { thinking: true } : {}),
           ...this.callCount(conv.id),
         })
       }
     }
     return [...dms.sort(byName), ...groups.sort(byName)]
+  }
+
+  private lastOf(convId: string): { last?: number } {
+    const last = this.store.lastTextAt(convId)
+    return last === undefined ? {} : { last }
   }
 
   private callCount(convId: string): { call?: number } {
@@ -586,6 +614,20 @@ export class Engine extends EventEmitter {
     return this.homeLines === null
   }
 
+  /** The welcome screen's "since you left" line, when something happened while pager was closed. */
+  recapLine(): string | undefined {
+    return this.recap
+  }
+
+  /** The newest changelog section as a few one-line highlights for the welcome screen; `fresh` on the first start of this version. */
+  whatsNew(): { version: string; date: string | null; items: Highlight[]; fresh: boolean } | undefined {
+    this.newest ??= (() => {
+      const section = loadChangelog()[0]
+      return section === undefined ? null : { version: section.version, date: section.date, items: highlights(section) }
+    })()
+    return this.newest === null ? undefined : { ...this.newest, fresh: this.releaseNew }
+  }
+
   /** Numbers for the home screen: people, message totals, the last seven days, and agent runs. */
   stats(now = Date.now()): HomeStats {
     const convs = this.convs()
@@ -639,7 +681,7 @@ export class Engine extends EventEmitter {
     )
   }
 
-  messages(convId: string, limit: number): MessageView[] {
+  messages(convId: string, limit: number, before?: string): MessageView[] {
     if (isTermTab(convId) || convId === DOCS_ID || convId === SETTINGS_ID) return []
     if (convId === AI_ID) return this.ai?.messages(limit) ?? []
     if (convId === ROOM_ID) return this.agents.messages(limit)
@@ -651,7 +693,7 @@ export class Engine extends EventEmitter {
     if (!conv) return []
     const others = this.otherMembers(conv)
     const reactions = foldReactions(this.store.reactionEvents(convId), this.me.pk)
-    return this.store.listMessages(convId, limit).map((e): MessageView => {
+    return this.store.listMessages(convId, limit, before).map((e): MessageView => {
       const mine = e.author === this.me.pk
       const authorName = this.nameOf(e.author)
       const base = { key: `${e.author}:${e.seq}`, ts: e.ts, authorName, authorKey: e.author, mine }
@@ -662,7 +704,8 @@ export class Engine extends EventEmitter {
       if (opOf(e.body) === 'rename') return { ...base, kind: 'system', text: `${authorName} renamed the group to "${e.body.slice(RENAME_PREFIX.length)}"`, status: null }
       let status: MessageView['status'] = null
       if (mine) {
-        const sent = others.length > 0 && others.every((pk) => (this.sentTo.get(`${convId}:${pk}`) ?? 0) >= e.seq)
+        // With nobody else in the conversation there is nothing left to deliver: it is sent, never read.
+        const sent = others.every((pk) => (this.sentTo.get(`${convId}:${pk}`) ?? 0) >= e.seq)
         const delivered = others.length > 0 && others.every((pk) => this.store.getAck(convId, pk, this.me.pk) >= e.seq)
         const read = delivered && others.every((pk) => (this.readBy.get(`${convId}:${pk}`) ?? 0) >= e.seq)
         status = read ? 'read' : delivered ? 'delivered' : sent ? 'sent' : 'pending'
@@ -1063,13 +1106,9 @@ export class Engine extends EventEmitter {
     this.toast('error', usage)
   }
 
-  /** Counts visits through `goHome`; the Home screen restarts its animation when it changes. */
-  homeEpoch = 0
-
-  /** Back to the welcome screen: drops any command output Home was showing and replays the logo animation. */
+  /** Back to the welcome screen: drops any command output Home was showing. */
   goHome(): void {
     this.homeLines = null
-    this.homeEpoch++
     this.activate(null)
     this.emit('change')
   }
@@ -1132,6 +1171,34 @@ export class Engine extends EventEmitter {
     return this.sendText(text)
   }
 
+  /** Sends `text` into the active conversation as typed (no slash commands, no input history): the desktop composer's path. */
+  send(text: string): void {
+    this.sendText(text)
+  }
+
+  /** Runs one slash command line (`/add …`) against the active conversation, without recording it in the input history. */
+  run(line: string): Promise<void> {
+    return this.runCommand(line.trim())
+  }
+
+  /** The pending requests with a stable id (`contact:<pk>`, `group:<conv>`, `session:<pk>`) beside their list number. */
+  pendingKeys(): { n: number; id: string }[] {
+    return this.pendingItems().map((i) => ({ n: i.view.n, id: i.pk !== undefined ? `contact:${i.pk}` : i.conv !== undefined ? `group:${i.conv}` : `session:${i.session ?? ''}` }))
+  }
+
+  /** Newest matches in chat history and the agent room (`/search` as data); `conv` is set for chat hits. */
+  searchChats(query: string, limit = SEARCH_MAX_HITS): SearchResult {
+    const labels = this.convLabels()
+    const docs: SearchDoc[] = []
+    for (const e of this.store.recentTexts(SEARCH_SCAN_LIMIT)) {
+      const where = labels.get(e.conv)
+      const bot = parseBotMessage(e.body)
+      if (where !== undefined) docs.push({ where, conv: e.conv, author: bot?.name ?? this.nameOf(e.author), ts: e.ts, text: bot?.text ?? e.body })
+    }
+    for (const l of readRoomLines(this.roomFile())) docs.push({ where: 'agents', conv: ROOM_ID, author: l.author, ts: l.ts, text: l.text })
+    return searchDocs(docs, query, { limit })
+  }
+
   async close(): Promise<void> {
     if (this.closed) return
     this.closed = true
@@ -1144,6 +1211,7 @@ export class Engine extends EventEmitter {
     this.ai?.close()
     this.bots?.close()
     this.calls.close()
+    this.blockShares.close()
     this.docs.close()
     this.share.close()
     closeDesktop()
@@ -2017,8 +2085,9 @@ export class Engine extends EventEmitter {
       case 'rename':
         return this.groupRename(arg)
       case 'leave': {
-        const conv = this.activeGroup()
+        const conv = arg !== '' ? this.store.getConv(arg) : this.activeGroup()
         if (conv) this.leaveGroup(conv.id)
+        else this.toast('error', arg !== '' ? 'No such chat' : 'No group open')
         return
       }
       default:
@@ -2124,6 +2193,7 @@ export class Engine extends EventEmitter {
   private ringCall(convId: string, room: string, pk: string, started: boolean): void {
     const conv = this.store.getConv(convId)
     if (!conv) return
+    this.emit('call', { conv: convId, room, pk, who: this.nameOf(pk), started })
     const who = this.nameOf(pk)
     // A call rings with its own sound, only when sounds are on for everything; the desktop alert stays silent.
     const text = conv.kind === 'dm' ? `${who} is calling: open the chat and /call to answer` : started ? `${who} started a call in #${conv.title} (room ${room}): /call ${room} to join` : undefined
@@ -2386,6 +2456,7 @@ export class Engine extends EventEmitter {
     }
     this.share.onOpen(link)
     this.calls.onOpen(link.pk)
+    this.blockShares.onOpen(link.pk)
     this.sendSync(link)
     this.emit('change')
   }
@@ -2427,6 +2498,8 @@ export class Engine extends EventEmitter {
         return this.calls.onFrame(link.pk, frame)
       case 'ping':
         return this.onPing(link, frame)
+      case 'share':
+        return this.blockShares.onFrame(link.pk, frame)
       default:
     }
   }
@@ -2548,18 +2621,20 @@ export class Engine extends EventEmitter {
     if (ev.author === this.me.pk) return
     const conv = this.store.getConv(ev.conv)
     if (!conv) return
+    this.emit('message', { conv: conv.id, key: `${ev.author}:${ev.seq}`, mine: false })
+    const muted = this.mutedConv?.(conv.id) === true
     const bot = parseBotMessage(ev.body)
     const who = bot === undefined ? this.nameOf(ev.author) : `${bot.name} (${this.nameOf(ev.author)})`
     const snippet = (bot?.text ?? ev.body).slice(0, 60)
     // The desktop alert is skipped while pager has focus (see alert()).
-    this.alert(conv.kind === 'group' ? `#${conv.title}` : who, conv.kind === 'group' ? `${who}: ${snippet}` : snippet)
+    if (!muted) this.alert(conv.kind === 'group' ? `#${conv.title}` : who, conv.kind === 'group' ? `${who}: ${snippet}` : snippet)
     if (this.activeId === conv.id) {
       this.store.markRead(conv.id, Date.now())
       this.sendRead(conv.id)
       // The popup is only redundant when the chat is open in a window you are looking at.
       if (this.focused) return
     }
-    this.toast('info', conv.kind === 'group' ? `#${conv.title} ${who}: ${snippet}` : `${who}: ${snippet}`)
+    if (!muted) this.toast('info', conv.kind === 'group' ? `#${conv.title} ${who}: ${snippet}` : `${who}: ${snippet}`)
   }
 
   /** Tells each peer (that speaks the 'read' frame) how far I have read their messages in `convId`. Waits until the window has focus. */
@@ -2657,6 +2732,7 @@ export class Engine extends EventEmitter {
       return
     }
     const event = this.appendEvent(conv.id, 'text', text)
+    this.emit('message', { conv: conv.id, key: `${event.author}:${event.seq}`, mine: true })
     this.store.markRead(conv.id, event.ts)
     this.sendRead(conv.id)
     this.emit('change')
@@ -2684,6 +2760,7 @@ export class Engine extends EventEmitter {
     const conv = this.store.getConv(convId)
     if (!conv || conv.kind !== 'group' || conv.state !== 'active') return
     const event = this.appendEvent(convId, 'text', encodeBotMessage(name, text))
+    this.emit('message', { conv: convId, key: `${event.author}:${event.seq}`, mine: true })
     if (this.activeId === convId) this.store.markRead(convId, event.ts)
     else this.toast('info', `#${conv.title} ${name}: ${text.slice(0, 60)}`)
     this.emit('change')

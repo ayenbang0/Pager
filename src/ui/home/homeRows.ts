@@ -1,51 +1,63 @@
 import stringWidth from 'string-width'
-import { gradientAt, mix } from '../theme/colors.js'
-import type { HomeStats } from '../../app/engine.js'
+import type { ChangelogKind, Highlight } from '../../app/changelog.js'
+import type { ConvView, HomeStats } from '../../app/engine.js'
 import type { Theme } from '../theme/themes.js'
-import { chipPillKind, ctxTone, stateColor, stateWord } from '../chrome/agentChrome.js'
-import { REVEAL_FRAMES, sparkline, tagline, TAGLINE, WORDMARK } from './banner.js'
+import { ctxTone, stateColor, stateWord } from '../chrome/agentChrome.js'
 import type { HomeAgentRow, HomeAgents } from './homeAgents.js'
 import { agentTint, type Look } from '../theme/look.js'
-import { bandLabel, clipSegs, fitSegs, gradientRule, gradientText, keycap, mergeSegs, pillSeg, segsWidth, type Seg } from '../kit/segs.js'
+import { clipSegs, fitSegs, segsWidth, type Seg } from '../kit/segs.js'
+import { chip, ruleRow } from '../kit/tern.js'
+import { buildRow, chatRowSpec } from '../sidebar/sidebarRows.js'
 
-/** Fewest pane rows the banner is worth drawing in: the mark, the greeting and a wrapped contact code. */
-export const BANNER_ROWS = 6
-/** The wordmark with its wings and tagline needs this much pane width and height; below either, a one-line mark. */
-export const ROOMY_HEADER_MIN_WIDTH = 60
-export const ROOMY_HEADER_MIN_ROWS = 24
-/** Two columns of cards from this pane width; narrower panes stack them. */
-export const TWO_COLUMN_MIN_WIDTH = 84
-/** The cards never spread wider than this, however wide the pane. */
-const MAX_INNER = 104
-const COLUMN_GAP = 2
-const LEFT_MIN = 30
-const LEFT_MAX = 38
+/**
+ * The Home screen as plain rows, built from the same pieces as every other screen: a quiet heading (a dim bold label, a hairline, a note
+ * at the end) over rows laid out like the sidebar's, raised chips for keys, the accent only for what needs you. No boxes, no logo.
+ */
+
+/** Two columns of quick actions from this width. */
+export const TWO_COLUMN_MIN_WIDTH = 80
+/** Recent chats shown. */
+export const RECENT_CHATS = 4
 /** Agent rows shown before `+N more`. */
-const AGENT_ROWS_MAX = 4
+export const AGENT_ROWS_MAX = 4
+const NAME_MAX = 14
 const MODEL_MAX = 12
-const NAME_MAX = 10
-
 const BLANK: Seg[] = [{ text: ' ' }]
 /** The name Look carries before the user has chosen one; the welcome lines may know better. */
 const DEFAULT_ME = 'you'
+
+/** A conversation as Home lists it. */
+export type HomeChat = Pick<ConvView, 'kind' | 'online' | 'title' | 'unread' | 'call' | 'last' | 'thinking'>
+
+/** The newest release as a few lines (see `Engine.whatsNew`). */
+export interface WhatsNew {
+  version: string
+  items: readonly Highlight[]
+  /** First start of this version. */
+  fresh: boolean
+}
 
 export interface HomeInput {
   /** Pane width and height in cells. */
   width: number
   height: number
-  /** Animation frame; ignored when `animate` is false. */
-  frame: number
-  animate: boolean
   /** Local hour 0-23, for the greeting. */
   hour: number
+  /** Clock for the relative times. */
+  now: number
   theme: Theme
   look: Look
   stats: HomeStats
   agents: HomeAgents
-  /** False in a run without agents: the AGENTS card is left out. Default true. */
+  /** False in a run without agents: the agent lines, rows and shortcuts are left out. Default true. */
   agentsOn?: boolean
+  /** Every conversation; the newest few are listed. */
+  chats: readonly HomeChat[]
   /** The engine's welcome lines after the title: name, contact code, getting-started steps. */
   info: readonly string[]
+  /** What happened while pager was closed. */
+  recap?: string
+  news?: WhatsNew
 }
 
 export interface HomeInfo {
@@ -75,7 +87,8 @@ export function parseInfo(info: readonly string[]): HomeInfo {
 /** `text` cut to `n` columns with an ellipsis when it is longer; never padded. */
 export function clipText(text: string, n: number): string {
   if (stringWidth(text) <= n) return text
-  const cut = clipSegs([{ text }], Math.max(0, n - 1))[0]?.text ?? ''
+  if (n <= 0) return ''
+  const cut = clipSegs([{ text }], n - 1)[0]?.text ?? ''
   return `${cut}…`
 }
 
@@ -110,63 +123,12 @@ export function wrapText(text: string, width: number): string[] {
   return lines.length > 0 ? lines : ['']
 }
 
-/** `items` laid out left to right, `gap` columns apart, starting a new row when the next one would not fit. */
-export function flowSegs(items: readonly (readonly Seg[])[], width: number, gap = 2): Seg[][] {
-  const rows: Seg[][] = []
-  let cur: Seg[] = []
-  for (const item of items) {
-    if (cur.length > 0 && segsWidth(cur) + gap + segsWidth(item) > width) {
-      rows.push(cur)
-      cur = []
-    }
-    cur = cur.length === 0 ? [...item] : [...cur, { text: ' '.repeat(gap) }, ...item]
-  }
-  if (cur.length > 0) rows.push(cur)
-  return rows.map((r) => clipSegs(r, width))
-}
+const BARS = '▁▂▃▄▅▆▇█'
 
-/** `segs` with `n` spaces in front. */
-const indent = (segs: readonly Seg[], n: number): Seg[] => (n > 0 ? [{ text: ' '.repeat(n) }, ...segs] : [...segs])
-
-/** `rows` shifted together so the widest is centered in `width` columns. */
-export function centerBlock(rows: readonly (readonly Seg[])[], width: number): Seg[][] {
-  const widest = Math.max(0, ...rows.map((r) => segsWidth(r)))
-  const pad = Math.max(0, Math.floor((width - widest) / 2))
-  return rows.map((r) => clipSegs(indent(r, pad), width))
-}
-
-/** A section heading as one row, drawn like `BandTitle`: `▌ TITLE ` on the band, then a gradient rule to the edge. */
-export function bandTitleSegs(title: string, width: number, theme: Theme): Seg[] {
-  const left = bandLabel(title, theme)
-  const rule = Math.max(0, width - segsWidth(left) - 1)
-  return clipSegs([...left, { text: ' ' }, ...gradientRule(rule, theme.gradient, '━')], width)
-}
-
-/** Frames after which the tagline is fully typed. */
-const TYPED_FRAMES = REVEAL_FRAMES + 14
-
-/**
- * The frame number that draws exactly what `frame` draws. Once the wordmark is revealed and the tagline typed, only the cursor's blink
- * phase changes the picture, so every other frame maps onto one of two calm ones and the banner need not re-render.
- */
-export function visualFrame(frame: number): number {
-  if (frame < TYPED_FRAMES) return frame
-  return Math.floor(frame / 6) % 2 === 0 ? TYPED_FRAMES + 10 : TYPED_FRAMES + 4
-}
-
-/** The wordmark `P A G E R` in the theme gradient, revealed letter by letter. `animate: false` is the settled frame. Its width never changes. */
-export function wordmarkRow(frame: number, theme: Theme, animate: boolean): Seg[] {
-  const revealed = animate ? Math.ceil(WORDMARK.length * Math.min(1, frame / REVEAL_FRAMES)) : WORDMARK.length
-  const chars = [...WORDMARK].map((ch, i) => (i < revealed ? ch : ' ')).join('')
-  return gradientText(chars, theme.gradient, { bold: true })
-}
-
-/** The one-line mark: `◆ P A G E R ◆` in the gradient, then the tagline when it fits. */
-export function markRow(frame: number, theme: Theme, animate: boolean, width: number): Seg[] {
-  const mark = gradientText('◆ P A G E R ◆', theme.gradient, { bold: true })
-  const tag = gradientText(tagline(frame, animate).padEnd(TAGLINE.length + 1), theme.gradient)
-  const both = [...mark, { text: '   ' }, ...tag]
-  return segsWidth(both) <= width ? both : mark
+/** One bar per value, scaled to the largest; zeros stay on the lowest bar so the row never has gaps. */
+export function sparkline(values: readonly number[]): string {
+  const max = Math.max(0, ...values)
+  return values.map((v) => (max === 0 ? BARS[0] : BARS[Math.min(BARS.length - 1, Math.round((v / max) * (BARS.length - 1)))])).join('')
 }
 
 /** Time-of-day opener. */
@@ -177,291 +139,265 @@ export function greetingWord(hour: number): string {
   return 'Good evening'
 }
 
-/** `Good evening, name ◆`: the name in the gradient, your badge in the glow color. */
+/** `Good evening, name ◆`: the name bold in the accent, your badge after it. */
 export function greetingSegs(name: string, badge: string, hour: number, theme: Theme): Seg[] {
-  const tail: Seg[] = badge === '' ? [] : [{ text: ` ${badge}`, color: theme.glow, bold: true }]
-  return [{ text: `${greetingWord(hour)}, `, color: theme.text }, ...gradientText(name, theme.gradient, { bold: true }), ...tail]
+  const tail: Seg[] = badge === '' ? [] : [{ text: ` ${badge}`, color: theme.accent2, bold: true }]
+  return [{ text: ' ' }, { text: `${greetingWord(hour)}, `, color: theme.text }, { text: name, color: theme.accent, bold: true }, ...tail]
 }
 
-/** The contact code behind a `CODE` pill, wrapped to `width` columns so none of it is cut, the block centered. */
-export function codeRows(code: string, width: number, theme: Theme): Seg[][] {
-  const label = pillSeg('CODE', theme.pill.accent)
-  const room = Math.max(8, width - segsWidth([label]) - 1)
-  const rows: Seg[][] = []
-  for (let at = 0; at < code.length; at += room) {
-    const lead: Seg = at === 0 ? label : { text: ' '.repeat(segsWidth([label])) }
-    rows.push([lead, { text: ' ' }, { text: code.slice(at, at + room), color: theme.glow, bold: true }])
-  }
-  return centerBlock(rows, width)
+/** A section heading: the quiet bold label, a hairline across the gap, an optional note at the end (dropped first when tight). Exactly `width` columns. */
+export function heading(title: string, note: readonly Seg[], width: number, theme: Theme): Seg[] {
+  return ruleRow([{ text: ' ' }, { text: title, color: theme.dim, bold: true }], note, width, theme)
 }
 
-export const roomyHeader = (width: number, height: number): boolean => width >= ROOMY_HEADER_MIN_WIDTH && height >= ROOMY_HEADER_MIN_ROWS
+const dim = (text: string, theme: Theme): Seg => ({ text, color: theme.dim })
 
-/** Wordmark between two gradient rules (or the one-line mark), tagline, greeting, contact code and a spacer, all centered. */
-export function headerRows(i: HomeInput, info: HomeInfo): Seg[][] {
-  const { theme, width } = i
-  const rows: Seg[][] = []
-  if (roomyHeader(width, i.height)) {
-    const wing = gradientRule(8, theme.gradient, '━')
-    rows.push(...centerBlock([[...wing, { text: '  ' }, ...wordmarkRow(i.frame, theme, i.animate), { text: '  ' }, ...wing]], width))
-    const tag = gradientText(tagline(i.frame, i.animate).padEnd(TAGLINE.length + 1), theme.gradient, { italic: true })
-    rows.push(...centerBlock([tag], width))
-  } else {
-    rows.push(...centerBlock([markRow(i.frame, theme, i.animate, width)], width))
-  }
-  const name = i.look.me !== DEFAULT_ME ? i.look.me : (info.name ?? i.look.me)
-  rows.push(...centerBlock([greetingSegs(name, i.look.badge, i.hour, theme)], width))
-  if (info.code !== undefined) rows.push(...codeRows(info.code, width, theme))
-  rows.push(BLANK)
-  return rows
-}
-
-export type CardId = 'start' | 'people' | 'agents' | 'activity'
-
-/** A titled block of rows. `tail` rows (the next step) survive when the card is cut short. */
-export interface Card {
-  title: string
-  lines: Seg[][]
-  tail?: Seg[][]
-}
-
-const KEY_HINTS: readonly (readonly [string, string])[] = [
-  ['Ctrl+P', 'palette'],
-  ['Ctrl+G', 'help'],
-  ['Alt+↑↓', 'tabs'],
-  ['Alt+S', 'settings'],
-]
-
-export function startCard(width: number, info: HomeInfo, theme: Theme): Card {
-  const keys = flowSegs(
-    KEY_HINTS.map(([key, label]): Seg[] => [...keycap(key, theme), { text: ` ${label}`, color: theme.text }]),
-    width,
-  )
-  const lines: Seg[][] = [...keys]
-  info.steps.forEach((step, n) => {
-    wrapText(step, width - 4).forEach((text, row) => {
-      const lead: Seg = row === 0 ? pillSeg(String(n + 1), theme.pill.accent) : { text: '    ' }
-      lines.push([lead, { text: ' ' }, { text, color: theme.text }])
-    })
-  })
-  for (const extra of info.extra) for (const text of wrapText(extra, width)) lines.push([{ text, color: theme.text }])
-  return { title: 'START', lines }
-}
-
-export function peopleCard(width: number, stats: HomeStats, theme: Theme): Card {
-  const online = stats.online > 0
-  const first: Seg[] = [
-    pillSeg(`${online ? '●' : '○'} ${stats.online} online`, theme.pill[online ? 'success' : 'muted']),
-    { text: ` of ${stats.contacts} contacts`, color: theme.text },
-  ]
-  const pills = flowSegs(
-    [
-      [pillSeg(`# ${stats.groups} group${stats.groups === 1 ? '' : 's'}`, theme.pill[stats.groups > 0 ? 'info' : 'muted'])],
-      [pillSeg(`${stats.pending} pending`, theme.pill[stats.pending > 0 ? 'warning' : 'muted'])],
-      [pillSeg(`${stats.unread} unread`, theme.pill[stats.unread > 0 ? 'accent2' : 'muted'])],
-    ],
-    width,
-    1,
-  )
-  return { title: 'PEOPLE', lines: [clipSegs(first, width), ...pills] }
-}
-
-export function activityCard(width: number, stats: HomeStats, theme: Theme): Card {
-  const week = stats.week.reduce((a, b) => a + b, 0)
-  const totals = flowSegs([[pillSeg(`↑ ${stats.sent} sent`, theme.pill.accent)], [pillSeg(`↓ ${stats.received} received`, theme.pill.accent2)]], width, 1)
-  const spark: Seg[] = [...gradientText(sparkline(stats.week), theme.gradient, { bold: true }), { text: ` ${week} in 7d`, color: theme.text }]
-  const top: Seg[] =
-    stats.busiest === null
-      ? [{ text: 'no chats yet', color: theme.dim }]
-      : [{ text: 'top ', color: theme.dim }, { text: clipText(stats.busiest.title, Math.max(1, width - 12)), color: theme.text, bold: true }, { text: ` ${stats.busiest.count}`, color: theme.glow, bold: true }]
-  return { title: 'ACTIVITY', lines: [...totals, clipSegs(spark, width), clipSegs(top, width)] }
-}
-
-interface Columns {
-  name: number
-  state: number
-  model: number
-  ctx: number
-  turns: number
-  approved: number
-  changes: number
-}
-
-/** The text of each cell of an agent row, before padding. */
-export function agentCells(row: HomeAgentRow): { ctx: string; model: string; turns: string; approved: string; changes: string } {
-  return {
-    ctx: row.ctx === undefined ? 'ctx —' : `ctx ${row.ctx}%`,
-    model: row.model ?? row.cli,
-    turns: `${row.turns}t ${row.files}f`,
-    approved: `${row.approved}✓`,
-    changes: `${row.changes}↻`,
-  }
-}
-
-const widest = (texts: readonly string[], cap: number): number => Math.min(cap, Math.max(0, ...texts.map((t) => stringWidth(t))))
-
-/** Column widths shared by every agent row, so state words, pills and counts line up. */
-export function agentColumns(rows: readonly HomeAgentRow[]): Columns {
-  const cells = rows.map(agentCells)
-  return {
-    name: widest(rows.map((r) => r.name), NAME_MAX),
-    state: widest(rows.map((r) => stateWord(r.state)), 12),
-    model: widest(cells.map((c) => c.model), MODEL_MAX),
-    ctx: widest(cells.map((c) => c.ctx), 12),
-    turns: widest(cells.map((c) => c.turns), 12),
-    approved: widest(cells.map((c) => c.approved), 8),
-    changes: rows.some((r) => r.changes > 0) ? widest(cells.map((c) => c.changes), 8) : 0,
-  }
-}
-
-interface Part {
-  /** Lower is more important; rank 0 is never dropped. */
+/** A piece of a row that may be dropped when the row is tight; the highest rank goes first. */
+export interface Part {
   rank: number
   segs: Seg[]
 }
 
-/** The parts in order, dropping the least important (highest rank, last first) until the row fits `width`. */
-export function dropToFit(parts: readonly Part[], width: number): Seg[] {
-  const kept = [...parts]
-  const total = (): number => kept.reduce((sum, p) => sum + segsWidth(p.segs), 0)
-  while (total() > width) {
-    let worst = -1
-    kept.forEach((p, idx) => {
-      if (p.rank > 0 && p.rank >= (kept[worst]?.rank ?? 0)) worst = idx
-    })
-    if (worst < 0) break
-    kept.splice(worst, 1)
+/** The parts joined by two spaces, the least important dropped until they fit `room`; nothing when even the first does not. */
+export function detailFor(parts: readonly Part[], room: number): Seg[] {
+  const ranks = [...new Set(parts.map((p) => p.rank))].sort((a, b) => b - a)
+  for (const max of ranks) {
+    const segs = parts.filter((p) => p.rank <= max).flatMap((p, n): Seg[] => (n === 0 ? p.segs : [{ text: '  ' }, ...p.segs]))
+    if (segsWidth(segs) <= room) return segs
   }
-  return clipSegs(
-    kept.flatMap((p) => p.segs),
-    width,
-  )
+  return []
 }
 
-/**
- * `● name  state  model  ctx 41%  5t 7f 2✓ 1↻`. The dot and name wear the agent's own color, the state word the state's color,
- * model and counts are pills, context is a pressure-colored pill. Narrow rows drop counts, then the model, then context, then the state word.
- */
-export function agentRow(row: HomeAgentRow, cols: Columns, width: number, theme: Theme, tint: string): Seg[] {
-  const cell = agentCells(row)
-  const ctxKind = row.ctx === undefined ? 'muted' : chipPillKind(2, ctxTone(row.ctx))
-  const counts: Seg[] = [pillSeg(fitText(cell.turns, cols.turns), theme.pill.muted), { text: ' ' }, pillSeg(fitText(cell.approved, cols.approved), theme.pill[row.approved > 0 ? 'success' : 'muted'])]
-  if (cols.changes > 0) counts.push({ text: ' ' }, pillSeg(fitText(cell.changes, cols.changes), theme.pill[row.changes > 0 ? 'warning' : 'muted']))
-  return dropToFit(
-    [
-      { rank: 0, segs: [{ text: '● ', color: tint, bold: true }, { text: `${fitText(row.name, cols.name)} `, color: tint, bold: true }] },
-      { rank: 1, segs: [{ text: `${fitText(stateWord(row.state), cols.state)} `, color: stateColor(row.state, theme), bold: row.state !== 'idle' }] },
-      { rank: 3, segs: [pillSeg(fitText(cell.model, cols.model), theme.pill[row.model === undefined ? 'muted' : 'accent']), { text: ' ' }] },
-      { rank: 2, segs: [pillSeg(fitText(cell.ctx, cols.ctx), theme.pill[ctxKind]), { text: ' ' }] },
-      { rank: 4, segs: counts },
-    ],
-    width,
-  )
-}
-
-function agentSummaryLines(width: number, stats: HomeStats, agents: HomeAgents, theme: Theme): Seg[][] {
-  const lines: Seg[][] = []
-  const running = stats.agentsRunning
-  const chips: Seg[][] = [
-    [pillSeg(`⌁ ${running} running`, theme.pill[running > 0 ? 'accent' : 'muted'])],
-    [pillSeg(`${stats.mergeable} to merge`, theme.pill[stats.mergeable > 0 ? 'success' : 'muted'])],
+/** The two summary lines under the greeting: what the chats and the agents are doing now. */
+export function summaryRows(i: HomeInput, width: number): Seg[][] {
+  const { stats, agents, theme } = i
+  const label = (text: string): Seg[] => [{ text: ' ' }, { text: text.padEnd(7), color: theme.dim }]
+  const count = (n: number, text: string, tone: string | undefined): Seg => ({ text: `${n} ${text}`, color: n > 0 && tone !== undefined ? tone : theme.text, bold: n > 0 && tone !== undefined })
+  const online = stats.online > 0
+  const chats: Part[] = [
+    { rank: 1, segs: [{ text: online ? '● ' : '○ ', color: online ? theme.online : theme.dim, bold: online }, { text: `${stats.online} online of ${stats.contacts} contact${stats.contacts === 1 ? '' : 's'}`, color: theme.text }] },
+    { rank: 2, segs: [count(stats.unread, 'unread', theme.accent)] },
+    { rank: 2, segs: [count(stats.pending, 'pending', theme.warning)] },
+    { rank: 3, segs: [{ text: `${stats.groups} group${stats.groups === 1 ? '' : 's'}`, color: theme.text }] },
   ]
-  if (agents.unadded > 0 && !agents.hint.includes('installed')) chips.push([pillSeg(`${agents.unadded} not added`, theme.pill.info)])
-  lines.push(...flowSegs(chips, width, 1))
-  lines.push(clipSegs([...gradientText(sparkline(agents.week), theme.gradient, { bold: true }), { text: ` ${agents.weekTotal} turns in 14d`, color: theme.text }], width))
-  const quiet = agents.approved + agents.changes === 0
-  const review: Seg[][] = [
-    [{ text: '⚑ reviews', color: theme.text }],
-    [pillSeg(`✓ ${agents.approved}`, theme.pill[quiet ? 'muted' : 'success'])],
-    [pillSeg(`↻ ${agents.changes}`, theme.pill[agents.changes > 0 ? 'warning' : 'muted'])],
-  ]
-  if (agents.reviewsPending > 0) review.push([pillSeg(`${agents.reviewsPending} running`, theme.pill.info)])
-  if (agents.questions > 0) review.push([pillSeg(`${agents.questions} asking`, theme.pill.warning)])
-  lines.push(...flowSegs(review, width, 1))
-  if (agents.usage !== undefined) {
-    const text = `${agents.usage.agent}: ${agents.usage.line}`
-    const age = ` · ${agents.usage.age}`
-    lines.push(clipSegs([{ text: 'usage ', color: theme.dim }, { text: clipText(text, Math.max(1, width - 6 - stringWidth(age))), color: theme.text }, { text: age, color: theme.dim }], width))
-  }
-  return lines
-}
-
-export function agentsCard(width: number, stats: HomeStats, agents: HomeAgents, look: Look, theme: Theme): Card {
-  const urgent = agents.rows.length === 0 || agents.questions > 0
-  const hint = wrapText(agents.hint, Math.max(1, width - 2)).map(
-    (text, n): Seg[] => (urgent ? [{ text: n === 0 ? '▸ ' : '  ', color: theme.glow, bold: true }, { text, color: theme.glow, bold: true }] : [{ text: '  ' }, { text, color: theme.dim }]),
-  )
-  if (agents.rows.length === 0) {
-    const none = wrapText('coding agents you @mention in any chat', width).map((text): Seg[] => [{ text, color: theme.text }])
-    return { title: 'AGENTS', lines: none, tail: hint }
-  }
-  const cols = agentColumns(agents.rows)
-  const lines: Seg[][] = agents.rows.slice(0, AGENT_ROWS_MAX).map((row) => agentRow(row, cols, width, theme, agentTint(theme, look, row.name)))
-  if (agents.rows.length > AGENT_ROWS_MAX) lines.push([{ text: `+${agents.rows.length - AGENT_ROWS_MAX} more`, color: theme.dim }])
-  lines.push(...agentSummaryLines(width, stats, agents, theme))
-  return { title: 'AGENTS', lines, tail: hint }
-}
-
-/** The card's rows cut to `maxRows` (title included), losing lines from the bottom but keeping the tail. */
-export function renderCard(card: Card, width: number, maxRows: number, theme: Theme): Seg[][] {
-  const tail = card.tail ?? []
-  const avail = Math.max(0, maxRows - 1)
-  const lines = card.lines.slice(0, Math.max(0, avail - tail.length))
-  const room = avail - lines.length
-  return [bandTitleSegs(card.title, width, theme), ...lines, ...tail.slice(0, room)]
-}
-
-/** Cards one under another with a blank row between, whole cards only once fewer than three rows are left, cut from the bottom. */
-export function stackCards(cards: readonly Card[], width: number, room: number, theme: Theme): Seg[][] {
-  const rows: Seg[][] = []
-  for (const card of cards) {
-    const left = room - rows.length - (rows.length > 0 ? 1 : 0)
-    if (left < 3) break
-    if (rows.length > 0) rows.push(BLANK)
-    rows.push(...renderCard(card, width, left, theme))
+  const rows: Seg[][] = [[...label('Chats'), ...detailFor(chats, width - 8)]]
+  if (i.agentsOn !== false) {
+    const ready: Part = { rank: 1, segs: [{ text: `${agents.rows.length} ready`, color: theme.text }] }
+    const parts: Part[] = [
+      ready,
+      { rank: 1, segs: [count(stats.agentsRunning, 'running', theme.accent)] },
+      { rank: 2, segs: [count(agents.questions, 'asking', theme.warning)] },
+      { rank: 3, segs: [count(stats.mergeable, 'to merge', theme.success)] },
+      { rank: 4, segs: [{ text: `reviews ✓${agents.approved} ↻${agents.changes}`, color: theme.text }] },
+    ]
+    rows.push([...label('Agents'), ...detailFor(parts, width - 8)])
   }
   return rows
 }
 
-function buildCard(id: CardId, width: number, i: HomeInput, info: HomeInfo): Card {
-  if (id === 'start') return startCard(width, info, i.theme)
-  if (id === 'people') return peopleCard(width, i.stats, i.theme)
-  if (id === 'agents') return agentsCard(width, i.stats, i.agents, i.look, i.theme)
-  return activityCard(width, i.stats, i.theme)
+/** The agent rows' shared columns, so the state words, context and models line up from row to row. */
+export interface AgentColumns {
+  name: number
+  state: number
+  ctx: number
+  model: number
 }
 
-/** A brand-new pager (no messages, no agents) sees START first; everyone else sees their agents first. */
-export function stackedOrder(stats: HomeStats, agents: HomeAgents): CardId[] {
-  return stats.sent + stats.received === 0 && agents.rows.length === 0 ? ['start', 'people', 'agents', 'activity'] : ['agents', 'people', 'activity', 'start']
-}
+const ctxText = (row: HomeAgentRow): string => (row.ctx === undefined ? 'ctx —' : `ctx ${row.ctx}%`)
+const modelText = (row: HomeAgentRow): string => row.model ?? row.cli
+const widest = (texts: readonly string[], cap: number): number => Math.min(cap, Math.max(0, ...texts.map((t) => stringWidth(t))))
 
-/** The cards under the header: two columns on wide panes (START and PEOPLE | AGENTS and ACTIVITY), one stack otherwise, centered, at most `room` rows. */
-export function bodyRows(i: HomeInput, info: HomeInfo, room: number): Seg[][] {
-  if (room < 3) return []
-  const inner = Math.max(1, Math.min(i.width - 2, MAX_INNER))
-  const offset = Math.max(0, Math.floor((i.width - inner) / 2))
-  if (i.width < TWO_COLUMN_MIN_WIDTH) {
-    const cards = stackedOrder(i.stats, i.agents).filter((id) => id !== 'agents' || i.agentsOn !== false).map((id) => buildCard(id, inner, i, info))
-    return stackCards(cards, inner, room, i.theme).map((r) => indent(r, offset))
+export function agentColumns(rows: readonly HomeAgentRow[]): AgentColumns {
+  return {
+    name: widest(rows.map((r) => r.name), NAME_MAX),
+    state: widest(rows.map((r) => stateWord(r.state)), 12),
+    ctx: widest(rows.map(ctxText), 10),
+    model: widest(rows.map(modelText), MODEL_MAX),
   }
-  const leftW = Math.max(LEFT_MIN, Math.min(LEFT_MAX, Math.floor(inner * 0.34)))
-  const rightW = inner - leftW - COLUMN_GAP
-  const left = stackCards((['start', 'people'] as const).map((id) => buildCard(id, leftW, i, info)), leftW, room, i.theme)
-  const rightIds: readonly CardId[] = i.agentsOn === false ? ['activity'] : ['agents', 'activity']
-  const right = stackCards(rightIds.map((id) => buildCard(id, rightW, i, info)), rightW, room, i.theme)
-  const count = Math.max(left.length, right.length)
-  return Array.from({ length: count }, (_, r) => indent([...fitSegs(left[r] ?? [], leftW), { text: ' '.repeat(COLUMN_GAP) }, ...fitSegs(right[r] ?? [], rightW)], offset))
 }
 
 /**
- * The whole Home screen as rows, at most `height` rows of at most `width` columns: header, then cards cut from the bottom
- * when the pane is short. With spare height the block sits a little below the top.
+ * One agent as a sidebar-style row: its dot and name in its own color, then at the right the state word in the state's color, context
+ * pressure, model and counts. Narrow rows drop counts, then the model, then context; the name is cut last.
+ */
+export function agentLine(row: HomeAgentRow, cols: AgentColumns, width: number, theme: Theme, tint: string): Seg[] {
+  const tone = row.ctx === undefined ? undefined : ctxTone(row.ctx)
+  const ctxColor = tone === 'bad' ? theme.error : tone === 'warn' ? theme.warning : theme.dim
+  const parts: Part[] = [
+    { rank: 1, segs: [{ text: fitText(stateWord(row.state), cols.state), color: stateColor(row.state, theme), bold: row.state !== 'idle' }] },
+    { rank: 2, segs: [{ text: fitText(ctxText(row), cols.ctx), color: ctxColor }] },
+    { rank: 3, segs: [dim(fitText(modelText(row), cols.model), theme)] },
+    { rank: 4, segs: [dim(`${row.turns}t ${row.files}f`, theme)] },
+  ]
+  const room = width - 3 - cols.name - 3
+  const detail = detailFor(parts, room)
+  return buildRow({ glyph: '●', glyphColor: tint, label: row.name, labelColor: tint, ...(detail.length === 0 ? {} : { badge: detail }) }, false, width, theme)
+}
+
+/** The agent block: heading, a row per agent (the first few), the usage line, and the next step (first when it is urgent, otherwise last). */
+export function agentRows(i: HomeInput, width: number): Seg[][] {
+  const { agents, theme } = i
+  const out: Seg[][] = [heading('Agents', [dim(`${agents.rows.length} ready`, theme)], width, theme)]
+  const urgent = agents.rows.length === 0 || agents.questions > 0
+  const hint = wrapText(agents.hint, Math.max(1, width - 4)).map(
+    (text, n): Seg[] => (urgent ? [{ text: n === 0 ? ' ▸ ' : '   ', color: theme.accent, bold: true }, { text, color: theme.text }] : [{ text: '   ' }, dim(text, theme)]),
+  )
+  if (urgent) out.push(...hint)
+  if (agents.rows.length === 0) out.push([{ text: '   ' }, dim('coding agents you @mention in any chat', theme)])
+  else {
+    const cols = agentColumns(agents.rows)
+    out.push(...agents.rows.slice(0, AGENT_ROWS_MAX).map((row) => agentLine(row, cols, width, theme, agentTint(theme, i.look, row.name))))
+    if (agents.rows.length > AGENT_ROWS_MAX) out.push([{ text: '   ' }, dim(`+${agents.rows.length - AGENT_ROWS_MAX} more`, theme)])
+    if (agents.usage !== undefined) {
+      const age = ` · ${agents.usage.age}`
+      out.push([{ text: '   ' }, dim(clipText(`usage ${agents.usage.agent}: ${agents.usage.line}`, Math.max(1, width - 3 - stringWidth(age))) + age, theme)])
+    }
+  }
+  if (!urgent) out.push(...hint)
+  return out
+}
+
+/** The newest chats first; conversations with no message yet last. */
+export function recentChats(chats: readonly HomeChat[], n = RECENT_CHATS): HomeChat[] {
+  return [...chats].sort((a, b) => (b.last ?? 0) - (a.last ?? 0)).slice(0, n)
+}
+
+/** The chat block: heading, the newest conversations as sidebar rows, then a dim line of totals once there is any traffic. */
+export function chatRows(i: HomeInput, width: number): Seg[][] {
+  const { stats, theme } = i
+  const out: Seg[][] = [heading('Chats', [dim(`${stats.contacts + stats.groups}`, theme)], width, theme)]
+  const shown = recentChats(i.chats)
+  if (shown.length === 0) out.push([{ text: '   ' }, dim('no chats yet · /add <code> adds a friend', theme)])
+  else out.push(...shown.map((c) => buildRow(chatRowSpec(c, i.now, theme), false, width, theme)))
+  if (stats.sent + stats.received > 0) {
+    const week = stats.week.reduce((a, b) => a + b, 0)
+    const parts: Part[] = [
+      { rank: 1, segs: [dim(`↑ ${stats.sent} sent`, theme)] },
+      { rank: 1, segs: [dim(`↓ ${stats.received} received`, theme)] },
+      { rank: 2, segs: [{ text: sparkline(stats.week), color: theme.accent }, dim(` ${week} this week`, theme)] },
+      { rank: 3, segs: [dim(`top ${stats.busiest === null ? '—' : `${clipText(stats.busiest.title, 16)} ${stats.busiest.count}`}`, theme)] },
+    ]
+    out.push([{ text: '   ' }, ...detailFor(parts, width - 3)])
+  }
+  return out
+}
+
+/** The keys and commands worth knowing, each with what it does. */
+export function actionItems(agentsOn: boolean): readonly (readonly [string, string])[] {
+  return [
+    ['Ctrl+P', 'commands and search'],
+    ['Ctrl+G', 'shortcuts and help'],
+    ['Alt+↑↓', 'switch tab'],
+    ['Alt+S', 'settings'],
+    ['/add', 'add a friend by contact code'],
+    ['/code', 'show your contact code'],
+    ...(agentsOn ? ([['Alt+M', 'model and effort'], ['Alt+I', 'invite a contact to your agents']] as const) : []),
+  ]
+}
+
+/** One shortcut: its key on a raised chip (all keys padded to one width), then what it does. */
+function actionSegs(key: string, label: string, keyWidth: number, theme: Theme): Seg[] {
+  return [chip(key + ' '.repeat(Math.max(0, keyWidth - stringWidth(key))), theme), { text: ' ' }, { text: label, color: theme.text }]
+}
+
+/** The quick actions block: heading, then the shortcuts one per row, or two to a row on a wide pane. */
+export function actionRows(i: HomeInput, width: number): Seg[][] {
+  const items = actionItems(i.agentsOn !== false)
+  const keyWidth = Math.max(...items.map(([key]) => stringWidth(key)))
+  const out: Seg[][] = [heading('Quick actions', [], width, i.theme)]
+  const cells = items.map(([key, label]) => actionSegs(key, label, keyWidth, i.theme))
+  if (width < TWO_COLUMN_MIN_WIDTH) return [...out, ...cells.map((c) => [{ text: ' ' }, ...c])]
+  const colWidth = Math.floor((width - 1) / 2)
+  for (let n = 0; n < cells.length; n += 2) {
+    const left = fitSegs([{ text: ' ' }, ...(cells[n] ?? [])], colWidth)
+    out.push([...left, ...fitSegs([{ text: ' ' }, ...(cells[n + 1] ?? [])], width - colWidth)])
+  }
+  return out
+}
+
+/** The contact code wrapped to `width` columns so none of it is cut. */
+export function codeLines(code: string, width: number, theme: Theme): Seg[][] {
+  const room = Math.max(8, width - 2)
+  const rows: Seg[][] = []
+  for (let at = 0; at < code.length; at += room) rows.push([{ text: ' ' }, { text: code.slice(at, at + room), color: theme.text, bold: true }])
+  return rows
+}
+
+/** The contact code and the engine's other lines (LAN mode), under `title`; a new pager adds the getting-started steps. */
+export function codeRows(title: string, info: HomeInfo, withSteps: boolean, width: number, theme: Theme): Seg[][] {
+  const out: Seg[][] = [heading(title, [], width, theme)]
+  if (info.code !== undefined) out.push(...codeLines(info.code, width, theme))
+  if (withSteps) {
+    info.steps.forEach((step, n) => {
+      wrapText(step, width - 4).forEach((text, row) => out.push([{ text: row === 0 ? ` ${n + 1}  ` : '    ', color: theme.accent, bold: true }, { text, color: theme.text }]))
+    })
+  }
+  for (const extra of info.extra) for (const text of wrapText(extra, width - 2)) out.push([{ text: ' ' }, dim(text, theme)])
+  return out
+}
+
+const KIND_MARK: Record<ChangelogKind, string> = { Added: '+', Changed: '~', Fixed: '✓', Removed: '−', Deprecated: '!', Security: '!' }
+
+function kindColor(kind: ChangelogKind, theme: Theme): string {
+  if (kind === 'Added') return theme.success
+  if (kind === 'Changed') return theme.info
+  if (kind === 'Fixed') return theme.accent
+  if (kind === 'Removed') return theme.error
+  return theme.warning
+}
+
+/** What's new: the newest release's few lines, one row each, cut with an ellipsis. */
+export function newsRows(news: WhatsNew, width: number, theme: Theme): Seg[][] {
+  const note: Seg[] = [dim(`v${news.version} · /changelog`, theme), ...(news.fresh ? [{ text: ' ' }, chip('new', theme, 'accent')] : [])]
+  const out: Seg[][] = [heading("What's new", note, width, theme)]
+  for (const item of news.items) {
+    out.push([{ text: ` ${KIND_MARK[item.kind]} `, color: kindColor(item.kind, theme), bold: true }, { text: clipText(item.text, Math.max(1, width - 4)), color: theme.text }])
+  }
+  return out
+}
+
+/** The block ids, in the order Home shows them. */
+export type BlockId = 'agents' | 'chats' | 'actions' | 'code' | 'start' | 'news'
+
+/** A brand-new pager (no messages, no contacts, no agents) sees how to get started first; everyone else sees what is running. */
+export function blockOrder(stats: HomeStats, agents: HomeAgents, agentsOn: boolean): BlockId[] {
+  const fresh = stats.sent + stats.received === 0 && stats.contacts === 0 && agents.rows.length === 0
+  const order: BlockId[] = fresh ? ['start', 'actions', 'agents', 'chats', 'news'] : ['agents', 'chats', 'actions', 'code', 'news']
+  return order.filter((id) => id !== 'agents' || agentsOn)
+}
+
+function block(id: BlockId, i: HomeInput, info: HomeInfo, width: number): Seg[][] {
+  if (id === 'agents') return agentRows(i, width)
+  if (id === 'chats') return chatRows(i, width)
+  if (id === 'actions') return actionRows(i, width)
+  if (id === 'code') return codeRows('Contact code', info, false, width, i.theme)
+  if (id === 'start') return codeRows('Get started', info, true, width, i.theme)
+  return i.news === undefined ? [] : newsRows(i.news, width, i.theme)
+}
+
+/** The greeting, the chat and agent summary lines, and the recap of what happened while pager was closed. */
+export function headerRows(i: HomeInput, info: HomeInfo, width: number): Seg[][] {
+  const name = i.look.me !== DEFAULT_ME ? i.look.me : (info.name ?? DEFAULT_ME)
+  const rows: Seg[][] = [greetingSegs(name, i.look.badge, i.hour, i.theme), ...summaryRows(i, width)]
+  if (i.recap !== undefined && i.recap !== '') rows.push([{ text: ' ' }, dim(clipText(i.recap, Math.max(1, width - 2)), i.theme)])
+  return rows
+}
+
+/**
+ * The whole Home screen as rows: the header, then the blocks one under another with a blank row between, at most `height` rows of
+ * exactly `width` columns, like every other screen. A short pane drops blocks from the bottom (a block is cut to its heading and a row or two, the
+ * contact code never in the middle).
  */
 export function homeRows(i: HomeInput): Seg[][] {
+  const width = Math.max(1, i.width)
   const info = parseInfo(i.info)
-  const header = headerRows(i, info)
-  const body = bodyRows(i, info, i.height - header.length)
-  const content = [...header, ...body].slice(0, i.height).map((r) => clipSegs(r, i.width))
-  const pad = Math.floor((i.height - content.length) / 3)
-  return [...Array.from({ length: pad }, () => BLANK), ...content]
+  const rows = headerRows(i, info, width)
+  for (const id of blockOrder(i.stats, i.agents, i.agentsOn !== false)) {
+    const rest = block(id, i, info, width)
+    const left = i.height - rows.length - 1
+    if (rest.length === 0 || left < Math.min(3, rest.length)) continue
+    if ((id === 'code' || id === 'start') && rest.length > left) continue
+    rows.push(BLANK, ...rest.slice(0, left))
+  }
+  return rows.slice(0, Math.max(0, i.height)).map((r) => fitSegs(r, width))
 }

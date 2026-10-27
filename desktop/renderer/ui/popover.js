@@ -297,7 +297,8 @@ export function closeMenus() {
   if (s.onClose) s.onClose()
 }
 
-export function showMenu({ anchor, items, align = 'start', onClose } = {}) {
+/** `hover: true` is a menu the pointer opened passively (hovering a button): it never takes the keyboard from whatever has focus. */
+export function showMenu({ anchor, items, align = 'start', onClose, hover = false } = {}) {
   closeMenus()
   hideTip()
   const root = buildLevel(items || [], null)
@@ -305,7 +306,7 @@ export function showMenu({ anchor, items, align = 'start', onClose } = {}) {
   M = session
   overlayEl().append(root.el)
   place(root.el, rectOf(anchor), align)
-  document.addEventListener('keydown', onKey, true)
+  if (!hover) document.addEventListener('keydown', onKey, true)
   document.addEventListener('pointerdown', onPointerDown, true)
   document.addEventListener('contextmenu', onPointerDown, true)
   document.addEventListener('scroll', onScroll, true)

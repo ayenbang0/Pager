@@ -27,6 +27,7 @@ import {
   type Session,
 } from './protocol.js'
 import { applyPatch, loadSettings, saveSettings, type Settings } from './settings.js'
+import { ChatsHost, type ChatsOptions } from './chats.js'
 import { loadState, StateWriter, type SavedPane } from './state.js'
 
 export interface DaemonOptions {
@@ -46,6 +47,8 @@ export interface DaemonOptions {
   dataSaveMs?: number
   ringBytes?: number
   log?: (line: string) => void
+  /** Test seam and extra engine options for the hosted chat engine (see ChatsOptions). */
+  chats?: Pick<ChatsOptions, 'openEngine' | 'engineOptions' | 'acquire'>
 }
 
 export interface DaemonHandle {
@@ -67,6 +70,8 @@ const SLOW_BYTES = 4 * 1024 * 1024
 const HARD_BYTES = 128 * 1024 * 1024
 const STATE_COALESCE_MS = 30
 const KINDS = new Set(['pager', 'shell', 'omp', 'claude', 'opencode', 'hermes', 'custom'])
+/** The Pager home pane: a renderer block (no process) that is the first pane of a session and can never be closed. */
+const HOME_KIND: PaneKind = 'block:home'
 /** After the old screen of a restored pane: leave a full-screen program's screen, drop its modes, say what happened. */
 const MODES_OFF = '\x1b[?1049l\x1b[0m\x1b[?25h\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1l'
 
@@ -145,12 +150,14 @@ class Daemon {
   private readonly done = Promise.withResolvers<void>()
   private readonly log: (line: string) => void
   private readonly slowBytes: number
+  private readonly chats: ChatsHost
 
   constructor(private readonly o: DaemonOptions) {
     this.address = o.address ?? daemonAddress(o.dir, o.env ?? process.env, o.platform)
     this.hostAddr = hostAddress(this.address, o.platform)
     this.settings = loadSettings(path.join(o.dir, 'desktop.json'))
     this.slowBytes = o.slowBytes ?? SLOW_BYTES
+    this.chats = new ChatsHost({ dir: o.dir, env: o.env ?? process.env, log: (l) => this.log(l), emit: (ev) => this.emit(ev), ...o.chats })
     this.log = o.log ?? ((l) => process.stderr.write(`[${new Date().toISOString()}] ${l}\n`))
     this.writer = new StateWriter(
       path.join(o.dir, 'daemon.state'),
@@ -179,6 +186,7 @@ class Daemon {
     await this.restore()
     await this.listenHost()
     this.log(`daemon ${VERSION} (pid ${process.pid}) listening on ${this.address}; ${this.panes.size} pane(s) restored`)
+    if (this.settings.chatsOn) void this.chats.ensure()
   }
 
   private async listen(): Promise<void> {
@@ -257,20 +265,21 @@ class Daemon {
 
   private async shutdown(): Promise<void> {
     clearTimeout(this.stateTimer)
+    // Stop listening before anything slow runs. A client accepted during the awaits below would be answered, then dropped by `clients.clear()` with its socket still open, and a server closes only when every socket is gone: the daemon would outlive `daemon stop` as a zombie.
+    const unbound = [this.server, this.hostServer].map((s) => {
+      const { promise, resolve } = Promise.withResolvers<void>()
+      if (s === undefined) resolve()
+      else s.close(() => resolve())
+      return promise
+    })
     this.writer.touch('layout')
     await this.writer.flush()
     for (const rt of this.panes.values()) rt.kill()
     this.panes.clear()
     for (const c of this.clients.values()) c.socket.destroy()
+    await this.chats.close()
     this.clients.clear()
-    await Promise.all(
-      [this.server, this.hostServer].map(async (s) => {
-        if (s === undefined) return
-        const { promise, resolve } = Promise.withResolvers<void>()
-        s.close(() => resolve())
-        await promise
-      }),
-    )
+    await Promise.all(unbound)
     if (process.platform !== 'win32') {
       fs.rmSync(this.address, { force: true })
       fs.rmSync(this.hostAddr, { force: true })
@@ -282,6 +291,7 @@ class Daemon {
   // ---- connections -----------------------------------------------------------------------------------------------
 
   private accept(socket: net.Socket): void {
+    if (this.closing !== undefined) return void socket.destroy() // a connection that was already queued when the listener closed
     const client: Client = { id: ++this.nextClient, socket, name: '', kind: '', said: false, events: undefined, attached: new Set(), stale: new Set(), notified: false }
     this.clients.set(client.id, client)
     const dec = new FrameDecoder()
@@ -302,6 +312,7 @@ class Daemon {
 
   private drop(client: Client): void {
     if (!this.clients.delete(client.id)) return
+    this.chats.setViewers(this.chatViewers())
     const hadWindow = client.said && client.kind === 'window'
     for (const id of client.attached) this.release(client, id)
     client.attached.clear()
@@ -314,6 +325,15 @@ class Daemon {
   private windows(): number {
     let n = 0
     for (const c of this.clients.values()) if (c.said && c.kind === 'window') n++
+    return n
+  }
+
+  /** Connected clients that listen to chat events (a window with Chats open): without one no chat counts as being read. */
+  private chatViewers(): number {
+    let n = 0
+    for (const c of this.clients.values()) {
+      if (c.events === 'all' || (c.events !== undefined && [...c.events].some((e) => e.startsWith('chat')))) n++
+    }
     return n
   }
 
@@ -334,7 +354,7 @@ class Daemon {
     }
     if (f.kind !== 'json') return // a frame type from a newer peer
     const req = f.json as Partial<Request> | null
-    if (typeof req !== 'object' || req === null || typeof req.id !== 'number' || typeof req.type !== 'string') return
+    if (typeof req !== 'object' || req === null || (typeof req.id !== 'number' && typeof req.id !== 'string') || typeof req.type !== 'string') return
     const reply = (r: unknown): void => this.send(c, encodeJson(r))
     if (!c.said && req.type !== 'hello') return reply({ id: req.id, ok: false, error: 'the first request must be hello' })
     Promise.resolve()
@@ -429,9 +449,14 @@ class Daemon {
     return rt
   }
 
+  /** The Home pane is a renderer block: the first pane of a new session. Afterwards new panes are shells (or agents). */
   private defaultKind(): PaneKind {
-    if (![...this.panes.values()].some((r) => r.meta.kind === 'pager' && r.meta.state !== 'exited')) return 'pager'
+    if (!this.hasHome()) return HOME_KIND
     return this.settings.newBlocks === 'agent' ? 'omp' : 'shell'
+  }
+
+  private hasHome(): boolean {
+    return [...this.panes.values()].some((r) => r.meta.kind === HOME_KIND)
   }
 
   /** Where a new tab starts: the focused pane's folder (setting `newTabsStartIn`), else home. */
@@ -637,8 +662,14 @@ class Daemon {
     this.emit({ event: 'pane_closed', paneId: id })
   }
 
+  /** The Home pane is the app's front door: it stays open, so closing it is refused. */
+  private keepHome(ids: readonly string[]): void {
+    if (ids.some((id) => this.panes.get(id)?.meta.kind === HOME_KIND)) throw new Error('Pager home stays open')
+  }
+
   private closePane(id: string): void {
     this.runtime(id)
+    this.keepHome([id])
     const gone = detachPane(this.sessions, id)
     this.killPane(id)
     if (gone?.tabClosed) {
@@ -651,7 +682,11 @@ class Daemon {
   // ---- requests --------------------------------------------------------------------------------------------------
 
   private async handle(c: Client, req: Request): Promise<unknown> {
-    const a = req as unknown as Args
+    // Handler arguments: the envelope keys never count as arguments. A numeric `id` is the call id (a request carrying
+    // its own string `id` argument sent that string in this slot, so strings survive); `type` is the request name.
+    const a: Args = { ...(req as unknown as Args) }
+    if (typeof a.id === 'number') delete a.id
+    delete a.type
     switch (req.type) {
       case 'hello': {
         c.name = opt(a, 'name') ?? opt(a, 'client') ?? `client-${c.id}`
@@ -677,6 +712,7 @@ class Daemon {
         this.settings = applyPatch(this.settings, a.patch)
         void saveSettings(path.join(this.o.dir, 'desktop.json'), this.settings).catch((e: unknown) => this.log(`cannot write desktop.json: ${e instanceof Error ? e.message : String(e)}`))
         this.changed('settings')
+        if (this.settings.chatsOn) void this.chats.ensure()
         return this.settings
       }
       case 'events.subscribe': {
@@ -686,6 +722,7 @@ class Daemon {
         const bad = clean.find((n) => !(EVENT_NAMES as readonly string[]).includes(n))
         if (bad !== undefined) throw new Error(`unknown event: ${bad} (known: ${EVENT_NAMES.join(', ')})`)
         c.events = clean.length === 0 ? 'all' : new Set(clean)
+        this.chats.setViewers(this.chatViewers())
         return undefined
       }
       case 'session.new': {
@@ -704,12 +741,14 @@ class Daemon {
         this.changed('session.rename')
         return undefined
       case 'tab.new': {
-        const init = this.launchArgs(a, this.startCwd(), this.defaultKind() === 'pager' ? 'pager' : 'shell')
+        const home = this.defaultKind() === HOME_KIND && opt(a, 'command') === undefined
+        const init = this.launchArgs(a, this.startCwd(), home ? HOME_KIND : 'shell')
         return this.createTab(opt(a, 'sessionId'), init)
       }
       case 'tab.close': {
         const t = locateTab(this.sessions, str(a, 'tabId'))
         if (t === undefined) throw new Error('no such tab')
+        this.keepHome(paneIds(t.tab.root))
         for (const id of paneIds(t.tab.root)) this.killPane(id)
         t.session.tabs.splice(t.session.tabs.indexOf(t.tab), 1)
         this.renamedTabs.delete(t.tab.id)
@@ -823,6 +862,7 @@ class Daemon {
       case 'open':
         return this.open(a)
       default:
+        if (ChatsHost.handles(req.type)) return this.chats.handle(req.type, a)
         throw new Error(`unknown request: ${req.type}`)
     }
   }
@@ -879,6 +919,12 @@ class Daemon {
     this.nextSession = Math.max(saved.nextSession, maxOf(this.sessions.map((s) => s.id), 's'))
     this.nextTab = Math.max(saved.nextTab, maxOf(this.sessions.flatMap((s) => s.tabs.map((t) => t.id)), 't'))
     await Promise.all(saved.panes.filter((p) => live.has(p.pane.id)).map((p) => this.revive(p)))
+    // State written before Home was a block has none: put one first in the first session (the old `pager` pane stays, now closable).
+    const first = this.sessions[0]
+    if (first !== undefined && !this.hasHome()) {
+      const rt = await this.spawnPane({ kind: HOME_KIND, cwd: os.homedir() })
+      first.tabs.unshift(newTab(`t${++this.nextTab}`, rt.meta.title, rt.meta.id))
+    }
   }
 
   private async revive(sp: SavedPane): Promise<void> {

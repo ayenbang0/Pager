@@ -1,4 +1,6 @@
-// The daemon-facing commands: `pager daemon|split|capture|events|open|ls|send`.
+// The daemon-facing commands: `pager daemon|split|capture|events|open|ls|send|serve`.
+
+import { parseServeArgs, type ServeArgs } from '../remote/args.js'
 
 export type DaemonArgs =
   | { verb: 'daemon'; action: 'start' | 'stop' | 'status' | 'serve' }
@@ -8,8 +10,9 @@ export type DaemonArgs =
   | { verb: 'open'; pane?: string; split?: 'row' | 'col'; tab: boolean; targets: string[] }
   | { verb: 'ls'; json: boolean }
   | { verb: 'send'; pane?: string; enter: boolean; text: string }
+  | ServeArgs
 
-export const DAEMON_VERBS: readonly string[] = ['daemon', 'split', 'capture', 'events', 'open', 'ls', 'send']
+export const DAEMON_VERBS: readonly string[] = ['daemon', 'split', 'capture', 'events', 'open', 'ls', 'send', 'serve']
 
 const DIRS: Record<string, 'row' | 'col'> = { right: 'row', row: 'row', down: 'col', col: 'col' }
 
@@ -49,6 +52,8 @@ export function parseDaemonArgs(verb: string, argv: string[]): DaemonArgs | { er
       if (action !== 'start' && action !== 'stop' && action !== 'status' && action !== 'serve') return { error: 'pager daemon needs one of: start, stop, status' }
       return argv.length > 1 ? { error: `pager daemon ${action} takes no arguments` } : { verb, action }
     }
+    case 'serve':
+      return parseServeArgs(argv)
     case 'split': {
       const dir = DIRS[argv[0] ?? '']
       if (dir === undefined) return { error: 'pager split needs a direction: right or down' }

@@ -5,9 +5,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
+import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
 import { waitFor } from '../../testing/testutil.js'
 import type { AdapterSpec } from './adapters.js'
+import { ACP_PROBE_TIMEOUT_MS } from './turn.js'
 import { Orchestrator } from '../orchestrator.js'
 
 const oneShot = fileURLToPath(new URL('../testing/testAgent.js', import.meta.url))
@@ -373,3 +375,20 @@ test('agents without ACP get a hint instead of commands', async () => {
     for (const d of [repo, dataDir]) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5 })
   }
 })
+
+test('close() kills agents that are still in their readiness handshake instead of waiting out the probe timeout', () =>
+  withEnv('TEST_ACP_HANG_INIT', '1', async () => {
+    const repo = makeRepo()
+    const dataDir = tmp('pager-acp-data-')
+    const orch = new Orchestrator({ dataDir, workdir: repo, adapters: fakes })
+    try {
+      const checking = orch.refresh()
+      await sleep(1000) // the probes have spawned their agents by now; the agents never answer `initialize`
+      const started = Date.now()
+      await orch.close()
+      await checking
+      assert.ok(Date.now() - started < ACP_PROBE_TIMEOUT_MS / 2, `closing took ${Date.now() - started} ms`)
+    } finally {
+      for (const d of [repo, dataDir]) fs.rmSync(d, { recursive: true, force: true, maxRetries: 5 })
+    }
+  }))

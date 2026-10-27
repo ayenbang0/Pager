@@ -756,7 +756,7 @@ export function openPicker({ placeholder = 'Search…', items = [], current, onH
 
 function defaultSwatch() {
   return resolvedMode() === 'light'
-    ? { bg: '#fcfcfb', fg: '#1f2126', dots: ['#cf3a3f', '#a86a00', '#1d8a5a', '#0f7f93', '#2f5fe0', '#8a4fd8', '#5a7f80'] }
+    ? { bg: '#fcfcfb', fg: '#1f2126', dots: ['#b63337', '#8b5800', '#18714a', '#0d6d7e', '#2c59d3', '#7b46c0', '#4a6d6e'] }
     : { bg: '#060607', fg: '#e4e4e7', dots: ['#ff6166', '#f5b13d', '#3ecf8e', '#35c7e6', '#5b8dff', '#b98cff', '#5a8cff'] }
 }
 

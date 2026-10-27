@@ -12,13 +12,13 @@ import { SegLine } from '../kit/SegLine.js'
 import { useBlink } from '../kit/Spinner.js'
 import { SpinnerLine } from '../kit/SpinnerLine.js'
 import { agentTint } from '../theme/look.js'
-import { pillSeg } from '../kit/segs.js'
-import { agentRowSpec, sharedRowSpec, buildRow, groupHeader, unreadBadge, type RowSpec } from './sidebarRows.js'
+import { fitSegs, pillSeg } from '../kit/segs.js'
+import { agentRowSpec, buildRow, chatRowSpec, groupHeader, sharedRowSpec, unreadBadge, type RowSpec } from './sidebarRows.js'
 import type { SidebarEntry } from './tabs.js'
 import { useLook, useTheme } from '../theme/theme.js'
 
 export const SIDEBAR_WIDTH = 26
-/** Row width: the sidebar less its right border column. */
+/** Row width: the sidebar less one column of air before the main area. The sidebar is flat: no box, no rule; spacing and the raised active row set it apart. */
 const ROW_WIDTH = SIDEBAR_WIDTH - 1
 
 function Header({ title, fold, count }: { title: string; fold?: 'open' | 'closed'; count?: number }) {
@@ -62,31 +62,23 @@ interface Props {
   aiBusy: boolean
 }
 
+/** The first conversation's invitation: shown under the entries while there are no chats, if there are the rows. */
+const EMPTY_HINT = ['no chats yet', '/add <code> to start'] as const
+
 export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, activeId, terminalRunning, aiBusy }: Props) {
   const theme = useTheme()
+  const now = Date.now()
   const byId = new Map(convs.map((c) => [c.id, c]))
   const byName = new Map(room.agents.map((a) => [a.name, a]))
-  const callBadge = (conv: ConvView) => (conv.call === undefined ? [] : [pillSeg(`☎${conv.call}`, theme.pill.success)])
   const tabRow = (id: string | null) => {
     const active = activeId === id
     if (id === null) return <Row key="home" spec={{ glyph: '⌂', glyphColor: theme.accent, label: 'home' }} active={active} />
     const conv = byId.get(id)
-    if (conv?.kind === 'dm') {
-      const online = conv.online === true
-      const spec: RowSpec = {
-        glyph: online ? '●' : '○',
-        glyphColor: online ? theme.online : theme.dim,
-        label: conv.title,
-        labelColor: online ? theme.text : theme.dim,
-        badge: [...callBadge(conv), ...unreadBadge(conv.unread, theme)],
-      }
-      return <Row key={id} spec={spec} active={active} />
-    }
-    if (conv) return <Row key={id} spec={{ glyph: '#', glyphColor: theme.accent2, label: conv.title, badge: [...callBadge(conv), ...unreadBadge(conv.unread, theme)], ...(conv.thinking === true ? { spinner: true } : {}) }} active={active} />
+    if (conv !== undefined) return <Row key={id} spec={chatRowSpec(conv, now, theme)} active={active} />
     if (id === ROOM_ID) return <Row key={id} spec={{ glyph: '⌁', glyphColor: theme.accent2, label: 'agents', badge: unreadBadge(room.unread, theme) }} active={active} />
     if (id === AI_ID) return <Row key={id} spec={{ glyph: '✦', glyphColor: theme.accent2, spinner: aiBusy, label: 'ai' }} active={active} />
     if (isTermTab(id)) {
-      return <Row key={id} spec={{ glyph: '▸', glyphColor: theme.accent, label: id === TERM_ID ? 'terminal' : `terminal ${id.slice(9)}`, ...(terminalRunning ? { badge: [pillSeg('● run', theme.pill.success)] } : {}) }} active={active} />
+      return <Row key={id} spec={{ glyph: '▸', glyphColor: theme.accent, label: id === TERM_ID ? 'terminal' : `terminal ${id.slice(9)}`, ...(terminalRunning ? { badge: [{ text: '● run', color: theme.success, bold: true }] } : {}) }} active={active} />
     }
     if (id === DOCS_ID) return <Row key={id} spec={{ glyph: '▤', glyphColor: theme.accent, label: 'docs' }} active={active} />
     if (id === SETTINGS_ID) return <Row key={id} spec={{ glyph: '⚙', glyphColor: theme.accent, label: 'settings' }} active={active} />
@@ -97,17 +89,9 @@ export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, a
   }
   const pendingBy = new Map(pending.map((p) => [p.n, p]))
   const shown = entries.slice(scroll, scroll + rows)
+  const hint = convs.length === 0 && scroll + shown.length >= entries.length && shown.length + EMPTY_HINT.length + 1 <= rows
   return (
-    <Box
-      width={SIDEBAR_WIDTH}
-      flexDirection="column"
-      borderStyle="bold"
-      borderColor={theme.border}
-      borderTop={false}
-      borderBottom={false}
-      borderLeft={false}
-      overflow="hidden"
-    >
+    <Box width={SIDEBAR_WIDTH} flexDirection="column" overflow="hidden">
       {shown.map((e, i) => {
         const key = `${scroll + i}`
         if (e.kind === 'static') return <Header key={key} title={e.title} />
@@ -118,6 +102,15 @@ export function Sidebar({ entries, scroll, rows, convs, pending, room, shared, a
           <Row key={key} spec={{ glyph: '◌', glyphColor: theme.badge, label: `${p.label} (${p.type})`, labelColor: theme.badge, badge: [pillSeg(`#${p.n}`, theme.pill.warning)] }} active={false} />
         )
       })}
+      {hint ? (
+        <Box flexDirection="column" marginTop={1}>
+          {EMPTY_HINT.map((text) => (
+            <Box key={text} width={ROW_WIDTH} height={1}>
+              <SegLine segs={fitSegs([{ text: `  ${text}`, color: theme.dim }], ROW_WIDTH)} />
+            </Box>
+          ))}
+        </Box>
+      ) : null}
     </Box>
   )
 }

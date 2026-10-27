@@ -2,9 +2,14 @@
 // driving is a second, explicit, per-session step behind a banner. Sharing a screen with another machine is not part
 // of this block.
 import { h, fromHTML } from '../ui/dom.js'
+import { segmented } from '../ui/controls.js'
+import { confirmDialog } from '../ui/dialog.js'
+import { registerInstance, registerShare } from './share.js'
 
-const CSS = new URL('./screen.css', import.meta.url).href
-if (!document.querySelector(`link[href="${CSS}"]`)) document.head.append(h('link', { rel: 'stylesheet', href: CSS }))
+for (const href of ['../ui/kit.css', './screen.css']) {
+  const url = new URL(href, import.meta.url).href
+  if (!document.querySelector(`link[href="${url}"]`)) document.head.append(h('link', { rel: 'stylesheet', href: url }))
+}
 
 const svg = (body) => `<svg class="ico" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
 const ICONS = {
@@ -41,7 +46,6 @@ function mount(el, ctx) {
     snapshot: false, // fallback capture (no smooth video)
     recording: null, // { rec, chunks, t0 }
     error: null,
-    confirm: false,
   }
   let disposed = false
   let stream = null
@@ -55,8 +59,7 @@ function mount(el, ctx) {
   const bar = h('div', { class: 'sc-bar' })
   const banner = h('div', { class: 'sc-banner', hidden: true })
   const stage = h('div', { class: 'sc-stage' })
-  const dialog = h('div', { class: 'sc-scrim', hidden: true })
-  root.append(bar, banner, stage, dialog)
+  root.append(bar, banner, stage)
   el.append(root)
 
   // ------------------------------------------------------------ rpc
@@ -81,8 +84,25 @@ function mount(el, ctx) {
       })
     : null
 
+  // ---- sharing (local://chats-contract.md, "Sharing") -----------------------------------------------------------
+  // Read-only live view of the display list. A pane that joined a share stays quiet and never refreshes its own list
+  // once foreign data lands; a normal pane relays every load.
+  const shareEmitters = new Set()
+  let shareForeign = false
+  let shareArmed = !(ctx.args && ctx.args.join)
+  const shareEmit = (sources) => { if (shareArmed && !shareForeign) for (const cb of shareEmitters) cb({ sources }) }
+  const shareApply = (s) => {
+    if (!s || !Array.isArray(s.sources)) return // opaque peer text this build does not understand
+    shareForeign = true
+    shareArmed = true
+    state.error = null
+    state.sources = s.sources
+    render()
+  }
+
   // ------------------------------------------------------------ picker
   async function loadSources() {
+    if (shareForeign) return // foreign list: do not clobber the shared one with a local refresh
     state.loading = true
     state.error = null
     render()
@@ -93,9 +113,11 @@ function mount(el, ctx) {
     }
     state.loading = false
     render()
+    if (state.sources) shareEmit(state.sources)
   }
 
   async function choose(src) {
+    if (shareForeign) return // a shared read-only list is not locally controllable
     try {
       const r = await call('select', { sourceId: src.id })
       state.session = r
@@ -245,9 +267,19 @@ function mount(el, ctx) {
   }
 
   // ------------------------------------------------------------ control
-  function askControl() {
-    state.confirm = true
-    render()
+  async function askControl() {
+    const s = state.session
+    if (!s) return
+    const warning = s.source.hostsPager
+      ? ' Pager is on this display, so the pointer will jump out from under this pane. Pick another display to drive comfortably.'
+      : ''
+    const confirmed = await confirmDialog({
+      title: `Drive ${s.source.name}?`,
+      body: 'While Control is on, your mouse clicks, scrolling and typing over the picture are sent to that display as if you used it directly. This applies to this session only and ends when you stop, hide this pane, or after 10 idle minutes.' + warning,
+      confirm: 'Allow control',
+      danger: true,
+    })
+    if (confirmed) await setMode('control')
   }
 
   async function setMode(mode) {
@@ -256,12 +288,10 @@ function mount(el, ctx) {
     try {
       await ctx.rpc('mode', { sid: s.sid, mode, confirm: mode === 'control' ? true : undefined })
       state.mode = mode
-      state.confirm = false
       queue.length = 0
       render()
       if (mode === 'control') stage.querySelector('.sc-view')?.focus()
     } catch (e) {
-      state.confirm = false
       toast('error', cleanErr(e))
       render()
     }
@@ -386,14 +416,37 @@ function mount(el, ctx) {
     if (r) pill.querySelector('b').textContent = `REC ${clock(Date.now() - r.t0)}`
   }
 
+  const fitSeg = segmented({
+    options: [{ value: true, label: 'Fit' }, { value: false, label: 'Actual size' }],
+    value: state.fit,
+    sm: true,
+    label: 'How the picture fits the pane',
+    onChange: (v) => {
+      state.fit = v
+      render()
+    },
+  })
+  const modeSeg = segmented({
+    options: [{ value: 'view', label: 'View only', icon: 'eye' }, { value: 'control', label: 'Control' }],
+    value: state.mode,
+    sm: true,
+    label: 'Screen access mode',
+    onChange: (v) => {
+      if (v === 'control') {
+        if (state.mode !== 'control') askControl()
+      } else if (state.mode === 'control') setMode('view')
+    },
+  })
+
   function renderBar() {
+    fitSeg.setValue(state.fit)
+    modeSeg.setValue(state.mode)
     bar.replaceChildren()
     const s = state.session
     if (!s) {
       bar.append(h('div', { class: 'sc-title' }, ico('screen'), 'Screen'), h('div', { class: 'sc-gap' }), h('button', { class: 'sc-btn', onClick: loadSources, disabled: state.loading }, ico('refresh'), 'Refresh displays'))
       return
     }
-    const n = natural()
     const rec = state.recording
     const items = [
       h(
@@ -403,22 +456,8 @@ function mount(el, ctx) {
         s.source.name,
         h('span', { class: 'sc-dim mono' }, `${s.source.size.w}×${s.source.size.h}`),
       ),
-      h(
-        'div',
-        { class: 'seg', title: 'How the picture fits the pane' },
-        ...[
-          ['fit', 'Fit', true],
-          ['actual', 'Actual size', false],
-        ].map(([k, label, v]) =>
-          h('button', { class: 'seg-b' + (state.fit === v ? ' on' : ''), onClick: () => ((state.fit = v), render()) }, ico(k), h('span', null, label)),
-        ),
-      ),
-      h(
-        'div',
-        { class: 'seg', title: 'View only never sends input; Control needs your confirmation each session' },
-        h('button', { class: 'seg-b' + (state.mode === 'view' ? ' on' : ''), onClick: () => state.mode === 'control' && setMode('view') }, ico('eye'), h('span', null, 'View only')),
-        h('button', { class: 'seg-b control' + (state.mode === 'control' ? ' on' : ''), onClick: () => state.mode !== 'control' && askControl() }, ico('pointer'), h('span', null, 'Control')),
-      ),
+      fitSeg,
+      modeSeg,
       h('div', { class: 'sc-gap' }),
       state.live
         ? h(
@@ -426,7 +465,6 @@ function mount(el, ctx) {
             { class: 'sc-pill' + (rec ? ' rec' : ' live'), title: rec ? 'Recording this display to a file' : 'This display is being captured and shown here' },
             h('i'),
             h('b', null, rec ? `REC ${clock(Date.now() - rec.t0)}` : state.snapshot ? 'LIVE · stills' : 'LIVE'),
-            h('span', { class: 'sc-dim mono' }, n.w ? `${n.w}×${n.h}` : ''),
           )
         : null,
       stream && state.live
@@ -508,34 +546,11 @@ function mount(el, ctx) {
     return wrap
   }
 
-  function renderDialog() {
-    const s = state.session
-    if (!state.confirm || !s) {
-      dialog.hidden = true
-      dialog.replaceChildren()
-      return
-    }
-    dialog.hidden = false
-    const go = h('button', { class: 'sc-btn danger-solid', onClick: () => setMode('control') }, 'Allow control')
-    dialog.replaceChildren(
-      h(
-        'div',
-        { class: 'sc-dlg', role: 'alertdialog' },
-        h('div', { class: 'sc-dlg-t' }, ico('warn'), `Drive ${s.source.name}?`),
-        h('div', { class: 'sc-dlg-b' }, 'While Control is on, your mouse clicks, scrolling and typing over the picture are sent to that display as if you used it directly. This applies to this session only and ends when you stop, hide this pane, or after 10 idle minutes.'),
-        s.source.hostsPager ? h('div', { class: 'sc-dlg-note' }, 'Pager is on this display, so the pointer will jump out from under this pane. Pick another display to drive comfortably.') : null,
-        h('div', { class: 'sc-dlg-a' }, h('button', { class: 'sc-btn', onClick: () => ((state.confirm = false), render()) }, 'Cancel'), go),
-      ),
-    )
-    go.focus()
-  }
-
   function render() {
     if (disposed) return
     renderBar()
     renderBanner()
     renderStage()
-    renderDialog()
     root.classList.toggle('controlling', state.mode === 'control')
   }
 
@@ -574,8 +589,18 @@ function mount(el, ctx) {
 
   render()
 
+  const shareAdapter = screenShare({
+    snapshot: () => ({ sources: state.sources || [] }),
+    applyOp: (op, meta) => { if (!(meta && meta.mine)) shareApply(op) },
+    applySnapshot: (s) => shareApply(s),
+    onLocalOp: (cb) => (shareEmitters.add(cb), () => shareEmitters.delete(cb)),
+  })
+  const unshare = ctx.paneId ? registerInstance(ctx.paneId, 'screen', 'Screen', SCREEN_SHARE_MODES, shareAdapter) : null
+
   return {
+    share: shareAdapter,
     dispose() {
+      if (typeof unshare === 'function') { try { unshare() } catch { /* already unregistered */ } }
       disposed = true
       const s = state.session
       stopCapture()
@@ -592,3 +617,22 @@ function mount(el, ctx) {
 }
 
 export default { id: 'screen', title: 'Screen', icon: ICONS.screen, mount }
+
+// ---------------------------------------------------------------------------------------------------- sharing
+
+const SCREEN_SHARE_MODES = ['readonly']
+
+/**
+ * The share adapter for one mounted Screen (local://chats-contract.md, "Sharing"). Read-only live view of the display
+ * list; the op is one { sources } payload.
+ */
+function screenShare(hooks = {}) {
+  return {
+    modes: SCREEN_SHARE_MODES,
+    snapshot: () => (hooks.snapshot ? hooks.snapshot() : null),
+    applyOp: (op, meta) => { if (hooks.applyOp) hooks.applyOp(op, meta) },
+    applySnapshot: (s) => { if (hooks.applySnapshot) hooks.applySnapshot(s) },
+    onLocalOp: (cb) => (hooks.onLocalOp ? hooks.onLocalOp(cb) : () => {}),
+  }
+}
+registerShare('screen', screenShare)

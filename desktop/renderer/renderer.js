@@ -6,7 +6,7 @@ import { initTooltips, showMenu } from './ui/popover.js'
 import { toast } from './ui/toast.js'
 import { initActions } from './ui/actions.js'
 import { initTopbar, setBell, showUpdate } from './ui/topbar.js'
-import { initPanes } from './ui/panes.js'
+import { initPanes, viewOf } from './ui/panes.js'
 import { initSidebar } from './ui/sidebar.js'
 import { initStatusbar } from './ui/statusbar.js'
 import { runCommand } from './ui/commands.js'
@@ -62,6 +62,25 @@ if (app.d.onStatus) {
   app.d.onStatus((s) => {
     if (s === 'lost') showUpdate('Daemon lost · restart', () => (app.d.restart ? app.d.restart() : runCommand('daemon.restart')))
     else showUpdate('')
+  })
+}
+
+/* Discrete pane events the coalesced state snapshots cannot express: a bell (flash the pane, or ring the inbox bell when the pane lives in another tab or session), and a pane opened from the CLI or another window (`pager open`) - focus its tab the way a click would. Chat and block events have their own subscribers and are ignored here. */
+if (app.d.onEvent) {
+  app.d.onEvent((ev) => {
+    if (!ev || typeof ev.event !== 'string' || !ev.paneId) return
+    if (ev.event === 'bell') {
+      const view = viewOf(ev.paneId)
+      if (view) {
+        view.el.classList.add('bell')
+        setTimeout(() => view.el.classList.remove('bell'), 600)
+      } else {
+        const p = app.paneById(ev.paneId)
+        if (p) note('ok', `Bell in ${p.title || p.kind || 'a pane'}`)
+      }
+    } else if (ev.event === 'open_path') {
+      app.call('pane.focus', { paneId: ev.paneId }).catch(() => {})
+    }
   })
 }
 

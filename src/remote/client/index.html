@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<title>Pager</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="stylesheet" href="/assets/tokens.css">
+<link rel="stylesheet" href="/assets/xterm.css">
+<link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+<div id="gate" class="rm-gate" hidden>
+  <form id="gateForm" class="rm-card" autocomplete="off">
+    <img src="/favicon.svg" alt="" width="34" height="34">
+    <h1>Pager</h1>
+    <p id="gateMsg">Open the link that <code>pager serve</code> printed in your terminal. It carries a one-time access token.</p>
+    <input id="gateToken" type="password" spellcheck="false" autocapitalize="off" placeholder="or paste the access token" aria-label="Access token">
+    <button class="rm-btn rm-primary" type="submit">Connect</button>
+  </form>
+</div>
+<div id="app" class="rm-app" hidden>
+  <header class="rm-bar">
+    <div class="rm-brand"><img src="/favicon.svg" alt="" width="20" height="20"><span>Pager</span></div>
+    <nav id="tabs" class="rm-tabs" aria-label="Tabs"></nav>
+    <div class="rm-actions">
+      <span id="ro" class="rm-chip" hidden title="This server refuses input and changes">Read-only</span>
+      <span id="link" class="rm-chip" data-state="connecting">Connecting</span>
+      <button id="runBtn" class="rm-icon rm-w" type="button" title="Run a command in a new pane" aria-label="Run a command"></button>
+      <button id="newBtn" class="rm-icon rm-w" type="button" title="New tab" aria-label="New tab"></button>
+    </div>
+  </header>
+  <form id="runBar" class="rm-run" hidden>
+    <span class="rm-prompt">$</span>
+    <input id="runInput" type="text" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="command to run in a new pane beside the focused one" aria-label="Command">
+    <button class="rm-btn rm-primary" type="submit">Run</button>
+    <button id="runCancel" class="rm-btn" type="button">Cancel</button>
+  </form>
+  <main id="stage" class="rm-stage"></main>
+  <footer class="rm-status"><span id="count"></span><span id="note"></span></footer>
+</div>
+<div id="toasts" class="rm-toasts" aria-live="polite"></div>
+<script src="/assets/xterm.js"></script>
+<script src="/assets/addon-fit.js"></script>
+<script type="module" src="/assets/app.js"></script>
+</body>
+</html>

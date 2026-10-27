@@ -80,6 +80,42 @@ export function diffStat(d) {
   return { add, del }
 }
 
+/** Total number of lines in all hunks (what the big-diff guard compares against). */
+export const lineTotal = (d) => d.hunks.reduce((a, h) => a + h.lines.length, 0)
+
+/**
+ * Lays one hunk out for the side-by-side view. Context lines sit on both sides; a run of deletions is paired with the
+ * run of additions that follows it, line by line; the leftover side stays empty. A "\ No newline" marker becomes a
+ * full-width `meta` row. Every cell keeps the index `li` into `hunk.lines`, so picking lines works in both views.
+ * @returns {({ l: {li:number,line:object}|null, r: {li:number,line:object}|null } | { meta: {li:number,line:object} })[]}
+ */
+export function splitRows(hunk) {
+  const rows = []
+  const lines = hunk.lines
+  for (let i = 0; i < lines.length; ) {
+    const line = lines[i]
+    if (line.t === ' ') {
+      rows.push({ l: { li: i, line }, r: { li: i, line } })
+      i++
+    } else if (line.t === '\\') {
+      rows.push({ meta: { li: i, line } })
+      i++
+    } else {
+      const del = []
+      const add = []
+      while (i < lines.length && lines[i].t === '-') del.push(i++)
+      while (i < lines.length && lines[i].t === '+') add.push(i++)
+      if (!del.length && !add.length) {
+        i++
+        continue
+      }
+      const n = Math.max(del.length, add.length)
+      for (let k = 0; k < n; k++) rows.push({ l: k < del.length ? { li: del[k], line: lines[del[k]] } : null, r: k < add.length ? { li: add[k], line: lines[add[k]] } : null })
+    }
+  }
+  return rows
+}
+
 /**
  * Builds a patch from the chosen parts of a parsed diff.
  *

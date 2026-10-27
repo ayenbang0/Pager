@@ -1,15 +1,27 @@
-// The git block: branch/tag chips, commit graph with lanes, the working-tree row, commit search, commit detail with
-// diffs, line-level staging (git apply --cached), undo/redo and the commit box. The main-process half is
-// desktop/electron/blocks/git.cjs; this file only renders and orchestrates. `mountChanges` is the compact sidebar view.
+// The git block: a source-control panel in the shape of a source-control tool. Three views of one repository —
+// Changes (conflicted/staged/unstaged/untracked groups, multi-select, bulk actions, line-level staging, commit
+// composer with sign-off), History (lane graph, search, commit detail) and Branches (local branches, remote
+// branches, tags, remotes, stashes with destructive-action confirmations) — plus a banner for the merge/rebase/
+// cherry-pick/revert in progress. The main-process half is desktop/electron/blocks/git.cjs; this file only renders
+// and orchestrates. `mountChanges` is the compact sidebar view.
 import { h, rafThrottle, uid } from '../ui/dom.js'
 import { createDiffView } from './gitdiff.js'
-import { highlightParts, initials, avatarHue, layoutGraph, parseDecoration, relativeTime, WIP, withWorkingTree } from './gitgraph.js'
+import { highlightParts, initials, avatarHue, layoutGraph, parseDecoration, relativeTime, withWorkingTree } from './gitgraph.js'
 import { buildPatch, parseDiff } from './gitpatch.js'
 import { icon, iconSvg } from './giticons.js'
-import { announce, dirty, errorText, fullDate, onAnnounce, plural, splitPath, splitStatus, STATUS_NAME, statusClass, subscribe, trackText } from './gitmodel.js'
+import {
+  announce, commitButton, dirty, errorText, filterEntries, fullDate, GROUPS, groupStatus, mergeCandidates,
+  onAnnounce, operationText, pathsOf, plural, refRows, selectKeys, SHORTCUTS, splitPath, STATUS_NAME, statusClass,
+  subscribe, trackText,
+} from './gitmodel.js'
 import { createOverlay } from './gitui.js'
+import { registerInstance, registerShare } from './share.js'
 
 export { mountChanges } from './gitchanges.js'
+
+// The block's stylesheet loads itself (the shell never links it), so any host that imports the module gets the styling.
+const CSS = new URL('./git.css', import.meta.url).href
+if (!document.querySelector(`link[href="${CSS}"]`)) document.head.append(h('link', { rel: 'stylesheet', href: CSS }))
 
 const ROW_H = 28
 const LANE_W = 16
@@ -17,7 +29,19 @@ const PAGE = 300
 const MAX_COMMITS = 20000
 const OVERSCAN = 8
 const isMac = typeof navigator !== 'undefined' && /mac/i.test(navigator.platform)
-const COMMIT_KEYS = isMac ? '\u2318\u23CE' : 'Ctrl \u23CE'
+const COMMIT_KEYS = isMac ? '⌘⏎' : 'Ctrl ⏎'
+
+const VIEWS = [
+  ['changes', 'Changes', 'changes'],
+  ['history', 'History', 'commit'],
+  ['refs', 'Branches', 'branch'],
+]
+const GROUP_META = {
+  conflicted: { title: 'Conflicted', bulk: null },
+  staged: { title: 'Staged', bulk: 'Unstage all' },
+  unstaged: { title: 'Changes', bulk: 'Stage all' },
+  untracked: { title: 'Untracked', bulk: 'Stage all' },
+}
 
 const svgNS = 'http://www.w3.org/2000/svg'
 function svg(tag, attrs, ...kids) {
@@ -105,27 +129,38 @@ function mountGit(el, ctx) {
     cwd: startCwd,
     repo: null, // open() result
     status: null,
-    refs: { branches: [], remotes: [], tags: [], stashes: [], remoteNames: [] },
+    refs: { branches: [], remotes: [], tags: [], stashes: [], remoteNames: [], remoteInfo: [] },
     commits: [],
     hasMore: false,
     loadingMore: false,
     layout: null, // { rows, width }
     all: [], // commits incl. the working-tree row
     index: new Map(),
-    sel: { kind: 'wip' },
-    wipFile: args.path ? { path: args.path, staged: !!args.staged } : null,
-    commitFile: null, // path
+    sel: { kind: 'wip' }, // history selection
+    commitFile: null, // path of the file whose commit diff is shown
     detail: null, // commit() result of the selected commit
     undo: { undo: null, redo: null },
     busy: new Map(), // tool name -> opId
     search: { open: false, q: '', hits: [], at: -1, scanning: false },
     error: '',
     loading: true,
+    view: 'changes',
+    // Changes view
+    ch: { query: '', selected: new Set(), anchor: null, file: null, collapsed: {} },
+    // Branches view
+    rf: { query: '', collapsed: new Set(), sel: null, file: null },
+    // commit composer
+    box: { summary: '', body: '', amend: false, signoff: false, committing: false, writing: false, prefilled: null },
   }
   let disposed = false
   let loadToken = 0
   let focusedRow = null
+  let argsPathHandled = false
+  let discardArmed = null
+  let diffToken = 0
+  let refsDiffToken = 0
   const detailCache = new Map()
+  const chEntriesCache = { entries: [], order: [] }
 
   const rpc = (method, a = {}) => ctx.rpc(method, { cwd: S.repo?.root ?? S.cwd, ...a })
   const fail = (e) => toast('error', errorText(e))
@@ -135,11 +170,46 @@ function mountGit(el, ctx) {
   el.replaceChildren(root)
   const overlay = createOverlay(root)
 
-  const branchBtn = h('button', { class: 'gt-branch-btn', title: 'Switch branch', onClick: () => openBranchPicker() })
+  const repoChip = h('button', { class: 'gt-repo', type: 'button', title: 'Copy the repository path' })
+  repoChip.addEventListener('click', () => {
+    if (!S.repo) return
+    if (navigator.clipboard?.writeText) navigator.clipboard.writeText(S.repo.root).then(() => toast('info', 'Copied the repository path'), () => toast('error', 'Could not copy'))
+    else toast('error', 'Could not copy')
+  })
+  const branchBtn = h('button', { class: 'gt-btn quiet gt-branch-btn', type: 'button', title: 'Switch branch', onClick: () => openBranchPicker() })
   const trackEl = h('span', { class: 'gt-track' })
   const tools = h('div', { class: 'gt-tools' })
-  const bar = h('div', { class: 'gt-bar' }, icon('branch', 'gt-bar-ico'), branchBtn, trackEl, h('span', { class: 'gt-grow' }), tools)
+  const bar = h('div', { class: 'gt-bar' }, repoChip, branchBtn, trackEl, h('span', { class: 'gt-grow' }), tools)
 
+  const banner = h('div', { class: 'gt-banner', hidden: true })
+
+  const tabsEl = h('div', { class: 'gt-tabs', role: 'tablist' })
+  const tabBtns = new Map()
+  for (const [id, label, ico] of VIEWS) {
+    const b = h('button', { class: 'gt-tab', role: 'tab', type: 'button', 'aria-selected': 'false', title: `${label} (Alt ${id === 'changes' ? 1 : id === 'history' ? 2 : 3})` }, icon(ico), h('span', {}, label), h('span', { class: 'gt-tab-n', hidden: true }))
+    b.addEventListener('click', () => switchView(id))
+    tabBtns.set(id, b)
+    tabsEl.append(b)
+  }
+  const viewTools = h('div', { class: 'gt-viewtools' })
+  tabsEl.append(h('span', { class: 'gt-grow' }), viewTools)
+
+  // ---- Changes view
+  const chFilter = h('input', { class: 'gt-filter-input', type: 'text', placeholder: 'Filter files', spellcheck: false })
+  const chFilterClear = h('button', { class: 'gt-ibtn', type: 'button', title: 'Clear filter', hidden: true }, icon('x'))
+  const chFilterCount = h('span', { class: 'gt-filter-n' })
+  const chSelectAll = h('input', { class: 'gt-cb-in', type: 'checkbox', title: 'Select every visible file', 'aria-label': 'Select every visible file' })
+  const selbar = h('div', { class: 'gt-selbar', hidden: true })
+  const groupsEl = h('div', { class: 'gt-chv-scroll', tabIndex: 0, role: 'listbox', 'aria-label': 'Changed files' })
+  const wipDiff = createDiffView({ onApply, onReload: () => loadChangesDiff(true) })
+  const chList = h('div', { class: 'gt-chv-list' },
+    h('div', { class: 'gt-filter' }, icon('filter'), chSelectAll, chFilter, chFilterClear, chFilterCount),
+    selbar,
+    groupsEl,
+    buildComposer())
+  const chView = h('div', { class: 'gt-view gt-changes' }, h('div', { class: 'gt-chv' }, chList, h('div', { class: 'gt-chv-diff' }, wipDiff.el)))
+
+  // ---- History view
   const searchInput = h('input', {
     class: 'gt-search-input',
     type: 'text',
@@ -162,18 +232,42 @@ function mountGit(el, ctx) {
     h('button', { class: 'gt-ibtn', title: 'Next match (Enter)', onClick: () => stepSearch(1) }, icon('chevD')),
     h('button', { class: 'gt-ibtn', title: 'Close (Esc)', onClick: () => closeSearch() }, icon('x')),
   )
-
   const colHead = h('div', { class: 'gt-colhead' }, h('span', { class: 'gt-c-refs' }, 'Branch / Tag'), h('span', { class: 'gt-c-graph' }, 'Graph'), h('span', { class: 'gt-c-msg' }, 'Commit message'))
   const rowsEl = h('div', { class: 'gt-rows' })
   const scroller = h('div', { class: 'gt-scroll', tabIndex: 0, role: 'listbox', 'aria-label': 'Commits' }, rowsEl)
   const graphFoot = h('div', { class: 'gt-graph-foot', hidden: true })
   const graphPane = h('div', { class: 'gt-graph' }, colHead, scroller, graphFoot)
-
   const splitter = h('div', { class: 'gt-splitter', role: 'separator', 'aria-orientation': 'horizontal', title: 'Drag to resize' })
-  const detailEl = h('div', { class: 'gt-detail' })
+  const commitPane = h('div', { class: 'gt-cdetail' })
+  const commitHead = h('div', { class: 'gt-chead' })
+  const commitFiles = h('div', { class: 'gt-flist' })
+  const commitDiff = createDiffView({})
+  const commitSplit = h('div', { class: 'gt-dsplit' }, commitFiles, commitDiff.el)
+  commitPane.append(commitHead, commitSplit)
+  const detailEl = h('div', { class: 'gt-detail' }, commitPane)
   const main = h('div', { class: 'gt-main' }, graphPane, splitter, detailEl)
+  const historyView = h('div', { class: 'gt-view gt-history', hidden: true }, searchBar, main)
+
+  // ---- Branches view
+  const rfFilter = h('input', { class: 'gt-filter-input', type: 'text', placeholder: 'Filter branches, tags, stashes', spellcheck: false })
+  const rfFilterClear = h('button', { class: 'gt-ibtn', type: 'button', title: 'Clear filter', hidden: true }, icon('x'))
+  const rfFilterCount = h('span', { class: 'gt-filter-n' })
+  const rvList = h('div', { class: 'gt-rv-list', tabIndex: 0, role: 'listbox', 'aria-label': 'References' })
+  const refsDiff = createDiffView({})
+  const refsHead = h('div', { class: 'gt-chead' })
+  const refsFiles = h('div', { class: 'gt-flist' })
+  const refsSplit = h('div', { class: 'gt-dsplit' }, refsFiles, refsDiff.el)
+  const refsDetail = h('div', { class: 'gt-cdetail' }, refsHead, refsSplit)
+  const refsView = h('div', { class: 'gt-view gt-refs', hidden: true },
+    h('div', { class: 'gt-rv' },
+      h('div', { class: 'gt-filter' }, icon('filter'), rfFilter, rfFilterClear, rfFilterCount, h('span', { class: 'gt-grow' }),
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'New branch…', onClick: () => newBranch(null) }, icon('plus')),
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'Create tag…', onClick: () => newTag(null) }, icon('tag'))),
+      rvList,
+      h('div', { class: 'gt-detail gt-rv-detail' }, refsDetail)))
+
   const emptyEl = h('div', { class: 'gt-empty', hidden: true })
-  root.append(bar, searchBar, main, emptyEl)
+  root.append(bar, banner, tabsEl, chView, historyView, refsView, emptyEl)
 
   // ------------------------------------------------------------------ toolbar
   const TOOLS = [
@@ -198,14 +292,18 @@ function mountGit(el, ctx) {
     const repo = S.repo
     const b = S.status?.branch
     if (!repo) {
-      branchBtn.replaceChildren(h('span', { class: 'gt-branch-name' }, S.loading ? 'Loading\u2026' : 'No repository'))
+      repoChip.hidden = true
+      branchBtn.replaceChildren(h('span', { class: 'gt-branch-name' }, S.loading ? 'Loading…' : 'No repository'))
       branchBtn.disabled = true
       trackEl.textContent = ''
     } else {
+      repoChip.hidden = false
+      fill(repoChip, icon('folder'), h('span', {}, repo.name))
+      repoChip.title = `${repo.root}\nCopy the repository path`
       branchBtn.disabled = false
       const name = b ? (b.head ?? (b.oid ? `detached @ ${b.oid.slice(0, 7)}` : 'no commits yet')) : (repo.branch ?? '')
       branchBtn.replaceChildren(h('span', { class: 'gt-branch-name' }, name), icon('chevD', 'gt-caret'))
-      branchBtn.title = b?.upstream ? `${name} \u2192 ${b.upstream}\nSwitch branch` : 'Switch branch'
+      branchBtn.title = b?.upstream ? `${name} → ${b.upstream}\nSwitch branch` : 'Switch branch'
       trackEl.textContent = b ? trackText(b) : ''
       trackEl.title = b?.upstream ? `${b.ahead} ahead, ${b.behind} behind ${b.upstream}` : ''
     }
@@ -218,7 +316,7 @@ function mountGit(el, ctx) {
       el$.classList.toggle('on', t.id === 'search' && S.search.open)
       el$.replaceChildren(icon(busy ? 'spinner' : t.icon))
       let title = t.title
-      if (busy && S.busy.get(t.id)) title = 'Working\u2026 click to cancel'
+      if (busy && S.busy.get(t.id)) title = 'Working… click to cancel'
       if (t.id === 'undo') {
         el$.disabled = disabled || !S.undo.undo || S.busy.size > 0
         title = S.undo.undo ? `Undo: ${S.undo.undo}` : 'Nothing to undo'
@@ -276,14 +374,21 @@ function mountGit(el, ctx) {
       S.error = ''
       detailCache.clear()
       relayout()
-      pickAfterStatus()
+      pruneChanges()
+      pruneHistory()
       render()
       if (S.search.open && S.search.q) runSearch(S.search.q, true)
       loadSelection()
+      loadChangesDiff()
+      loadRefsDetail()
+      if (!argsPathHandled && args.path) {
+        argsPathHandled = true
+        openFileInChanges(args.path, !!args.staged)
+      }
     } catch (e) {
       if (disposed) return
       S.loading = false
-      if (/not a git repository|does not exist/i.test(errorText(e))) {
+      if (/not a git repository|does not exist|must be absolute/i.test(errorText(e))) {
         S.repo = null
         S.error = errorText(e)
         render()
@@ -327,22 +432,469 @@ function mountGit(el, ctx) {
     }
   }
 
-  /** After a status reload: keep the selection valid. */
-  function pickAfterStatus() {
+  /** After a status reload: drop selections that no longer exist. */
+  function pruneChanges() {
+    const g = groupStatus(S.status?.files ?? [])
+    const live = new Set([...g.conflicted, ...g.staged, ...g.unstaged, ...g.untracked].map((e) => e.key))
+    for (const k of [...S.ch.selected]) if (!live.has(k)) S.ch.selected.delete(k)
+    if (S.ch.file && !live.has(S.ch.file)) {
+      const first = [...g.unstaged, ...g.staged, ...g.untracked, ...g.conflicted].find((e) => live.has(e.key))
+      S.ch.file = first ? first.key : null
+    }
+  }
+  function pruneHistory() {
     if (S.sel.kind === 'commit' && !S.index.has(S.sel.hash)) S.sel = { kind: 'wip' }
-    if (S.sel.kind !== 'wip' || !S.status) return
-    const { staged, unstaged } = splitStatus(S.status.files)
-    const cur = S.wipFile
-    const found = cur && (cur.staged ? staged : unstaged).some((f) => f.path === cur.path)
-    if (found) return
-    const other = cur && (cur.staged ? unstaged : staged).find((f) => f.path === cur.path)
-    if (other) S.wipFile = { path: other.path, staged: !cur.staged }
-    else if (unstaged.length) S.wipFile = { path: unstaged[0].path, staged: false }
-    else if (staged.length) S.wipFile = { path: staged[0].path, staged: true }
-    else S.wipFile = null
+    if (S.commitFile && !S.detail?.files?.some((f) => f.path === S.commitFile)) S.commitFile = null
   }
 
-  // ------------------------------------------------------------------ rendering: graph
+  // ------------------------------------------------------------------ Changes view
+  /** Porcelain files -> the four groups, filtered by the Changes view's query. */
+  function chEntries() {
+    const g = groupStatus(S.status?.files ?? [])
+    return filterEntries([...g.conflicted, ...g.staged, ...g.unstaged, ...g.untracked], S.ch.query)
+  }
+
+  /** Every entry of the four groups, ignoring the filter: selection actions must not drop filtered-out files. */
+  function allEntries() {
+    const g = groupStatus(S.status?.files ?? [])
+    return [...g.conflicted, ...g.staged, ...g.unstaged, ...g.untracked]
+  }
+
+  function buildComposer() {
+    const summary = h('input', {
+      class: 'gt-input', type: 'text', placeholder: 'Summary', spellcheck: false,
+      onInput: () => ((S.box.summary = summary.value), renderBox()),
+      onKeydown: boxKey,
+    })
+    const why = h('textarea', {
+      class: 'gt-input why', rows: 2, placeholder: 'Why this change? (optional)', spellcheck: false,
+      onInput: () => ((S.box.body = why.value), renderBox()),
+      onKeydown: boxKey,
+    })
+    const count = h('span', { class: 'gt-sum-count' })
+    const write = h('button', { class: 'gt-chip', type: 'button', title: 'Write the message for the staged changes', onClick: writeMessage }, icon('sparkle'), 'Write it')
+    const amend = h('button', { class: 'gt-chip', type: 'button', role: 'switch', title: 'Replace the last commit instead of adding a new one', onClick: () => toggleAmend() }, h('span', { class: 'gt-chip-box' }, icon('check')), 'Amend')
+    const sign = h('button', { class: 'gt-chip', type: 'button', role: 'switch', title: 'Add a Signed-off-by trailer with your git identity', onClick: () => ((S.box.signoff = !S.box.signoff), renderBox()) }, h('span', { class: 'gt-chip-box' }, icon('check')), 'Sign off')
+    const commit = h('button', { class: 'gt-btn accent gt-commit', type: 'button', onClick: doCommit })
+    S.composer = { summary, why, count, write, amend, sign, commit }
+    return h('div', { class: 'gt-cbox' },
+      h('div', { class: 'gt-sum-wrap' }, summary, count),
+      why,
+      h('div', { class: 'gt-cbox-row' }, write, amend, sign, h('span', { class: 'gt-grow' }), commit))
+  }
+
+  function boxKey(e) {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault()
+      doCommit()
+    }
+  }
+
+  function stagedCount() {
+    return groupStatus(S.status?.files ?? []).staged.length
+  }
+
+  function renderBox() {
+    const c = S.composer
+    if (!c) return
+    const n = stagedCount()
+    const op = S.status?.operation
+    const msg = S.box.summary.trim()
+    const len = [...S.box.summary].length
+    c.count.textContent = len ? String(len) : ''
+    c.count.classList.toggle('over', len > 72)
+    const blocked = S.box.committing || !!op
+    c.summary.disabled = blocked
+    c.why.disabled = blocked
+    c.write.disabled = S.box.writing || blocked || !n
+    c.write.title = op ? 'Finish the merge/rebase first' : n ? 'Generate message' : 'Stage something to describe it'
+    c.write.replaceChildren(icon(S.box.writing ? 'spinner' : 'sparkle'), S.box.writing ? 'Writing message…' : 'Write it')
+    c.amend.classList.toggle('on', S.box.amend)
+    c.amend.setAttribute('aria-checked', String(S.box.amend))
+    c.amend.disabled = blocked || !S.status?.branch.oid
+    c.sign.classList.toggle('on', S.box.signoff)
+    c.sign.setAttribute('aria-checked', String(S.box.signoff))
+    c.sign.disabled = blocked
+    const st = commitButton({ staged: n, conflicted: S.status?.conflicted ?? 0, summary: msg, amend: S.box.amend, committing: S.box.committing })
+    c.commit.disabled = blocked || st.disabled
+    c.commit.title = op ? 'Finish the merge/rebase in progress first' : st.hint || (S.box.amend ? 'Amend the last commit' : 'Commit the staged changes')
+    fill(c.commit,
+      S.box.committing ? icon('spinner') : null,
+      blocked && op ? 'Finish the merge first' : S.box.committing ? 'Committing…' : st.label,
+      blocked || S.box.committing ? null : h('kbd', { class: 'gt-kbd on-accent' }, COMMIT_KEYS))
+  }
+
+  async function writeMessage() {
+    if (S.box.writing) return
+    S.box.writing = true
+    renderBox()
+    try {
+      const m = await rpc('generateMessage')
+      S.box.summary = S.composer.summary.value = m.summary
+      S.box.body = S.composer.why.value = m.body || ''
+      if (m.note) toast('info', m.note)
+    } catch (e) {
+      fail(e)
+    }
+    S.box.writing = false
+    renderBox()
+  }
+
+  async function toggleAmend() {
+    S.box.amend = !S.box.amend
+    if (S.box.amend && !S.box.summary && !S.box.body && S.status?.branch.oid) {
+      try {
+        const d = await rpc('commit', { hash: S.status.branch.oid })
+        const [s, ...rest] = d.message.split('\n')
+        S.box.summary = S.composer.summary.value = s
+        S.box.body = S.composer.why.value = rest.join('\n').trim()
+        S.box.prefilled = { summary: S.box.summary, body: S.box.body }
+      } catch (e) {
+        fail(e)
+      }
+    } else if (!S.box.amend && S.box.prefilled && S.box.summary === S.box.prefilled.summary && S.box.body === S.box.prefilled.body) {
+      S.box.summary = S.composer.summary.value = ''
+      S.box.body = S.composer.why.value = ''
+      S.box.prefilled = null
+    }
+    renderBox()
+  }
+
+  async function doCommit() {
+    if (S.composer?.commit.disabled) return
+    S.box.committing = true
+    renderBox()
+    const amend = S.box.amend
+    const r = await mutateOp(() => rpc('commitCreate', { summary: S.box.summary, body: S.box.body, amend, signoff: S.box.signoff }), amend ? 'Amended the last commit' : 'Committed')
+    S.box.committing = false
+    if (r) {
+      S.box.summary = S.composer.summary.value = ''
+      S.box.body = S.composer.why.value = ''
+      S.box.amend = false
+      S.box.signoff = false
+      S.box.prefilled = null
+    }
+    renderBox()
+  }
+
+  /** Line/hunk staging from the diff view: rebuilds the patch and applies it to the index. */
+  async function onApply(kind, diff, selection) {
+    const e = allEntries().find((x) => x.key === S.ch.file)
+    if (!e) return
+    const reverse = kind === 'unstage'
+    const patch = buildPatch(diff, selection, { reverse })
+    if (!patch) return toast('info', 'Nothing to apply in that selection')
+    const whole = selection.some((s) => s.lines === null)
+    const label = `${reverse ? 'Unstage' : 'Stage'} ${whole ? 'hunk' : 'lines'} in ${splitPath(e.path).name}`
+    wipDiff.clear() // the picked indexes are meaningless once the diff changes
+    await mutateOp(() => rpc('applyPatch', { patch, reverse, label }))
+  }
+
+  function chRow(e) {
+    const selected = S.ch.selected.has(e.key)
+    const current = S.ch.file === e.key
+    const { dir, name } = splitPath(e.path)
+    const actions = h('span', { class: 'gt-row-actions' })
+    if (e.conflict) {
+      actions.append(
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'Keep your version (ours), stages it', onClick: (ev) => (ev.stopPropagation(), resolveFile(e, 'ours')) }, icon('check')),
+        h('button', { class: 'gt-ibtn', type: 'button', title: 'Keep their version (theirs), stages it', onClick: (ev) => (ev.stopPropagation(), resolveFile(e, 'theirs')) }, icon('copy')),
+      )
+    } else {
+      const armed = discardArmed === e.key
+      const discard = h(
+        'button',
+        {
+          class: 'gt-ibtn' + (armed ? ' armed' : ''), type: 'button',
+          title: armed ? 'Click again to discard' : e.untracked ? 'Delete this untracked file' : 'Discard changes',
+          onClick: (ev) => (ev.stopPropagation(), armDiscard(e.key, () => discardEntries([e], { confirm: false }))),
+        },
+        armed ? h('span', { class: 'gt-armed' }, 'Discard?') : icon('trash'),
+      )
+      if (e.group === 'staged') actions.append(discard, h('button', { class: 'gt-ibtn', type: 'button', title: 'Unstage', onClick: (ev) => (ev.stopPropagation(), mutateOp(() => rpc('unstage', { paths: [e.path] }))) }, icon('minus')))
+      else actions.append(h('button', { class: 'gt-ibtn', type: 'button', title: 'Stage', onClick: (ev) => (ev.stopPropagation(), mutateOp(() => rpc('stage', { paths: [e.path] }))) }, icon('plus')), discard)
+    }
+    return h(
+      'div',
+      {
+        class: 'gt-frow' + (selected ? ' sel' : '') + (current ? ' cur' : ''), role: 'option', 'aria-selected': selected, dataset: { key: e.key, path: e.path },
+        title: `${STATUS_NAME[e.status] ?? ''}${e.orig ? ` from ${e.orig}` : ''}${e.conflict ? '\nConflicted: take ours or theirs' : ''}\n${e.path}`,
+        onDblclick: () => ctx.openPath?.(`${S.repo.root.replace(/[\\/]+$/, '')}/${e.path}`),
+      },
+      h('input', { class: 'gt-cb-in', type: 'checkbox', 'aria-label': `Select ${e.path}`, checked: selected, onClick: (ev) => (ev.stopPropagation(), toggleSelect(e.key)) }),
+      h('span', { class: `gt-st ${statusClass(e.status)}` }, e.status),
+      h('span', { class: 'gt-fname' }, dir ? h('span', { class: 'dim' }, dir) : null, h('b', {}, name), e.orig ? h('span', { class: 'dim' }, ` ← ${e.orig}`) : null),
+      actions,
+    )
+  }
+
+  /** Two-click discard: the first click arms the button, the second throws the changes away. */
+  function armDiscard(key, run) {
+    if (discardArmed !== key) {
+      discardArmed = key
+      renderChanges()
+      setTimeout(() => {
+        if (discardArmed === key && !disposed) {
+          discardArmed = null
+          renderChanges()
+        }
+      }, 2500)
+      return
+    }
+    discardArmed = null
+    run()
+  }
+
+  function chClick(e, ev) {
+    const next = selectKeys({ order: chEntriesCache.order, selected: S.ch.selected, anchor: S.ch.anchor }, e.key, { toggle: ev.ctrlKey || ev.metaKey, range: ev.shiftKey })
+    S.ch.selected = next.selected
+    S.ch.anchor = next.anchor
+    S.ch.file = e.key
+    renderChanges()
+    loadChangesDiff()
+  }
+
+  function toggleSelect(key) {
+    const next = selectKeys({ order: chEntriesCache.order, selected: S.ch.selected, anchor: S.ch.anchor }, key, { toggle: true })
+    S.ch.selected = next.selected
+    S.ch.anchor = next.anchor
+    S.ch.file = key
+    renderChanges()
+    loadChangesDiff()
+  }
+
+  function chSection(group) {
+    const meta = GROUP_META[group]
+    const items = chEntriesCache.entries.filter((e) => e.group === group)
+    if (!items.length) return null
+    const open = S.ch.query ? true : !S.ch.collapsed[group]
+    return h('section', { class: 'gt-sec' },
+      h('div', { class: 'gt-sec-head', role: 'button', tabIndex: -1, onClick: () => ((S.ch.collapsed[group] = !S.ch.collapsed[group]), renderChanges()) },
+        h('span', { class: 'gt-chev' + (open ? ' open' : '') }, icon('chevR')),
+        h('span', { class: 'gt-sec-title' }, meta.title),
+        h('span', { class: 'gt-count' + (group === 'conflicted' ? ' bad' : '') }, items.length),
+        h('span', { class: 'gt-grow' }),
+        meta.bulk ? h('button', { class: 'gt-link', type: 'button', onClick: (ev) => (ev.stopPropagation(), bulkRun(group)) }, meta.bulk) : null),
+      open ? h('div', { class: 'gt-sec-body' }, items.map(chRow)) : null)
+  }
+
+  function bulkRun(group) {
+    const paths = chEntriesCache.entries.filter((e) => e.group === group).map((e) => e.path)
+    if (!paths.length) return
+    if (group === 'staged') mutateOp(() => rpc('unstage', { paths }), `Unstaged ${plural(paths.length, 'file')}`)
+    else mutateOp(() => rpc('stage', { paths }), `Staged ${plural(paths.length, 'file')}`)
+  }
+
+  function renderSelbar() {
+    const n = S.ch.selected.size
+    if (!n) {
+      selbar.hidden = true
+      return
+    }
+    selbar.hidden = false
+    const entries = allEntries().filter((e) => S.ch.selected.has(e.key))
+    const staged = entries.filter((e) => e.group === 'staged')
+    const rest = entries.filter((e) => e.group !== 'staged' && !e.conflict)
+    fill(selbar,
+      h('span', { class: 'gt-sel-n' }, `${n} selected`),
+      h('span', { class: 'gt-grow' }),
+      rest.length ? h('button', { class: 'gt-btn sm', type: 'button', onClick: () => stagePaths(rest.map((e) => e.path)) }, icon('plus'), `Stage ${rest.length}`) : null,
+      staged.length ? h('button', { class: 'gt-btn sm', type: 'button', onClick: () => mutateOp(() => rpc('unstage', { paths: staged.map((e) => e.path) }), `Unstaged ${plural(staged.length, 'file')}`) }, icon('minus'), `Unstage ${staged.length}`) : null,
+      rest.length ? h('button', { class: 'gt-btn sm quiet', type: 'button', onClick: () => discardSelected() }, icon('trash'), `Discard ${rest.length}`) : null,
+      h('button', { class: 'gt-ibtn', type: 'button', title: 'Clear selection', onClick: () => ((S.ch.selected = new Set()), renderChanges()) }, icon('x')),
+    )
+  }
+
+  function renderChanges() {
+    chEntriesCache.entries = chEntries()
+    chEntriesCache.order = chEntriesCache.entries.map((e) => e.key)
+    const total = chEntriesCache.entries.length
+    chFilterClear.hidden = !S.ch.query
+    chFilterCount.textContent = S.ch.query ? `${total}` : ''
+    chSelectAll.checked = total > 0 && S.ch.selected.size >= total
+    chSelectAll.indeterminate = S.ch.selected.size > 0 && S.ch.selected.size < total
+    renderBox()
+    if (!S.status) {
+      fill(groupsEl)
+      return
+    }
+    const sections = GROUPS.map(chSection).filter(Boolean)
+    if (!sections.length) {
+      const clean = !dirty(S.status)
+      fill(groupsEl, h('div', { class: 'gt-ch-empty small' }, icon(clean ? 'check' : 'search'), h('div', { class: 'gt-ch-note' }, clean ? 'Working tree clean' : 'No files match the filter')))
+    } else {
+      fill(groupsEl, ...sections)
+    }
+    if (S.status.truncated) groupsEl.append(h('div', { class: 'gt-ch-note pad' }, 'The list is cut off: too many changed files.'))
+    renderSelbar()
+  }
+
+  let chDiffToken = 0
+  async function loadChangesDiff(keepScroll = false) {
+    if (!S.repo || S.view !== 'changes' || !S.status) return
+    const e = allEntries().find((x) => x.key === S.ch.file)
+    if (!e) return wipDiff.message(dirty(S.status) ? 'Select a file to see its changes.' : 'The working tree is clean.')
+    if (e.conflict) {
+      return wipDiff.show(parseDiff(''), {
+        path: e.path, mode: 'worktree', noticeTitle: 'Merge conflict',
+        notice: 'This file has merge conflicts. Take ours or theirs here, or resolve the markers in your editor, then stage the file.',
+        actions: [
+          h('button', { class: 'gt-btn sm', type: 'button', onClick: () => resolveFile(e, 'ours') }, 'Take ours'),
+          h('button', { class: 'gt-btn sm', type: 'button', onClick: () => resolveFile(e, 'theirs') }, 'Take theirs'),
+        ],
+      })
+    }
+    const mine = ++chDiffToken
+    try {
+      const r = await rpc('diff', { path: e.path, ...(e.group === 'staged' ? { staged: true } : e.group === 'untracked' ? { untracked: true } : {}), ignoreWhitespace: wipDiff.ignoreWhitespace })
+      if (mine !== chDiffToken || disposed) return
+      const notice = r.tooLarge ? `This file is too large to show (${Math.round(r.size / 1048576)} MB).` : r.truncated ? 'This diff is too large to show completely.' : ''
+      wipDiff.show(parseDiff(r.text), { path: e.path, mode: e.group === 'staged' ? 'staged' : 'worktree', keepScroll: keepScroll || undefined, notice: notice && !r.text ? notice : '' })
+    } catch (err) {
+      if (mine !== chDiffToken || disposed) return
+      wipDiff.message(errorText(err))
+    }
+  }
+
+  async function resolveFile(e, side) {
+    await mutateOp(() => rpc('resolve', { path: e.path, side }), side === 'ours' ? `Took ours in ${splitPath(e.path).name}` : `Took theirs in ${splitPath(e.path).name}`)
+  }
+
+  function stagePaths(paths) {
+    if (!paths.length) return
+    mutateOp(() => rpc('stage', { paths }), `Staged ${plural(paths.length, 'file')}`)
+  }
+
+  function discardSelected() {
+    const entries = allEntries().filter((e) => S.ch.selected.has(e.key) && !e.conflict)
+    if (!entries.length) return
+    discardEntries(entries)
+  }
+
+  async function discardEntries(entries, { confirm = true } = {}) {
+    // Unstage first: a staged change lives only in the index, and a staged new file is untracked once unstaged.
+    const staged = entries.filter((e) => e.group === 'staged')
+    const rest = entries.filter((e) => e.group !== 'staged')
+    const clean = new Set(rest.filter((e) => e.untracked).map((e) => e.path))
+    const restore = new Set()
+    for (const e of staged) {
+      if (e.status === 'A' || e.status === 'R') {
+        clean.add(e.path)
+        if (e.status === 'R' && e.orig) restore.add(e.orig) // the rename source comes back
+      } else if (!clean.has(e.path)) restore.add(e.path)
+    }
+    for (const e of rest) if (!e.untracked && !clean.has(e.path)) restore.add(e.path)
+    if (!staged.length && !restore.size && !clean.size) return
+    if (confirm) {
+      const v = await overlay.dialog({ title: `Discard ${plural(entries.length, 'file')}?`, text: 'Throws away the working-tree changes' + (clean.size ? ' and deletes the untracked files' : '') + '. This cannot be undone.', ok: 'Discard', danger: true })
+      if (!v) return
+    }
+    if (staged.length) await mutateOp(() => rpc('unstage', { paths: staged.map((e) => e.path) }))
+    if (restore.size) await mutateOp(() => rpc('discard', { paths: [...restore] }))
+    if (clean.size) await mutateOp(() => rpc('discard', { untracked: [...clean] }))
+    toast('info', `Discarded ${plural(entries.length, 'file')}`)
+  }
+
+  function openFileInChanges(path, staged) {
+    const entries = allEntries()
+    const e = entries.find((x) => x.path === path && (staged ? x.group === 'staged' : true)) ?? entries.find((x) => x.path === path)
+    if (!e) return toast('info', 'That file has no changes in this view.')
+    S.ch.file = e.key
+    S.ch.selected = new Set([e.key])
+    S.ch.anchor = e.key
+    if (S.view !== 'changes') switchView('changes')
+    else {
+      renderChanges()
+      loadChangesDiff()
+    }
+    groupsEl.querySelector(`[data-key="${CSS.escape(e.key)}"]`)?.scrollIntoView({ block: 'nearest' })
+  }
+
+  chFilter.addEventListener('input', () => ((S.ch.query = chFilter.value), renderChanges()))
+  chFilter.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (chFilter.value) (chFilter.value = '', (S.ch.query = ''), renderChanges())
+      else groupsEl.focus()
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      moveChFile(1)
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      moveChFile(-1)
+    }
+  })
+  chFilterClear.addEventListener('click', () => ((chFilter.value = ''), (S.ch.query = ''), renderChanges(), chFilter.focus()))
+  chSelectAll.addEventListener('click', (e) => {
+    e.stopPropagation()
+    const on = chSelectAll.checked
+    S.ch.selected = on ? new Set(chEntriesCache.order) : new Set()
+    S.ch.anchor = null
+    renderChanges()
+  })
+  groupsEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0 || e.target.closest('input, button')) return
+    const row = e.target.closest('.gt-frow')
+    if (!row) return
+    const entry = chEntriesCache.entries.find((x) => x.key === row.dataset.key)
+    if (entry) chClick(entry, e)
+  })
+  groupsEl.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.gt-frow')
+    if (!row) return
+    e.preventDefault()
+    const entry = chEntriesCache.entries.find((x) => x.key === row.dataset.key)
+    if (entry) fileMenu(e, entry)
+  })
+  groupsEl.addEventListener('keydown', (e) => {
+    if (/INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? '')) return
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') (e.preventDefault(), moveChFile(e.key === 'ArrowDown' ? 1 : -1))
+    else if (e.key === ' ') (e.preventDefault(), stageSelected())
+    else if (e.key === 'Delete' || e.key === 'Backspace') (e.preventDefault(), discardSelected())
+  })
+
+  /** Moves the diff selection through the visible entries. */
+  function moveChFile(dir) {
+    const order = chEntriesCache.order
+    if (!order.length) return
+    let i = order.indexOf(S.ch.file)
+    i = i < 0 ? (dir > 0 ? 0 : order.length - 1) : Math.max(0, Math.min(order.length - 1, i + dir))
+    S.ch.file = order[i]
+    S.ch.selected = new Set([order[i]])
+    S.ch.anchor = order[i]
+    renderChanges()
+    loadChangesDiff()
+    groupsEl.querySelector(`[data-key="${CSS.escape(order[i])}"]`)?.scrollIntoView({ block: 'nearest' })
+  }
+
+  /** Space: stage the selected unstaged files, or unstage them when every selected file is staged. */
+  function stageSelected() {
+    const entries = allEntries().filter((e) => S.ch.selected.has(e.key) && !e.conflict)
+    if (!entries.length) return
+    const unstaged = entries.filter((e) => e.group !== 'staged')
+    if (unstaged.length) stagePaths(unstaged.map((e) => e.path))
+    else mutateOp(() => rpc('unstage', { paths: entries.map((e) => e.path) }), `Unstaged ${plural(entries.length, 'file')}`)
+  }
+
+  function fileMenu(anchor, e) {
+    const items = []
+    if (e.conflict) {
+      items.push(
+        { label: 'Take ours (your version)', icon: 'check', onClick: () => resolveFile(e, 'ours') },
+        { label: 'Take theirs (their version)', icon: 'copy', onClick: () => resolveFile(e, 'theirs') },
+      )
+    } else if (e.group === 'staged') {
+      items.push({ label: 'Unstage', icon: 'minus', onClick: () => mutateOp(() => rpc('unstage', { paths: [e.path] })) })
+    } else {
+      items.push({ label: 'Stage', icon: 'plus', onClick: () => mutateOp(() => rpc('stage', { paths: [e.path] })) })
+    }
+    if (!e.conflict) items.push({ label: e.untracked ? 'Delete untracked file' : 'Discard changes', icon: 'trash', danger: true, onClick: () => discardEntries([e]) })
+    items.push({ sep: true }, { label: 'Copy path', icon: 'copy', onClick: () => copy(e.path, 'Copied the path') })
+    overlay.menu(anchor, items)
+  }
+
+  // ------------------------------------------------------------------ History view
   const winState = { start: -1, end: -1, rev: 0 }
 
   function rowEl(i) {
@@ -408,7 +960,7 @@ function mountGit(el, ctx) {
 
   function graphFootRender() {
     graphFoot.hidden = !(S.loadingMore || (S.hasMore && S.commits.length >= MAX_COMMITS))
-    graphFoot.textContent = S.loadingMore ? 'Loading more history\u2026' : S.hasMore ? `Showing the newest ${S.commits.length.toLocaleString()} commits` : ''
+    graphFoot.textContent = S.loadingMore ? 'Loading more history…' : S.hasMore ? `Showing the newest ${S.commits.length.toLocaleString()} commits` : ''
   }
 
   function scrollToRow(i, center = false) {
@@ -454,9 +1006,15 @@ function mountGit(el, ctx) {
   function selectIndex(i, scroll = false) {
     const c = S.all[i]
     if (!c) return
-    S.sel = c.wip ? { kind: 'wip' } : { kind: 'commit', hash: c.hash }
-    if (c.wip) pickAfterStatus()
-    else S.commitFile = null
+    if (c.wip) {
+      // The working tree lives in the Changes view.
+      S.sel = { kind: 'wip' }
+      switchView('changes')
+      renderRows()
+      return
+    }
+    S.sel = { kind: 'commit', hash: c.hash }
+    S.commitFile = null
     if (scroll) scrollToRow(i)
     renderRows()
     renderDetail()
@@ -472,7 +1030,7 @@ function mountGit(el, ctx) {
     const needle = q.trim().toLowerCase()
     if (needle && S.hasMore && !S.search.scanning) {
       S.search.scanning = true
-      searchCount.textContent = 'Searching\u2026'
+      searchCount.textContent = 'Searching…'
       await loadMore(true)
       S.search.scanning = false
       if (S.search.q.trim().toLowerCase() !== needle) return runSearch(S.search.q)
@@ -499,6 +1057,7 @@ function mountGit(el, ctx) {
     scrollToRow(i, true)
   }
   function openSearch() {
+    if (S.view !== 'history') switchView('history')
     S.search.open = true
     searchBar.hidden = false
     renderBar()
@@ -599,15 +1158,58 @@ function mountGit(el, ctx) {
   async function deleteBranch(name) {
     const ok = await overlay.dialog({ title: `Delete branch ${name}?`, text: 'Git refuses when the branch has unmerged commits.', ok: 'Delete', danger: true })
     if (!ok) return
-    await mutateOp(() => rpc('deleteBranch', { name }), `Deleted ${name}`)
+    try {
+      await rpc('deleteBranch', { name })
+      announce(S.repo?.root, S)
+      toast('info', `Deleted ${name}`)
+      await refresh()
+    } catch (e) {
+      if (/unmerged|merged/i.test(errorText(e))) {
+        const force = await overlay.dialog({ title: `Force-delete branch ${name}?`, text: 'It has commits not on its upstream. Force-deleting loses them if the branch is never merged.', ok: 'Delete anyway', danger: true })
+        if (force) {
+          try {
+            await rpc('deleteBranch', { name, force: true })
+            announce(S.repo?.root, S)
+            toast('info', `Deleted ${name}`)
+          } catch (e2) {
+            fail(e2)
+          }
+          await refresh()
+        }
+      } else fail(e)
+      await refresh()
+    }
+  }
+  async function renameBranch(name) {
+    const v = await overlay.dialog({ title: `Rename branch ${name}`, text: 'Renames any local branch.', fields: [{ name: 'to', label: 'New name', placeholder: 'feature/name', value: name }], ok: 'Rename' })
+    if (!v || !v.to || v.to === name) return
+    await mutateOp(() => rpc('renameBranch', { name, to: v.to }), `Renamed to ${v.to}`)
+  }
+  async function deleteRemoteBranch(name) {
+    const ok = await overlay.dialog({ title: `Delete ${name} on the remote?`, text: 'This deletes the branch on the remote. Other people may still have it.', ok: 'Delete on remote', danger: true })
+    if (!ok) return
+    const r = await mutateOp(() => rpc('deleteRemoteBranch', { name }))
+    if (r && r.output) toast('info', r.output.split('\n').filter(Boolean).slice(-1)[0] || `Deleted ${name}`)
+  }
+  async function deleteTag(name) {
+    const ok = await overlay.dialog({ title: `Delete tag ${name}?`, text: 'The tag is removed locally. Deleting it on the remote takes a push.', ok: 'Delete tag', danger: true })
+    if (!ok) return
+    await mutateOp(() => rpc('deleteTag', { name }), `Deleted tag ${name}`)
+  }
+  async function mergeRef(ref) {
+    const current = S.status?.branch.head
+    const ok = await overlay.dialog({ title: `Merge ${ref} into ${current ?? 'HEAD'}?`, text: 'Fast-forwards when possible, otherwise creates a merge commit. Conflicts stop the merge — the banner shows what is left.' })
+    if (!ok) return
+    const r = await mutateOp(() => rpc('merge', { ref }))
+    if (r && r.conflicts) toast('info', 'The merge stopped on conflicts — resolve them in the Changes view.')
   }
 
   function commitMenu(anchor, c) {
     const chips = parseDecoration(c.refs, S.refs.remoteNames)
     const items = [
       { label: 'Check out this commit', icon: 'check', onClick: () => mutateOp(() => rpc('checkout', { ref: c.hash }), `Checked out ${c.hash.slice(0, 7)} (detached HEAD)`) },
-      { label: 'New branch here\u2026', icon: 'branch', onClick: () => newBranch(c.hash, 'New branch here') },
-      { label: 'Create tag here\u2026', icon: 'tag', onClick: () => newTag(c.hash) },
+      { label: 'New branch here…', icon: 'branch', onClick: () => newBranch(c.hash, 'New branch here') },
+      { label: 'Create tag here…', icon: 'tag', onClick: () => newTag(c.hash) },
       { sep: true },
       { label: 'Copy commit hash', icon: 'copy', onClick: () => copy(c.hash, 'Copied the commit hash') },
       { label: 'Copy subject', icon: 'copy', onClick: () => copy(c.subject, 'Copied the subject') },
@@ -625,31 +1227,87 @@ function mountGit(el, ctx) {
 
   function stashMenu(anchor) {
     const items = [
-      { label: 'Stash changes', icon: 'stash', disabled: !dirty(S.status), onClick: () => mutateOp(() => rpc('stashPush', {}), 'Stashed the working tree') },
+      { label: 'Stash changes…', icon: 'stash', disabled: !dirty(S.status), onClick: stashChanges },
       { sep: true },
     ]
     if (S.refs.stashes.length) {
       items.push({ header: 'Stashes' })
-      S.refs.stashes.forEach((s, i) => items.push({ label: `Pop ${s.ref}: ${s.message.replace(/^On [^:]+: /, '')}`, icon: 'pull', onClick: () => mutateOp(() => rpc('stashPop', { ref: s.ref }), `Applied ${s.ref}`) }))
+      S.refs.stashes.forEach((s) => items.push({ label: `Pop ${s.ref}: ${s.message.replace(/^On [^:]+: /, '')}`, icon: 'pull', onClick: () => stashPop(s) }))
+      items.push({ sep: true }, { label: 'Manage stashes in Branches', icon: 'branch', onClick: () => switchView('refs') })
     } else items.push({ label: 'No stashes', disabled: true })
     overlay.menu(anchor, items, { align: 'right' })
+  }
+
+  async function stashChanges() {
+    const v = await overlay.dialog({ title: 'Stash changes', text: 'Saves the staged and unstaged changes (including untracked files) and cleans the working tree.', fields: [{ name: 'message', label: 'Message (optional)', placeholder: 'wip', required: false }], ok: 'Stash' })
+    if (!v) return
+    await mutateOp(() => rpc('stashPush', v.message ? { message: v.message } : {}), 'Stashed the working tree')
+  }
+  async function stashPop(s) {
+    const ok = await overlay.dialog({ title: `Pop ${s.ref}?`, text: `Applies "${(s.message ?? s.title ?? '').replace(/^On [^:]+: /, '')}" and removes the stash entry.` })
+    if (!ok) return
+    await mutateOp(() => rpc('stashPop', { ref: s.ref }), `Popped ${s.ref}`)
+  }
+  async function stashApply(s) {
+    await mutateOp(() => rpc('stashApply', { ref: s.ref }), `Applied ${s.ref}`)
+  }
+  async function stashDrop(s) {
+    const ok = await overlay.dialog({ title: `Drop ${s.ref}?`, text: `Deletes "${(s.message ?? s.title ?? '').replace(/^On [^:]+: /, '')}". This cannot be undone.`, ok: 'Drop stash', danger: true })
+    if (!ok) return
+    await mutateOp(() => rpc('stashDrop', { ref: s.ref }), `Dropped ${s.ref}`)
   }
 
   function moreMenu(anchor) {
     overlay.menu(
       anchor,
       [
-        { label: 'Refresh', icon: 'fetch', kbd: 'F5', onClick: () => refresh() },
+        { label: 'Refresh', icon: 'fetch', kbd: 'F5', disabled: !S.repo, onClick: () => refresh() },
         { sep: true },
-        { label: 'New branch\u2026', icon: 'branch', disabled: !S.repo, onClick: () => newBranch(null) },
-        { label: 'Create tag\u2026', icon: 'tag', disabled: !S.repo, onClick: () => newTag(null) },
-        { sep: true },
+        ...(S.repo
+          ? [
+              { label: 'New branch…', icon: 'branch', onClick: () => newBranch(null) },
+              { label: 'Create tag…', icon: 'tag', onClick: () => newTag(null) },
+              { label: 'Merge a branch…', icon: 'merge', onClick: () => mergeMenu(anchor) },
+              { sep: true },
+              { label: 'Clone repository…', icon: 'globe', onClick: cloneFlow },
+              { sep: true },
+            ]
+          : [{ label: 'Initialize repository here', icon: 'plus', onClick: initRepo }, { label: 'Clone repository…', icon: 'globe', onClick: cloneFlow }, { sep: true }]),
         { label: 'Search commits', icon: 'search', kbd: 'Ctrl F', disabled: !S.repo, onClick: openSearch },
+        { label: 'Keyboard shortcuts', icon: 'keyboard', kbd: '?', disabled: !S.repo, onClick: shortcutsModal },
+        { sep: true },
         { label: 'Copy repository path', icon: 'copy', disabled: !S.repo, onClick: () => copy(S.repo.root, 'Copied the path') },
         ctx.openPath ? { label: 'Reveal in Files', icon: 'folder', disabled: !S.repo, onClick: () => ctx.openPath(S.repo.root) } : null,
       ],
       { align: 'right' },
     )
+  }
+
+  function mergeMenu(anchor) {
+    const candidates = mergeCandidates(S.refs, S.status?.branch.head)
+    const items = candidates.slice(0, 30).map((name) => ({ label: `Merge ${name}`, icon: 'merge', onClick: () => mergeRef(name) }))
+    if (!items.length) items.push({ label: 'Nothing to merge', disabled: true })
+    overlay.menu(anchor, [{ header: 'Merge into the current branch' }, ...items], { align: 'right' })
+  }
+
+  async function cloneFlow() {
+    const v = await overlay.dialog({ title: 'Clone a repository', text: 'Clones into a folder you pick.', fields: [{ name: 'url', label: 'Repository URL', placeholder: 'https://… or user/host:repo.git', required: true }, { name: 'name', label: 'Folder name (optional)', placeholder: 'defaults to the repository name', required: false }], ok: 'Choose folder' })
+    if (!v || !v.url) return
+    let dir = null
+    try {
+      const p = await rpc('pickFolder', { title: 'Clone into…', create: true })
+      dir = p && p.path
+    } catch (e) {
+      return fail(e)
+    }
+    if (!dir) return
+    try {
+      const r = await rpc('clone', { url: v.url, dir, name: v.name || undefined })
+      toast('info', `Cloned into ${r.path.split(/[\\/]/).pop()}`)
+      ctx.openBlock?.('git', { cwd: r.path })
+    } catch (e) {
+      fail(e)
+    }
   }
 
   function openBranchPicker() {
@@ -708,46 +1366,20 @@ function mountGit(el, ctx) {
         })
         paint()
         queueMicrotask(() => input.focus())
-        return h('div', { class: 'gt-branch-pop' }, h('div', { class: 'gt-pop-head' }, icon('search'), input), list, h('div', { class: 'gt-pop-foot' }, h('button', { class: 'gt-btn sm quiet', onClick: () => (close(), newBranch(null)) }, icon('plus'), 'New branch\u2026'), h('button', { class: 'gt-btn sm quiet', onClick: () => (close(), newTag(null)) }, icon('tag'), 'New tag\u2026')))
+        return h('div', { class: 'gt-branch-pop' }, h('div', { class: 'gt-pop-head' }, icon('search'), input), list, h('div', { class: 'gt-pop-foot' }, h('button', { class: 'gt-btn sm quiet', onClick: () => (close(), newBranch(null)) }, icon('plus'), 'New branch…'), h('button', { class: 'gt-btn sm quiet', onClick: () => (close(), newTag(null)) }, icon('tag'), 'New tag…')))
       },
       { cls: 'wide' },
     )
   }
 
   // ------------------------------------------------------------------ detail: shared pieces
-  function fileRowCommit(f, i) {
-    const { dir, name } = splitPath(f.path)
-    return h(
-      'div',
-      { class: 'gt-frow' + (S.commitFile === f.path ? ' sel' : ''), dataset: { path: f.path }, title: `${STATUS_NAME[f.status] ?? f.status}${f.oldPath ? ` (from ${f.oldPath})` : ''}\n${f.path}`, onClick: () => ((S.commitFile = f.path), renderDetail(), loadSelection()) },
-      h('span', { class: `gt-st ${statusClass(f.status)}` }, f.status),
-      h('span', { class: 'gt-fname' }, dir ? h('span', { class: 'dim' }, dir) : null, h('b', {}, name)),
-      f.binary ? h('span', { class: 'gt-stat' }, h('i', {}, 'bin')) : h('span', { class: 'gt-stat' }, f.add ? h('i', { class: 'add' }, `+${f.add}`) : null, f.del ? h('i', { class: 'del' }, `\u2212${f.del}`) : null),
-    )
-  }
-
-  // ------------------------------------------------------------------ detail: commit
-  const commitDiff = createDiffView({})
-  const commitPane = h('div', { class: 'gt-cdetail', hidden: true })
-  const commitHead = h('div', { class: 'gt-chead' })
-  const commitFiles = h('div', { class: 'gt-flist' })
-  const commitSplit = h('div', { class: 'gt-dsplit' }, commitFiles, commitDiff.el)
-  commitPane.append(commitHead, commitSplit)
-
-  function renderCommitDetail() {
-    const d = S.detail
-    commitHead.replaceChildren()
-    commitFiles.replaceChildren()
-    if (!d) {
-      commitHead.append(h('div', { class: 'gt-ch-note pad' }, 'Loading commit\u2026'))
-      return
-    }
+  function commitHeadNodes(d) {
     const [subject, ...rest] = d.message.split('\n')
     const body = rest.join('\n').trim()
     const chips = parseDecoration(d.refs, S.refs.remoteNames)
     const idx = S.index.get(d.hash)
     const color = idx !== undefined ? laneColor(S.layout.rows[idx].color) : 'var(--accent)'
-    put(commitHead,
+    return [
       h('div', { class: 'gt-d-subject' }, subject),
       body ? h('pre', { class: 'gt-d-body' }, body) : null,
       h(
@@ -755,7 +1387,7 @@ function mountGit(el, ctx) {
         { class: 'gt-d-meta' },
         avatar(d.author, d.email, 22),
         h('span', { class: 'gt-d-author' }, d.author),
-        h('span', { class: 'gt-dim', title: fullDate(d.time) }, `${relativeTime(d.time)} ago \u00b7 ${fullDate(d.time)}`),
+        h('span', { class: 'gt-dim', title: fullDate(d.time) }, `${relativeTime(d.time)} ago · ${fullDate(d.time)}`),
         d.committer && (d.committer !== d.author || d.committerEmail !== d.email) ? h('span', { class: 'gt-dim' }, `committed by ${d.committer}`) : null,
         h('span', { class: 'gt-grow' }),
         h('button', { class: 'gt-hash', title: `${d.hash}\nClick to copy`, onClick: () => copy(d.hash, 'Copied the commit hash') }, d.hash.slice(0, 8), icon('copy')),
@@ -770,274 +1402,390 @@ function mountGit(el, ctx) {
             ...chips.map((c) => refChip(c, color, null)),
           )
         : null,
-    )
-    const add = d.files.reduce((a, f) => a + f.add, 0)
-    const del = d.files.reduce((a, f) => a + f.del, 0)
-    put(commitFiles,
-      h('div', { class: 'gt-flist-head' }, h('span', {}, plural(d.files.length, 'file'), ' changed'), h('span', { class: 'gt-stat' }, add ? h('i', { class: 'add' }, `+${add}`) : null, del ? h('i', { class: 'del' }, `\u2212${del}`) : null)),
-      h('div', { class: 'gt-flist-body' }, d.files.map(fileRowCommit)),
-      d.truncated ? h('div', { class: 'gt-ch-note pad' }, 'The file list is cut off.') : null,
-    )
+    ]
   }
 
-  // ------------------------------------------------------------------ detail: working tree
-  const wipDiff = createDiffView({ onApply })
-  const wipPane = h('div', { class: 'gt-wip', hidden: true })
-  const wipLists = h('div', { class: 'gt-wip-lists' })
-  const sbox = {
-    summary: h('input', { class: 'gt-input', type: 'text', placeholder: 'Summary', spellcheck: false, onInput: () => ((box.summary = sbox.summary.value), renderBox()), onKeydown: boxKey }),
-    why: h('textarea', { class: 'gt-input why', rows: 2, placeholder: 'Why this change\u2026', spellcheck: false, onInput: () => ((box.body = sbox.why.value), renderBox()), onKeydown: boxKey }),
-    count: h('span', { class: 'gt-sum-count' }),
-    write: h('button', { class: 'gt-chip', title: 'Generate message', onClick: writeMessage }),
-    amend: h('button', { class: 'gt-chip', role: 'switch', title: 'Replace the last commit instead of adding a new one', onClick: toggleAmend }, h('span', { class: 'gt-chip-box' }, icon('check')), 'Amend'),
-    commit: h('button', { class: 'gt-btn accent gt-commit', onClick: doCommit }),
-  }
-  const commitBox = h(
-    'div',
-    { class: 'gt-cbox' },
-    h('div', { class: 'gt-sum-wrap' }, sbox.summary, sbox.count),
-    sbox.why,
-    h('div', { class: 'gt-cbox-row' }, sbox.write, sbox.amend, h('span', { class: 'gt-grow' }), sbox.commit),
-  )
-  const box = { summary: '', body: '', amend: false, writing: false, committing: false, prefilled: null }
-  wipPane.append(h('div', { class: 'gt-wip-side' }, wipLists, commitBox), wipDiff.el)
-  detailEl.append(commitPane, wipPane)
-
-  function boxKey(e) {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault()
-      doCommit()
-    }
-  }
-
-  let discardArmed = null
-  function wipRow(f, staged) {
+  function fileRowCommit(f, onPick, selected) {
     const { dir, name } = splitPath(f.path)
-    const selected = S.wipFile && S.wipFile.path === f.path && S.wipFile.staged === staged
-    const actions = h('span', { class: 'gt-row-actions' })
-    if (staged) actions.append(h('button', { class: 'gt-ibtn', title: 'Unstage file', onClick: (e) => (e.stopPropagation(), mutateOp(() => rpc('unstage', { paths: [f.path] }))) }, icon('minus')))
-    else {
-      const key = f.path
-      const armed = discardArmed === key
-      actions.append(
-        h(
-          'button',
-          {
-            class: 'gt-ibtn' + (armed ? ' armed' : ''),
-            title: armed ? 'Click again to discard' : f.untracked ? 'Delete this untracked file' : 'Discard changes',
-            onClick: (e) => {
-              e.stopPropagation()
-              if (!armed) {
-                discardArmed = key
-                renderWip()
-                setTimeout(() => discardArmed === key && ((discardArmed = null), !disposed && renderWip()), 2500)
-                return
-              }
-              discardArmed = null
-              mutateOp(() => rpc('discard', f.untracked ? { untracked: [f.path] } : { paths: [f.path] }))
-            },
-          },
-          armed ? h('span', { class: 'gt-armed' }, 'Discard?') : icon('trash'),
-        ),
-        h('button', { class: 'gt-ibtn', title: 'Stage file', onClick: (e) => (e.stopPropagation(), mutateOp(() => rpc('stage', { paths: [f.path] }))) }, icon('plus')),
-      )
-    }
     return h(
       'div',
-      { class: 'gt-frow' + (selected ? ' sel' : ''), dataset: { path: f.path, side: staged ? 's' : 'u' }, title: `${STATUS_NAME[f.status] ?? ''}${f.orig ? ` from ${f.orig}` : ''}\n${f.path}`, onClick: () => ((S.wipFile = { path: f.path, staged }), renderWip(), loadSelection()) },
+      { class: 'gt-frow' + (selected ? ' sel' : ''), dataset: { path: f.path }, title: `${STATUS_NAME[f.status] ?? f.status}${f.oldPath ? ` (from ${f.oldPath})` : ''}\n${f.path}`, onClick: () => onPick(f.path) },
       h('span', { class: `gt-st ${statusClass(f.status)}` }, f.status),
-      h('span', { class: 'gt-fname' }, dir ? h('span', { class: 'dim' }, dir) : null, h('b', {}, name)),
-      actions,
+      h('span', { class: 'gt-fname' }, dir ? h('span', { class: 'dim' }, dir) : null, h('b', {}, name), f.oldPath ? h('span', { class: 'dim' }, ` ← ${f.oldPath}`) : null),
+      f.binary ? h('span', { class: 'gt-stat' }, h('i', {}, 'bin')) : h('span', { class: 'gt-stat' }, f.add ? h('i', { class: 'add' }, `+${f.add}`) : null, f.del ? h('i', { class: 'del' }, `−${f.del}`) : null),
     )
   }
 
-  function wipSection(title, items, staged, bulk) {
-    return h(
-      'section',
-      { class: 'gt-sec' },
-      h('div', { class: 'gt-sec-head static' }, h('span', { class: 'gt-sec-title' }, title), h('span', { class: 'gt-count' }, items.length), h('span', { class: 'gt-grow' }), items.length ? h('button', { class: 'gt-link', onClick: bulk.run }, bulk.label) : null),
-      items.length ? h('div', { class: 'gt-sec-body' }, items.map((f) => wipRow(f, staged))) : h('div', { class: 'gt-sec-empty' }, staged ? 'Nothing staged' : 'No unstaged changes'),
-    )
+  function fileListNodes(d, onPick, isSel) {
+    const add = d.files.reduce((a, f) => a + f.add, 0)
+    const del = d.files.reduce((a, f) => a + f.del, 0)
+    return [
+      h('div', { class: 'gt-flist-head' }, h('span', {}, plural(d.files.length, 'file'), ' changed'), h('span', { class: 'gt-stat' }, add ? h('i', { class: 'add' }, `+${add}`) : null, del ? h('i', { class: 'del' }, `−${del}`) : null)),
+      h('div', { class: 'gt-flist-body' }, d.files.map((f) => fileRowCommit(f, onPick, isSel?.(f)))),
+      d.truncated ? h('div', { class: 'gt-ch-note pad' }, 'The file list is cut off.') : null,
+    ]
   }
 
-  function stagedCount() {
-    return S.status ? splitStatus(S.status.files).staged.length : 0
-  }
-
-  function renderWip() {
-    if (!S.status) return
-    const { staged, unstaged } = splitStatus(S.status.files)
-    wipLists.replaceChildren(
-      wipSection('Staged', staged, true, { label: 'Unstage all', run: () => mutateOp(() => rpc('unstage', { all: true })) }),
-      wipSection('Unstaged', unstaged, false, { label: 'Stage all', run: () => mutateOp(() => rpc('stage', { all: true })) }),
-    )
-    if (S.status.truncated) wipLists.append(h('div', { class: 'gt-ch-note pad' }, 'The list is cut off: too many changed files.'))
-    renderBox()
-  }
-
-  function renderBox() {
-    const n = stagedCount()
-    const msg = box.summary.trim()
-    const len = [...box.summary].length
-    sbox.count.textContent = len ? String(len) : ''
-    sbox.count.classList.toggle('over', len > 72)
-    sbox.summary.disabled = box.committing
-    sbox.why.disabled = box.committing
-    sbox.write.replaceChildren(icon(box.writing ? 'spinner' : 'sparkle'), box.writing ? 'Writing message\u2026' : 'Write it')
-    sbox.write.disabled = box.writing || box.committing || !n
-    sbox.write.title = n ? 'Generate message' : 'Stage something to describe it'
-    sbox.amend.classList.toggle('on', box.amend)
-    sbox.amend.setAttribute('aria-checked', String(box.amend))
-    sbox.amend.disabled = box.committing || !S.status?.branch.oid
-    const can = !box.committing && (box.amend || (n > 0 && !!msg))
-    sbox.commit.disabled = !can
-    fill(sbox.commit,
-      box.committing ? icon('spinner') : null,
-      box.committing ? 'Committing\u2026' : box.amend ? (n ? `Amend with ${plural(n, 'file')}` : 'Amend message') : n ? `Commit ${plural(n, 'file')}` : 'Nothing staged',
-      box.committing ? null : h('kbd', { class: 'gt-kbd on-accent' }, COMMIT_KEYS),
-    )
-  }
-
-  async function writeMessage() {
-    if (box.writing) return
-    box.writing = true
-    renderBox()
-    try {
-      const m = await rpc('generateMessage')
-      box.summary = sbox.summary.value = m.summary
-      box.body = sbox.why.value = m.body || ''
-      if (m.note) toast('info', m.note)
-    } catch (e) {
-      fail(e)
-    }
-    box.writing = false
-    renderBox()
-  }
-
-  async function toggleAmend() {
-    box.amend = !box.amend
-    if (box.amend && !box.summary && !box.body && S.status?.branch.oid) {
-      try {
-        const d = await rpc('commit', { hash: S.status.branch.oid })
-        const [s, ...rest] = d.message.split('\n')
-        box.summary = sbox.summary.value = s
-        box.body = sbox.why.value = rest.join('\n').trim()
-        box.prefilled = { summary: box.summary, body: box.body }
-      } catch (e) {
-        fail(e)
-      }
-    } else if (!box.amend && box.prefilled && box.summary === box.prefilled.summary && box.body === box.prefilled.body) {
-      box.summary = sbox.summary.value = ''
-      box.body = sbox.why.value = ''
-      box.prefilled = null
-    }
-    renderBox()
-  }
-
-  async function doCommit() {
-    if (sbox.commit.disabled) return
-    box.committing = true
-    renderBox()
-    const amend = box.amend
-    const r = await mutateOp(() => rpc('commitCreate', { summary: box.summary, body: box.body, amend }), amend ? 'Amended the last commit' : 'Committed')
-    box.committing = false
-    if (r) {
-      box.summary = sbox.summary.value = ''
-      box.body = sbox.why.value = ''
-      box.amend = false
-      box.prefilled = null
-      S.sel = { kind: 'wip' }
-    }
-    renderBox()
-  }
-
-  async function onApply(kind, diff, selection) {
-    const f = S.wipFile
-    if (!f) return
-    const reverse = kind === 'unstage'
-    const patch = buildPatch(diff, selection, { reverse })
-    if (!patch) return toast('info', 'Nothing to apply in that selection')
-    const whole = selection.some((s) => s.lines === null)
-    const label = `${reverse ? 'Unstage' : 'Stage'} ${whole ? 'hunk' : 'lines'} in ${splitPath(f.path).name}`
-    wipDiff.clear() // the picked indexes are meaningless once the diff changes
-    await mutateOp(() => rpc('applyPatch', { patch, reverse, label }))
-  }
-
-  // ------------------------------------------------------------------ detail dispatch
+  // ------------------------------------------------------------------ detail: commit (History)
   function renderDetail() {
-    const wip = S.sel.kind === 'wip'
-    wipPane.hidden = !wip
-    commitPane.hidden = wip
-    if (wip) renderWip()
-    else renderCommitDetail()
+    if (S.sel.kind === 'wip') {
+      fill(commitHead,
+        h('div', { class: 'gt-ch-empty small' }, icon('changes'), h('div', { class: 'gt-ch-note' }, 'The working tree lives in the Changes view.'),
+          h('button', { class: 'gt-btn sm', type: 'button', onClick: () => switchView('changes') }, 'Review changes')))
+      fill(commitFiles)
+      commitDiff.message('')
+      return
+    }
+    const d = S.detail
+    fill(commitHead, ...(d ? commitHeadNodes(d) : [h('div', { class: 'gt-ch-note pad' }, 'Loading commit…')]))
+    fill(commitFiles, ...(d ? fileListNodes(d, pickCommitFile, (f) => f.path === S.commitFile) : []))
+    if (!d) return
+    if (!d.files.length) commitDiff.message('This commit changes no files.')
   }
 
-  /** Loads what the selection needs: the commit's file list, and the diff of the selected file. */
-  let diffToken = 0
-  async function loadSelection() {
-    if (!S.repo) return
-    const mine = ++diffToken
-    const sel = S.sel
-    try {
-      if (sel.kind === 'wip') {
-        const f = S.wipFile
-        if (!f || !S.status) return wipDiff.message(S.status && dirty(S.status) ? 'Select a file to see its changes.' : 'The working tree is clean.')
-        const info = splitStatus(S.status.files)
-        const entry = (f.staged ? info.staged : info.unstaged).find((x) => x.path === f.path)
-        if (!entry) return
-        if (entry.conflict) return wipDiff.show(parseDiff(''), { path: f.path, mode: 'worktree', notice: 'This file has merge conflicts. Resolve them in your editor, then stage the file.' })
-        const r = await rpc('diff', f.staged ? { path: f.path, staged: true } : entry.untracked ? { path: f.path, untracked: true } : { path: f.path })
-        if (mine !== diffToken || disposed) return
-        const notice = r.tooLarge ? `This file is too large to show (${Math.round(r.size / 1048576)} MB).` : r.truncated ? 'This diff is too large to show completely.' : ''
-        wipDiff.show(parseDiff(r.text), { path: f.path, mode: f.staged ? 'staged' : 'worktree', keepScroll: true, notice: notice && !r.text ? notice : '' })
-        return
-      }
-      let d = detailCache.get(sel.hash)
-      if (!d) {
-        S.detail = null
-        renderCommitDetail()
-        d = await rpc('commit', { hash: sel.hash })
-        if (mine !== diffToken || disposed) return
-        detailCache.set(sel.hash, d)
-        if (detailCache.size > 60) detailCache.delete(detailCache.keys().next().value)
-      }
-      S.detail = d
-      if (!S.commitFile || !d.files.some((f) => f.path === S.commitFile)) S.commitFile = d.files[0]?.path ?? null
-      renderCommitDetail()
-      const f = d.files.find((x) => x.path === S.commitFile)
-      if (!f) return commitDiff.message(d.files.length ? 'Select a file.' : 'This commit changes no files.')
-      if (f.binary) return commitDiff.show(parseDiff(''), { path: f.path, mode: 'commit', notice: 'Binary file: nothing to show.' })
-      const r = await rpc('diff', { hash: d.hash, parent: d.parents[0], path: f.path, oldPath: f.oldPath })
-      if (mine !== diffToken || disposed) return
-      commitDiff.show(parseDiff(r.text), { path: f.path, mode: 'commit', notice: r.truncated && !r.text ? 'This diff is too large to show.' : '' })
-    } catch (e) {
-      if (mine !== diffToken || disposed) return
-      const m = errorText(e)
-      ;(sel.kind === 'wip' ? wipDiff : commitDiff).message(m)
+  function pickCommitFile(path) {
+    S.commitFile = path
+    renderDetail()
+    loadSelection()
+  }
+
+  // ------------------------------------------------------------------ detail: commit (Branches)
+  function renderRefsDetail() {
+    const r = refsDetailRow
+    if (!r?.detail) {
+      fill(refsHead, h('div', { class: 'gt-ch-note pad' }, r ? 'Loading commit…' : 'Select a branch, tag or stash to see its commit.'))
+      fill(refsFiles)
+      refsDiff.message('')
+      return
     }
+    const d = r.detail
+    fill(refsHead, ...commitHeadNodes(d))
+    fill(refsFiles, ...fileListNodes(d, (p) => loadRefsDiff(r, p), (f) => f.path === S.rf.file))
+  }
+
+  let refsDetailRow = null
+  let refsLoading = false
+  async function loadRefsDetail() {
+    if (!S.repo || S.view !== 'refs') return
+    const r = S.rf.sel ? findRefRow(S.rf.sel) : null
+    if (!r) {
+      refsDetailRow = null
+      renderRefsDetail()
+      return
+    }
+    if (r.detail) {
+      refsDetailRow = r
+      renderRefsDetail()
+      loadRefsDiff(r, r.detail.files[0]?.path)
+      return
+    }
+    if (refsLoading) return
+    refsLoading = true
+    refsDetailRow = r
+    renderRefsDetail()
+    try {
+      const mine = ++refsDiffToken
+      const d = await rpc('commit', { hash: r.hash })
+      if (mine !== refsDiffToken || disposed) return
+      r.detail = d
+      if (S.rf.sel === r.id) {
+        refsDetailRow = r
+        renderRefsDetail()
+        loadRefsDiff(r, d.files[0]?.path)
+      }
+    } catch (e) {
+      refsDetailRow = r
+      fill(refsHead, h('div', { class: 'gt-ch-note pad' }, errorText(e)))
+    } finally {
+      refsLoading = false
+    }
+  }
+
+  function findRefRow(id) {
+    if (!id) return null
+    const [kind, ...rest] = id.split(':')
+    const name = rest.join(':')
+    if (kind === 'branch') {
+      const b = S.refs.branches.find((x) => x.name === name)
+      return b ? { id, kind, name: b.name, hash: b.hash, detail: null } : null
+    }
+    if (kind === 'remote') {
+      const b = S.refs.remotes.find((x) => x.name === name)
+      return b ? { id, kind, name: b.name, hash: b.hash, detail: null } : null
+    }
+    if (kind === 'tag') {
+      const t = S.refs.tags.find((x) => x.name === name)
+      return t ? { id, kind, name: t.name, hash: t.hash, detail: null } : null
+    }
+    if (kind === 'stash') {
+      const s = S.refs.stashes.find((x) => x.ref === name)
+      return s ? { id, kind, name: s.ref, ref: s.ref, message: s.message, title: s.message.replace(/^On [^:]+: /, ''), hash: s.hash, detail: null } : null
+    }
+    return null
+  }
+
+  let refsDiffTokenLocal = 0
+  async function loadRefsDiff(r, path) {
+    if (path) S.rf.file = path
+    try {
+      const d = r.detail
+      const f = d?.files.find((x) => x.path === path)
+      if (!f) return refsDiff.message(d?.files.length ? 'Select a file.' : 'This commit changes no files.')
+      if (f.binary) return refsDiff.show(parseDiff(''), { path: f.path, mode: 'commit', notice: 'Binary file: nothing to show.' })
+      const res = await rpc('diff', { hash: d.hash, parent: d.parents[0], path: f.path, oldPath: f.oldPath, ignoreWhitespace: refsDiff.ignoreWhitespace })
+      if (mine !== refsDiffTokenLocal || disposed) return
+      refsDiff.show(parseDiff(res.text), { path: f.path, mode: 'commit', notice: res.truncated && !res.text ? 'This diff is too large to show.' : '' })
+    } catch (e) {
+      if (mine !== refsDiffTokenLocal || disposed) return
+      refsDiff.message(errorText(e))
+    }
+  }
+
+  // ------------------------------------------------------------------ Branches view
+  function renderRefs() {
+    const rows = refRows(S.refs, S.rf.query, S.rf.collapsed)
+    rfFilterClear.hidden = !S.rf.query
+    rfFilterCount.textContent = S.rf.query ? `${rows.filter((r) => r.type === 'item').length}` : ''
+    if (!rows.length) {
+      fill(rvList, h('div', { class: 'gt-ch-empty small' }, icon('branch'), h('div', { class: 'gt-ch-note' }, S.rf.query ? 'Nothing matches the filter.' : 'No branches, tags or stashes yet.')))
+      return
+    }
+    fill(rvList, ...rows.map(refRow))
+  }
+
+  function refRow(r) {
+    if (r.type === 'header') {
+      const open = !S.rf.collapsed.has(r.id)
+      return h('div', { class: 'gt-rv-head', role: 'button', tabIndex: -1, onClick: () => (S.rf.collapsed.has(r.id) ? S.rf.collapsed.delete(r.id) : S.rf.collapsed.add(r.id), renderRefs()) },
+        h('span', { class: 'gt-chev' + (open ? ' open' : '') }, icon('chevR')), h('span', {}, r.title), h('span', { class: 'gt-count' }, r.count))
+    }
+    if (r.type === 'subheader') return h('div', { class: 'gt-rv-subhead' }, h('span', {}, r.title), r.url ? h('span', { class: 'gt-rv-url' }, r.url) : null)
+    const ico = r.kind === 'branch' ? 'branch' : r.kind === 'remote' ? 'globe' : r.kind === 'tag' ? 'tag' : 'stash'
+    const sub = r.kind === 'branch' ? [trackText(r), r.gone ? 'upstream gone' : '', relativeTime(r.date)].filter(Boolean).join('  ') : r.kind === 'stash' ? r.title || '' : relativeTime(r.date)
+    const current = r.kind === 'branch' && r.current
+    return h(
+      'div',
+      { class: 'gt-rv-row' + (current ? ' current' : '') + (S.rf.sel === r.id ? ' sel' : ''), role: 'option', 'aria-selected': S.rf.sel === r.id, dataset: { id: r.id }, title: r.name },
+      icon(ico),
+      h('span', { class: 'gt-rv-n' }, r.kind === 'remote' ? r.short : r.name),
+      sub ? h('span', { class: 'gt-rv-sub' }, sub) : null,
+      current ? h('span', { class: 'gt-pill ok' }, 'current') : null,
+      h('span', { class: 'gt-grow' }),
+      h('button', { class: 'gt-ibtn', type: 'button', title: 'Actions', onClick: (e) => (e.stopPropagation(), refMenu(e.currentTarget, r)) }, icon('more')),
+    )
+  }
+
+  rvList.addEventListener('pointerdown', (e) => {
+    const row = e.target.closest('.gt-rv-row')
+    if (!row || e.button !== 0 || e.target.closest('button')) return
+    selectRef(row.dataset.id)
+  })
+  rvList.addEventListener('dblclick', (e) => {
+    const row = e.target.closest('.gt-rv-row')
+    if (!row) return
+    const r = findRefRow(row.dataset.id)
+    if (r && (r.kind === 'branch' || r.kind === 'remote')) checkoutRef({ type: r.kind, name: r.name, current: r.current })
+  })
+  rvList.addEventListener('contextmenu', (e) => {
+    const row = e.target.closest('.gt-rv-row')
+    if (!row) return
+    e.preventDefault()
+    const r = findRefRow(row.dataset.id)
+    if (r) refMenu({ x: e.clientX, y: e.clientY }, r)
+  })
+  rvList.addEventListener('keydown', (e) => {
+    if (/INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? '')) return
+    const rows = [...rvList.querySelectorAll('.gt-rv-row')]
+    const i = rows.findIndex((x) => x.dataset.id === S.rf.sel)
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      const n = Math.max(0, Math.min(rows.length - 1, (i < 0 ? (e.key === 'ArrowDown' ? -1 : rows.length) : i) + (e.key === 'ArrowDown' ? 1 : -1)))
+      const row = rows[n]
+      if (row) selectRef(row.dataset.id)
+    } else if (e.key === 'Enter' && i >= 0) {
+      e.preventDefault()
+      const r = findRefRow(S.rf.sel)
+      if (r && (r.kind === 'branch' || r.kind === 'remote')) checkoutRef({ type: r.kind, name: r.name, current: r.current })
+    }
+  })
+
+  function selectRef(id) {
+    S.rf.sel = id
+    renderRefs()
+    loadRefsDetail()
+    rvList.querySelector(`[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' })
+  }
+
+  function refMenu(anchor, r) {
+    const items = []
+    const current = S.status?.branch.head
+    if (r.kind === 'branch') {
+      if (!r.current) items.push({ label: 'Check out', icon: 'check', onClick: () => checkoutRef({ type: 'branch', name: r.name }) })
+      items.push(
+        { label: 'New branch here…', icon: 'plus', onClick: () => newBranch(r.hash, 'New branch here') },
+        { label: 'Create tag here…', icon: 'tag', onClick: () => newTag(r.hash) },
+        { label: 'Rename…', icon: 'copy', onClick: () => renameBranch(r.name) },
+      )
+      if (!r.current && current) items.push({ label: `Merge into ${current}…`, icon: 'merge', onClick: () => mergeRef(r.name) })
+      if (!r.current) items.push({ sep: true }, { label: 'Delete…', icon: 'trash', danger: true, onClick: () => deleteBranch(r.name) })
+      items.push({ sep: true }, { label: 'Copy name', icon: 'copy', onClick: () => copy(r.name, 'Copied the branch name') })
+    } else if (r.kind === 'remote') {
+      items.push(
+        { label: 'Check out (track)', icon: 'check', onClick: () => checkoutRef({ type: 'remote', name: r.name }) },
+        { label: 'Delete on remote…', icon: 'trash', danger: true, onClick: () => deleteRemoteBranch(r.name) },
+        { sep: true },
+        { label: 'Copy name', icon: 'copy', onClick: () => copy(r.name, 'Copied the branch name') },
+      )
+    } else if (r.kind === 'tag') {
+      items.push(
+        { label: 'Check out (detached HEAD)', icon: 'check', onClick: () => checkoutRef({ type: 'tag', name: r.name }) },
+        { label: 'Delete…', icon: 'trash', danger: true, onClick: () => deleteTag(r.name) },
+        { sep: true },
+        { label: 'Copy name', icon: 'copy', onClick: () => copy(r.name, 'Copied the tag name') },
+      )
+    } else if (r.kind === 'stash') {
+      items.push(
+        { label: 'Pop (apply and drop)', icon: 'pull', onClick: () => stashPop(r) },
+        { label: 'Apply (keep the stash)', icon: 'check', onClick: () => stashApply(r) },
+        { label: 'Drop…', icon: 'trash', danger: true, onClick: () => stashDrop(r) },
+        { sep: true },
+        { label: 'Copy ref', icon: 'copy', onClick: () => copy(r.name, 'Copied the stash ref') },
+      )
+    }
+    overlay.menu(anchor, items)
+  }
+
+  rfFilter.addEventListener('input', () => ((S.rf.query = rfFilter.value), renderRefs()))
+  rfFilter.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault()
+      e.stopPropagation()
+      if (rfFilter.value) (rfFilter.value = '', (S.rf.query = ''), renderRefs())
+      else rvList.focus()
+    }
+  })
+  rfFilterClear.addEventListener('click', () => ((rfFilter.value = ''), (S.rf.query = ''), renderRefs(), rfFilter.focus()))
+
+  // ------------------------------------------------------------------ banner, tabs, views
+  function renderBanner() {
+    const st = S.status
+    const op = st?.operation
+    const conf = st?.conflicted ?? 0
+    if (!op && !conf) {
+      banner.hidden = true
+      return
+    }
+    banner.hidden = false
+    banner.classList.toggle('op', !!op)
+    banner.classList.toggle('conf', !op && conf > 0)
+    if (op) {
+      const t = operationText(op, conf)
+      fill(banner,
+        icon('alert'),
+        h('span', { class: 'gt-banner-t' }, t.title),
+        h('span', { class: 'gt-banner-d' }, t.detail),
+        h('span', { class: 'gt-grow' }),
+        t.canSkip ? h('button', { class: 'gt-btn sm quiet', type: 'button', onClick: () => operation('skip') }, 'Skip') : null,
+        h('button', { class: 'gt-btn sm danger', type: 'button', onClick: () => operation('abort') }, 'Abort'),
+        h('button', { class: 'gt-btn sm accent', type: 'button', disabled: conf > 0, title: conf > 0 ? 'Resolve the conflicts first' : '', onClick: () => operation('continue') }, t.continueLabel))
+    } else {
+      fill(banner,
+        icon('alert'),
+        h('span', { class: 'gt-banner-t' }, `${plural(conf, 'file')} with conflicts`),
+        h('span', { class: 'gt-banner-d' }, 'Take ours or theirs in the Changes view, or resolve the markers in your editor, then stage the file.'),
+        h('span', { class: 'gt-grow' }))
+    }
+  }
+
+  async function operation(action) {
+    const r = await mutateOp(() => rpc('operation', { action }))
+    if (r && r.conflicts) toast('info', 'Conflicts remain — keep resolving.')
+    else if (r) toast('info', action === 'abort' ? 'Aborted' : action === 'skip' ? 'Skipped' : 'Continued')
+  }
+
+  function renderTabs() {
+    const g = groupStatus(S.status?.files ?? [])
+    const total = g.conflicted.length + g.staged.length + g.unstaged.length + g.untracked.length
+    for (const [id, label, ico] of VIEWS) {
+      const b = tabBtns.get(id)
+      const on = S.view === id
+      b.classList.toggle('on', on)
+      b.setAttribute('aria-selected', String(on))
+      const n = b.querySelector('.gt-tab-n')
+      if (id === 'changes') {
+        n.hidden = !total
+        n.textContent = total
+        n.classList.toggle('bad', g.conflicted.length > 0)
+        b.title = `${label} — ${total} changed file${total === 1 ? '' : 's'}${g.conflicted.length ? `, ${g.conflicted.length} conflicted` : ''} (Alt 1)`
+      } else {
+        n.hidden = true
+        b.title = `${label} (Alt ${id === 'history' ? 2 : 3})`
+      }
+      fill(b, icon(ico), h('span', {}, label), n)
+    }
+    const tools = []
+    if (S.view === 'history') tools.push({ icon: 'search', title: 'Search commits (Ctrl+F)', onClick: openSearch })
+    if (S.view === 'refs') {
+      tools.push({ icon: 'plus', title: 'New branch…', onClick: () => newBranch(null) })
+      tools.push({ icon: 'tag', title: 'Create tag…', onClick: () => newTag(null) })
+    }
+    fill(viewTools, ...tools.map((t) => h('button', { class: 'gt-tool', type: 'button', title: t.title, onClick: t.onClick }, icon(t.icon))))
+  }
+
+  function switchView(v) {
+    if (S.view === v) return
+    S.view = v
+    applyView()
+    if (v === 'history') {
+      rafThrottle(() => paintWindow())()
+      loadSelection()
+    }
+    if (v === 'refs') loadRefsDetail()
+    if (v === 'changes') loadChangesDiff(true)
+  }
+
+  function applyView() {
+    const none = !S.repo
+    chView.hidden = none || S.view !== 'changes'
+    historyView.hidden = none || S.view !== 'history'
+    refsView.hidden = none || S.view !== 'refs'
+    renderTabs()
+  }
+
+  function shortcutsModal() {
+    overlay.modal(
+      h('div', {},
+        h('div', { class: 'gt-dialog-title' }, 'Keyboard shortcuts'),
+        h('div', { class: 'gt-short' }, ...SHORTCUTS.map(([k, what]) => h('div', { class: 'gt-short-row' }, h('kbd', { class: 'gt-kbd' }, k), h('span', {}, what)))),
+        h('div', { class: 'gt-dialog-foot' }, h('button', { class: 'gt-btn', type: 'button', onClick: () => overlay.close() }, 'Close'))),
+    )
   }
 
   // ------------------------------------------------------------------ whole render
   function render() {
     renderBar()
+    renderBanner()
+    applyView()
+    searchBar.hidden = !S.repo || !S.search.open
     const none = !S.repo
-    main.hidden = none
-    searchBar.hidden = none || !S.search.open
+    tabsEl.hidden = none
     emptyEl.hidden = !none
     if (none) {
       fill(emptyEl,
         icon('branch', 'gt-empty-ico'),
-        h('div', { class: 'gt-empty-title' }, S.loading ? 'Opening repository\u2026' : S.cwd ? 'This folder is not a Git repository' : 'No folder to open'),
+        h('div', { class: 'gt-empty-title' }, S.loading ? 'Opening repository…' : S.cwd ? 'This folder is not a Git repository' : 'No folder to open'),
         S.cwd ? h('div', { class: 'gt-empty-path' }, S.cwd) : null,
-        !S.loading && S.cwd ? h('button', { class: 'gt-btn accent', onClick: initRepo }, 'Initialize repository') : null,
-      )
+        !S.loading && S.cwd ? h('button', { class: 'gt-btn accent', type: 'button', onClick: initRepo }, 'Initialize repository') : null,
+        S.error && S.cwd ? h('div', { class: 'gt-ch-note' }, S.error) : null)
       return
     }
-    ctx.setTitle?.(`${S.repo.name} \u00b7 ${S.status?.branch.head ?? 'git'}`)
+    ctx.setTitle?.(`${S.repo.name} · ${S.status?.branch.head ?? 'git'}`)
     graphFootRender()
     if (!S.commits.length && !S.hasMore) rowsEl.dataset.empty = 'No commits yet. Stage some files and write the first one.'
     else delete rowsEl.dataset.empty
     renderRows()
+    renderChanges()
+    renderRefs()
     renderDetail()
   }
 
@@ -1049,6 +1797,37 @@ function mountGit(el, ctx) {
       watchRepo()
     } catch (e) {
       fail(e)
+    }
+  }
+
+  // ------------------------------------------------------------------ diff loading (history)
+  /** Loads what the history selection needs: the commit's file list, and the diff of the selected file. */
+  async function loadSelection() {
+    if (!S.repo || S.view !== 'history' || S.sel.kind !== 'commit') return
+    const mine = ++diffToken
+    const sel = S.sel
+    try {
+      let d = detailCache.get(sel.hash)
+      if (!d) {
+        S.detail = null
+        renderDetail()
+        d = await rpc('commit', { hash: sel.hash })
+        if (mine !== diffToken || disposed) return
+        detailCache.set(sel.hash, d)
+        if (detailCache.size > 60) detailCache.delete(detailCache.keys().next().value)
+      }
+      S.detail = d
+      if (!S.commitFile || !d.files.some((f) => f.path === S.commitFile)) S.commitFile = d.files[0]?.path ?? null
+      renderDetail()
+      const f = d.files.find((x) => x.path === S.commitFile)
+      if (!f) return commitDiff.message(d.files.length ? 'Select a file.' : 'This commit changes no files.')
+      if (f.binary) return commitDiff.show(parseDiff(''), { path: f.path, mode: 'commit', notice: 'Binary file: nothing to show.' })
+      const r = await rpc('diff', { hash: d.hash, parent: d.parents[0], path: f.path, oldPath: f.oldPath, ignoreWhitespace: commitDiff.ignoreWhitespace })
+      if (mine !== diffToken || disposed) return
+      commitDiff.show(parseDiff(r.text), { path: f.path, mode: 'commit', notice: r.truncated && !r.text ? 'This diff is too large to show.' : '' })
+    } catch (e) {
+      if (mine !== diffToken || disposed) return
+      commitDiff.message(errorText(e))
     }
   }
 
@@ -1098,13 +1877,34 @@ function mountGit(el, ctx) {
   })
 
   // ------------------------------------------------------------------ keyboard
+  const typing = () => /INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName ?? '') || document.activeElement?.isContentEditable
   root.addEventListener('keydown', (e) => {
     if (e.defaultPrevented) return
+    if (e.key === '?' && !typing()) return shortcutsModal()
+    if (typing()) return
     const mod = e.ctrlKey || e.metaKey
-    if (mod && !e.shiftKey && e.key.toLowerCase() === 'f') (e.preventDefault(), openSearch())
-    else if (e.key === 'F5' || (mod && e.key.toLowerCase() === 'r')) (e.preventDefault(), refresh())
-    else if (e.key === '/' && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? '')) (e.preventDefault(), openSearch())
-    else if (mod && e.key.toLowerCase() === 'z' && !/INPUT|TEXTAREA/.test(document.activeElement?.tagName ?? '')) (e.preventDefault(), undoRedo(e.shiftKey ? 'redo' : 'undo'))
+    const k = e.key.toLowerCase()
+    if (mod && !e.shiftKey && !e.altKey && k === 'b') return (e.preventDefault(), openBranchPicker())
+    if (e.altKey && !mod && !e.shiftKey && (e.key === '1' || e.key === '2' || e.key === '3')) {
+      e.preventDefault()
+      return switchView(VIEWS[+e.key - 1][0])
+    }
+    if (mod && !e.shiftKey && k === 'f') {
+      e.preventDefault()
+      if (S.view === 'changes') return chFilter.focus()
+      if (S.view === 'refs') return rfFilter.focus()
+      return openSearch()
+    }
+    if (e.key === 'F5' || (mod && k === 'r')) return (e.preventDefault(), refresh())
+    if (e.key === '/' && S.view === 'history') return (e.preventDefault(), openSearch())
+    if (mod && k === 'z' && !e.shiftKey) return (e.preventDefault(), undoRedo('undo'))
+    if (mod && k === 'z' && e.shiftKey) return (e.preventDefault(), undoRedo('redo'))
+    if (S.view === 'changes') {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') return (e.preventDefault(), moveChFile(e.key === 'ArrowDown' ? 1 : -1))
+      if (e.key === ' ') return (e.preventDefault(), stageSelected())
+      if (mod && k === 'a') return (e.preventDefault(), (S.ch.selected = new Set(chEntriesCache.order)), renderChanges())
+      if (e.key === 'Delete' || e.key === 'Backspace') return (e.preventDefault(), discardSelected())
+    }
   })
 
   // ------------------------------------------------------------------ live updates
@@ -1132,8 +1932,33 @@ function mountGit(el, ctx) {
   render()
   refresh().then(watchRepo)
 
+  // ---- sharing (local://chats-contract.md, "Sharing") -----------------------------------------------------------
+  // Snapshot-only: a repository view is a one-time copy into the chat, never a live session — git state changes
+  // constantly, so there is no op stream to replay. The payload is composed from the block's own open()/status()/
+  // refs() results held in S (no extra daemon round-trip, no new git.cjs method).
+  const shareAdapter = gitShare({
+    snapshot: () => {
+      const st = S.status || {}
+      const g = groupStatus(st.files)
+      return {
+        path: S.repo?.root ?? S.cwd,
+        branch: st.branch?.head ?? null,
+        upstream: st.branch?.upstream ?? null,
+        ahead: st.branch?.ahead ?? 0,
+        behind: st.branch?.behind ?? 0,
+        staged: g.staged.length,
+        unstaged: g.unstaged.length,
+        untracked: g.untracked.length,
+        conflicts: g.conflicted.length,
+        operation: st.operation ?? null,
+        truncated: !!st.truncated,
+      }
+    },
+  })
+  const unshare = ctx.paneId ? registerInstance(ctx.paneId, 'git', (S.repo && S.repo.name) || args.cwd || S.cwd || 'Git', GIT_SHARE_MODES, shareAdapter) : null
   return {
-    focus: () => (S.repo ? scroller.focus() : root.focus()),
+    share: shareAdapter,
+    focus: () => (S.repo ? (S.view === 'history' ? scroller : S.view === 'refs' ? rvList : groupsEl).focus() : root.focus()),
     resize: () => paintWindow(),
     refresh,
     /** Re-points the block at another folder (used when a pane follows a terminal). */
@@ -1143,13 +1968,47 @@ function mountGit(el, ctx) {
       watched = null
       S.cwd = next
       S.repo = null
+      S.status = null
+      S.refs = { branches: [], remotes: [], tags: [], stashes: [], remoteNames: [], remoteInfo: [] }
       S.commits = []
+      S.hasMore = false
+      S.layout = null
+      S.all = []
+      S.index = new Map()
+      S.detail = null
+      S.undo = { undo: null, redo: null }
       S.sel = { kind: 'wip' }
-      S.wipFile = null
+      S.commitFile = null
+      S.ch = { query: '', selected: new Set(), anchor: null, file: null, collapsed: {} }
+      S.rf = { query: '', collapsed: new Set(), sel: null, file: null }
+      S.box = { summary: '', body: '', amend: false, signoff: false, committing: false, writing: false, prefilled: null }
+      if (S.composer) {
+        S.composer.summary.value = ''
+        S.composer.why.value = ''
+      }
+      S.view = 'changes'
+      chFilter.value = ''
+      rfFilter.value = ''
+      discardArmed = null
+      detailCache.clear()
+      refsDetailRow = null
+      refsLoading = false
+      S.busy.clear()
+      S.search.open = false
+      searchBar.hidden = true
+      loadToken++
+      diffToken++
+      chDiffToken++
+      refsDiffToken++
+      refsDiffTokenLocal++
+      wipDiff.message('')
+      commitDiff.message('')
+      refsDiff.message('')
       await refresh()
       watchRepo()
     },
     dispose() {
+      if (typeof unshare === 'function') { try { unshare() } catch { /* already unregistered */ } }
       disposed = true
       offEvent()
       offAnnounce()
@@ -1159,3 +2018,22 @@ function mountGit(el, ctx) {
     },
   }
 }
+
+// ---------------------------------------------------------------------------------------------------- sharing
+
+const GIT_SHARE_MODES = ['snapshot']
+
+/**
+ * The share adapter factory for the git block (local://chats-contract.md, "Sharing"). Snapshot-only: live git makes
+ * no sense over the wire — a repository view ships one status summary and there is no op stream to replay, so
+ * applyOp/applySnapshot stay defensive no-ops (the same pattern files.js uses for its snapshot-only file views).
+ */
+function gitShare(hooks = {}) {
+  return {
+    modes: GIT_SHARE_MODES,
+    snapshot: () => (hooks.snapshot ? hooks.snapshot() : null),
+    applyOp: () => {},
+    applySnapshot: () => {},
+  }
+}
+registerShare('git', gitShare)

@@ -1,4 +1,39 @@
 'use strict'
+// Launch marks for scripts/desktop/bench.mjs: epoch ms appended to the file named by PAGER_TRACE (nothing happens without it).
+// With PAGER_TRACE_CLOSE set the window also closes itself once the first terminal output is on screen, like a user closing it.
+const mark = process.env.PAGER_TRACE ? (m, extra) => require('node:fs').appendFile(process.env.PAGER_TRACE, `${JSON.stringify({ m, t: Date.now(), ...extra })}\n`, () => {}) : () => {}
+mark('main-start')
+
+const PROBE = `(() => {
+  const o = performance.timeOrigin, marks = {}, paints = {}
+  for (const e of performance.getEntriesByType('mark')) if (!(e.name in marks)) marks[e.name] = o + e.startTime
+  for (const e of performance.getEntriesByType('paint')) paints[e.name] = o + e.startTime
+  return JSON.stringify({ marks, paints, bridge: !!(window.pager && window.pager.d) })
+})()`
+
+/** Bench only: reads the renderer's performance marks (epoch ms) once the first terminal output was written, then closes the window. */
+function traceRenderer(win) {
+  const t0 = Date.now()
+  const tick = async () => {
+    if (win.isDestroyed()) return
+    try {
+      const r = JSON.parse(await win.webContents.executeJavaScript(PROBE))
+      if ('pane-first-byte-any' in r.marks || Date.now() - t0 > 30_000) {
+        mark('renderer', r)
+        if (process.env.PAGER_TRACE_CLOSE) {
+          mark('closing')
+          win.close()
+        }
+        return
+      }
+    } catch {
+      // the page is still loading
+    }
+    setTimeout(tick, 20)
+  }
+  win.webContents.once('dom-ready', tick)
+}
+
 // A thin client of the Pager daemon: window, browser pane, and a forwarder between the renderer and the daemon's pipe.
 // Every program lives in the daemon (dist/daemon); closing this window only detaches. See desktop/DAEMON.md.
 const { app, BrowserWindow, dialog, ipcMain } = require('electron')
@@ -7,7 +42,6 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
-const { createBrowser } = require('./browser.cjs')
 
 const A = path.join(process.resourcesPath, 'app')
 const P = path.join(A, 'pager')
@@ -41,15 +75,16 @@ function run() {
   // Chromium reorders switch-like arguments in the second instance's own argv, so the original ones travel as additional data.
   if (!app.requestSingleInstanceLock({ argv, cwd: process.cwd() })) return app.quit()
   // Chromium's own switches (debugging ports, flags) are Electron's, not Pager's.
-  const passthrough = argv.filter((a) => a !== '--selftest' && a !== '--install' && !/^--(remote-debugging-|inspect|js-flags|enable-logging)/.test(a))
+  const passthrough = argv.filter((a) => a !== '--selftest' && a !== '--install' && !/^--(remote-debugging-|inspect|js-flags|enable-logging|user-data-dir)/.test(a))
 
   let win
   let browser
   let daemonMod // dist/daemon/client.js
-  let settingsMod // dist/daemon/settings.js
+  let settingsMod // dist/daemon/settings.js, loaded when a hotkey or a missing daemon needs it
   let paths
   let client // DaemonClient, or undefined while the daemon is away
   let state = { sessions: [], panes: [], activeSession: '', clients: 0, settings: {} }
+  let started = false // this launch had to start the daemon
   let status = 'lost'
   let intentional = false
   let reconnecting = false
@@ -129,7 +164,7 @@ function run() {
       case 'toast':
         return toast(ev.level || 'info', String(ev.text || ''))
       case 'open_url':
-        if (typeof ev.url === 'string') browser.show(ev.url)
+        if (typeof ev.url === 'string') getBrowser().show(ev.url)
         return
       case 'pane_resync':
         return void resync(String(ev.paneId)).catch((e) => log(`resync ${ev.paneId}: ${e && e.message}`))
@@ -149,10 +184,11 @@ function run() {
     c.on('event', onEvent)
     c.on('data', onData)
     c.once('close', () => onClosed(c))
-    await c.subscribe()
-    let s = await c.call('state')
+    // Same pipe, same order: the daemon answers `state` after it has subscribed us.
+    const [, first] = await Promise.all([c.subscribe(), c.call('state')])
+    let s = first
     if (s.sessions.length === 0) {
-      // The first pane of the first session is the Pager TUI itself (kind 'pager'): agents, chat and calls live in it and outlast this window.
+      // The first pane of the first session is the Home block (kind 'block:home'): the daemon pins it, and the Pager TUI, agents, chat and calls run in ordinary panes that outlast this window.
       await c.call('session.new', { name: 'Pager' })
       s = await c.call('state')
     }
@@ -194,7 +230,12 @@ function run() {
   async function connect(start) {
     if (client) return true
     try {
-      const c = start ? (await daemonMod.connectOrStart(paths, { client: 'window', name: 'electron' })).client : await daemonMod.tryConnect(paths.address, { client: 'window', name: 'electron' })
+      let c
+      if (start) {
+        const r = await daemonMod.connectOrStart(paths, { client: 'window', name: 'electron' })
+        c = r.client
+        started = r.started
+      } else c = await daemonMod.tryConnect(paths.address, { client: 'window', name: 'electron' })
       if (!c) return false
       await adopt(c)
       return true
@@ -247,6 +288,7 @@ function run() {
     const second = Array.isArray(extra?.argv) ? extra.argv : []
     const cwd = typeof extra?.cwd === 'string' ? extra.cwd : os.homedir()
     try {
+      await ready
       await forward(second, cwd)
     } catch (e) {
       // A failed forward must not stop the window from coming forward; the reason goes to the log.
@@ -274,7 +316,7 @@ function run() {
         if (!client) return Promise.reject(new Error('the daemon is not running'))
         return client.call(type, args || {})
       },
-      openUrl: (url) => browser.show(url),
+      openUrl: (url) => getBrowser().show(url),
       userData: app.getPath('userData'),
       window: win,
     }
@@ -297,27 +339,70 @@ function run() {
     const { dataDir } = await load('platform/paths.js')
     const sent = await sendControl(dataDir(), page === 'studio' ? { type: 'docs', page } : { type: 'docs' }).catch(() => ({ kind: 'none' }))
     if (sent.kind !== 'ok' || !sent.reply.ok || !sent.reply.url) return void dialog.showErrorBox(page === 'studio' ? 'Pager bot studio' : 'Pager docs', sent.kind === 'ok' && !sent.reply.ok ? sent.reply.error : 'Pager is not running yet.')
-    browser.show(sent.reply.url)
+    getBrowser().show(sent.reply.url)
+  }
+
+  /** The browser pane (a session, a view per tab) only exists once something asks for it. */
+  function getBrowser() {
+    browser ??= require('./browser.cjs').createBrowser({
+      win,
+      onState: (s) => send('browser', s),
+      // The pane's pages send their chords here: browser-* ones go to the pane's chrome, the rest act like the terminal's.
+      onHotkey: (name) => (name.startsWith('browser-') ? send('browser-key', name.slice(8)) : onHotkey(name)),
+    })
+    return browser
   }
 
   function onHotkey(name) {
     if (name === 'docs' || name === 'studio') return void showSite(name)
-    if (name === 'browser') return browser.command('toggle')
+    if (name === 'browser') return getBrowser().command('toggle')
     if (name === 'quit') return void quitAll(true)
-    const patch = settingsMod.stepPatch(state.settings, name)
-    if (patch && client) client.call('settings.set', { patch }).catch((e) => log(`settings.set: ${e && e.message}`))
+    void (settingsMod ? Promise.resolve(settingsMod) : load('daemon/settings.js')).then((m) => {
+      settingsMod = m
+      const patch = m.stepPatch(state.settings, name)
+      if (patch && client) client.call('settings.set', { patch }).catch((e) => log(`settings.set: ${e && e.message}`))
+    })
   }
 
   // ---- window -----------------------------------------------------------------------------------------------------
 
+  // The daemon work starts the moment Electron is ready, in parallel with the window; only what needs the layout waits for it.
+  const dir = process.env.PAGER_HOME || path.join(os.homedir(), '.pager')
+  // The material is known from the saved settings file alone, so the window is created right-coloured without asking the daemon.
+  const desktopJson = fs.promises
+    .readFile(path.join(dir, 'desktop.json'), 'utf8')
+    .then((t) => {
+      const v = JSON.parse(t)
+      return v && typeof v === 'object' ? v : {}
+    })
+    .catch(() => ({}))
+  // The module loads while Electron boots. Opening the pipe itself has to wait for app ready: a connection made before it left the process
+  // hanging in its exit (the window closed, the process stayed) on Windows.
+  const clientModule = load('daemon/client.js')
+  clientModule.catch(() => {}) // awaited (and reported) once ready; until then a failure must not be an unhandled rejection
+  /** Settles (never rejects) once the daemon is connected and `state` is loaded; false when there is none. */
+  const ready = app.whenReady().then(async () => {
+    try {
+      daemonMod = await clientModule
+      paths = daemonMod.resolvePaths({ cliPath: path.join(P, 'dist', 'cli.js'), nodePath: NODE })
+      const ok = await connect(true)
+      mark('daemon-up', { started, ok })
+      if (ok) return true
+    } catch (e) {
+      log(`daemon start-up failed: ${e && e.stack ? e.stack : e}`)
+    }
+    // No daemon: the window still opens, with the saved settings; its toast offers Restart.
+    settingsMod ??= await load('daemon/settings.js')
+    state = { ...state, settings: settingsMod.loadSettings(path.join(paths ? paths.dir : dir, 'desktop.json')) }
+    return false
+  }).catch((e) => {
+    log(`start-up failed: ${e && e.stack ? e.stack : e}`)
+    return false
+  })
+
   app.whenReady().then(async () => {
-    daemonMod = await load('daemon/client.js')
-    settingsMod = await load('daemon/settings.js')
-    paths = daemonMod.resolvePaths({ cliPath: path.join(P, 'dist', 'cli.js'), nodePath: NODE })
-    // Connect (starting the daemon if nobody did) before the window exists, so its first paint already has the layout and theme.
-    const connected = await connect(true)
-    if (!connected) state = { ...state, settings: settingsMod.loadSettings(path.join(paths.dir, 'desktop.json')) }
-    const config = configOf(state.settings)
+    mark('app-ready')
+    const config = configOf(await desktopJson)
     configKey = JSON.stringify(config)
     const solid = config.material === 'solid'
     win = new BrowserWindow({
@@ -328,19 +413,25 @@ function run() {
       show: false,
       icon: path.join(A, 'renderer', 'pager.png'),
       titleBarStyle: 'hidden',
-      titleBarOverlay: { color: '#00000000', symbolColor: '#cfe3ff', height: 30 },
+      titleBarOverlay: { color: '#00000000', symbolColor: '#b4b8c4', height: 40 },
       backgroundColor: solid ? '#000000' : '#00000000',
       backgroundMaterial: material(config.material),
       webPreferences: { preload: path.join(A, 'electron', 'preload.cjs'), contextIsolation: true, sandbox: true, nodeIntegration: false, devTools: false },
     })
+    mark('window-created')
     win.removeMenu()
-    // What a pinned taskbar button or shortcut made from this window shows and runs: the pager icon, not the exe's resource (which Explorer caches).
-    win.setAppDetails({ appId: 'dev.pager.desktop', appIconPath: path.join(P, 'desktop', 'assets', 'pager.ico'), appIconIndex: 0, relaunchCommand: `"${process.execPath}"`, relaunchDisplayName: 'Pager' })
-    win.once('ready-to-show', () => win.show())
+    win.once('ready-to-show', () => {
+      win.show()
+      mark('ready-to-show')
+      // What a pinned taskbar button or shortcut made from this window shows and runs: the pager icon, not the exe's resource (which Explorer caches).
+      setImmediate(() => win && !win.isDestroyed() && win.setAppDetails({ appId: 'dev.pager.desktop', appIconPath: path.join(P, 'desktop', 'assets', 'pager.ico'), appIconIndex: 0, relaunchCommand: `"${process.execPath}"`, relaunchDisplayName: 'Pager' }))
+    })
     win.webContents.on('did-finish-load', () => {
-      send('config', configOf(state.settings))
-      send('d:status', status)
-      if (status === 'lost') toast('error', 'The Pager daemon is not running.', 'restart')
+      void ready.then(() => {
+        send('config', configOf(state.settings))
+        send('d:status', status)
+        if (status === 'lost') toast('error', 'The Pager daemon is not running.', 'restart')
+      })
     })
     // A renderer error would otherwise vanish (devtools are off): it goes to the log.
     win.webContents.on('console-message', (e) => {
@@ -348,16 +439,13 @@ function run() {
     })
     win.webContents.on('will-navigate', (e) => e.preventDefault())
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
-    browser = createBrowser({
-      win,
-      onState: (s) => send('browser', s),
-      // The pane's pages send their chords here: browser-* ones go to the pane's chrome, the rest act like the terminal's.
-      onHotkey: (name) => (name.startsWith('browser-') ? send('browser-key', name.slice(8)) : onHotkey(name)),
-    })
+    if (process.env.PAGER_TRACE) traceRenderer(win)
     win.loadFile(path.join(A, 'renderer', 'index.html'))
 
     // Arguments of the first launch (`Pager.exe run ...`) go where a second launch's would.
-    forward(passthrough, process.cwd()).catch((e) => log(`forward failed: ${e && e.stack ? e.stack : e}`))
+    if (passthrough.length > 0) void ready.then(() => forward(passthrough, process.cwd())).catch((e) => log(`forward failed: ${e && e.stack ? e.stack : e}`))
+    // A daemon that answered before the window existed may hold newer settings than the file the window was made from.
+    void ready.then(applyConfig)
 
     const needClient = () => {
       if (!client) throw new Error('The Pager daemon is not running')
@@ -365,14 +453,21 @@ function run() {
     }
     const BLOCKED = new Set(['hello', 'daemon.stop', 'stop'])
 
-    ipcMain.handle('d:state', (e) => (own(e) ? state : undefined))
-    ipcMain.handle('d:call', (e, type, args) => {
+    // The renderer starts in parallel with the daemon connection; whatever needs the daemon's answer waits for it.
+    ipcMain.handle('d:state', async (e) => {
+      if (!own(e)) return undefined
+      await ready
+      return state
+    })
+    ipcMain.handle('d:call', async (e, type, args) => {
       if (!own(e)) return undefined
       if (typeof type !== 'string' || BLOCKED.has(type)) throw new Error(`request not allowed: ${type}`)
+      await ready
       return needClient().call(type, args && typeof args === 'object' ? args : {})
     })
     ipcMain.handle('d:attach', async (e, paneId, size) => {
       if (!own(e)) return undefined
+      await ready
       const id = String(paneId)
       attached.add(id)
       outgoing.delete(id)
@@ -397,7 +492,11 @@ function run() {
     ipcMain.on('d:resize', (e, paneId, cols, rows) => {
       if (own(e) && client && cols > 0 && rows > 0) client.call('pane.resize', { paneId: String(paneId), cols, rows }).catch(() => {})
     })
-    ipcMain.handle('d:status', (e) => (own(e) ? status : undefined))
+    ipcMain.handle('d:status', async (e) => {
+      if (!own(e)) return undefined
+      await ready
+      return status
+    })
     ipcMain.handle('d:restart', async (e) => {
       if (own(e)) await restartDaemon()
     })
@@ -409,9 +508,13 @@ function run() {
     ipcMain.on('title', (e, t) => {
       if (own(e)) win.setTitle(t || 'Pager')
     })
+    // The caption buttons float over the glass, so their symbols follow the theme: light grey on pitch black, dark grey on the off-white light theme. The renderer sends the mode on boot and on every theme change.
+    ipcMain.on('chrome', (e, cmd, arg) => {
+      if (own(e) && cmd === 'titlebar' && /^#[0-9a-f]{6}$/i.test(String(arg))) win.setTitleBarOverlay({ symbolColor: String(arg) })
+    })
     const BROWSER_CMDS = new Set(['toggle', 'hide', 'new', 'open', 'go', 'activate', 'close', 'next', 'prev', 'back', 'forward', 'reload', 'bounds', 'state'])
     ipcMain.on('browser', (e, cmd, arg) => {
-      if (own(e) && BROWSER_CMDS.has(cmd)) browser.command(cmd, arg)
+      if (own(e) && BROWSER_CMDS.has(cmd)) getBrowser().command(cmd, arg)
     })
     ipcMain.on('hotkey', (e, name) => {
       if (own(e)) onHotkey(name)

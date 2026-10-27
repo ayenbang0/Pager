@@ -12,7 +12,7 @@ import type { AdapterSpec } from '../agents/run/adapters.js'
 import { agentTabId } from '../agents/ids.js'
 import { ROOM_ID } from '../agents/orchestrator.js'
 import { Engine, type EngineOptions, type Toast } from './engine.js'
-import { dmConvId } from '../chat/events.js'
+import { dmConvId } from '../chat/convId.js'
 import { resetDesktopState } from '../platform/desktop.js'
 import { DEFAULT_SETTINGS } from './settings.js'
 import { VERSION } from './version.js'
@@ -295,6 +295,15 @@ test('group: invite, chat across members, leave is permanent', async () => {
   await a.engine.submit('/group invite carol')
   assert.equal(a.toasts.at(-1)?.text, 'Already invited to this group')
   assert.doesNotMatch(members(a), /carol/)
+})
+
+test('a message in a group of one is sent, not pending forever, and never delivered or read', async () => {
+  const a = await boot('alice')
+  await a.engine.submit('/group new solo')
+  const group = a.engine.active()
+  assert.ok(group)
+  await a.engine.submit('note to self')
+  assert.equal(a.engine.messages(group, 10).find((m) => m.text === 'note to self')?.status, 'sent')
 })
 
 test('group rename: the creator renames, members follow, others are refused, and it never counts as unread', async () => {
@@ -623,15 +632,20 @@ test('/changelog shows what is new, one exact version, or explains itself', asyn
   assert.ok(a.engine.home().length > 0)
 })
 
-test('a user upgrading from 1.4.1 sees "What\'s new" for this version on the first start only', async () => {
+test('a user upgrading from 1.4.1 gets a fresh What\'s new on the welcome screen on the first start only', async () => {
   const dir = tmpDir('pager-e-')
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify({ lastSeenVersion: '1.4.1' }))
   const first = await boot('alice', dir)
-  assert.equal(first.engine.home()[0], `What's new in pager ${VERSION}`)
+  assert.equal(first.engine.welcome(), true, 'the release notes do not replace the welcome screen')
+  const news = first.engine.whatsNew()
+  assert.equal(news?.version, VERSION)
+  assert.equal(news?.fresh, true)
+  assert.ok((news?.items.length ?? 0) >= 1 && (news?.items.length ?? 99) <= 4, 'a few lines, not the whole section')
   assert.equal(first.engine.settings().lastSeenVersion, VERSION)
   await first.engine.close()
   const second = await boot('alice', dir)
-  assert.notEqual(second.engine.home()[0], `What's new in pager ${VERSION}`)
+  assert.equal(second.engine.whatsNew()?.fresh, false)
+  assert.equal(second.engine.whatsNew()?.version, VERSION, 'still shown, no longer marked new')
 })
 
 test('name change propagates to contacts', async () => {
@@ -671,13 +685,14 @@ test('/search needs text; a restart recaps what the agents did while closed and 
   assert.equal(fs.existsSync(path.join(a.dir, 'last-seen.json')), true)
   await a.engine.close()
   const quiet = await boot('alice', a.dir)
-  assert.ok(!quiet.engine.home().some((l) => l.startsWith('Since you left')), 'nothing happened, nothing shown')
+  assert.equal(quiet.engine.recapLine(), undefined, 'nothing happened, nothing shown')
   await quiet.engine.close()
   fs.writeFileSync(path.join(a.dir, 'last-seen.json'), JSON.stringify({ at: Date.now() - 3 * 3_600_000 }))
   const entry = { n: 1, ts: Date.now() - 1000, author: 'omp', authorKey: '0'.repeat(64), kind: 'text', text: 'Found the Needle in src/a.ts' }
   fs.appendFileSync(path.join(a.dir, 'agents-room.jsonl'), `${JSON.stringify(entry)}\n`)
   const b = await boot('alice', a.dir)
-  assert.ok(b.engine.home().includes('Since you left (3h ago): agents: 1 turn'))
+  assert.equal(b.engine.recapLine(), 'Since you left (3h ago): agents: 1 turn')
+  assert.equal(b.engine.welcome(), true, 'the recap does not replace the welcome screen')
   await b.engine.submit('/search needle')
   assert.match(b.engine.home().at(-1) ?? '', /^\[agents\] omp, \d\d:\d\d: Found the Needle in src\/a\.ts$/)
   await b.engine.close()
@@ -1046,18 +1061,14 @@ test('/run opens and activates a new terminal tab; bad folders and control chara
   assert.equal(a.engine.terms.ids().length, 2)
 })
 
-test('goHome returns to the welcome screen after a command replaced it, and bumps the animation epoch', async () => {
+test('goHome returns to the welcome screen after a command replaced it', async () => {
   const a = await boot('homer')
   await a.engine.submit('/code')
-  assert.equal(a.engine.welcome(), false, 'the command output replaced the banner')
+  assert.equal(a.engine.welcome(), false, 'the command output replaced the welcome screen')
   a.engine.activate('terminal')
-  const epoch = a.engine.homeEpoch
   a.engine.goHome()
   assert.equal(a.engine.active(), null)
   assert.equal(a.engine.welcome(), true)
-  assert.equal(a.engine.homeEpoch, epoch + 1)
-  a.engine.goHome()
-  assert.equal(a.engine.homeEpoch, epoch + 2, 'also replays when Home was already showing')
 })
 
 test('/docs serves the site and opens its url; the engine stops it on close', async () => {

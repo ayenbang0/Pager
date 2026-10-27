@@ -12,6 +12,8 @@ const ROOM_SCAN_LINES = 2000
 
 /** A searchable message: `where` is the conversation label (`team`, `alice`, `agents`). */
 export interface SearchDoc {
+  /** The conversation id of a chat hit (`dm:…`, `grp:…`, `agents`). */
+  conv?: string
   where: string
   author: string
   ts: number
