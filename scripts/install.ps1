@@ -29,14 +29,30 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
+function Stop-Daemon([string]$node, [string]$cli) {
+  $stop = Start-Process -FilePath $node -ArgumentList "`"$cli`" daemon stop" -WindowStyle Hidden -PassThru
+  if (-not $stop.WaitForExit(20000)) { $stop.Kill() }
+}
+
 function Stop-Pager([string]$root) {
-  Get-Process -Name Pager -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) } |
-    ForEach-Object { $_.CloseMainWindow() | Out-Null; if (-not $_.WaitForExit(4000)) { $_.Kill() } }
+  $prefix = $root.TrimEnd('\') + '\'
+  $inRoot = { param($path) $path -and $path.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) }
+  $windows = @(Get-Process -Name Pager -ErrorAction SilentlyContinue | Where-Object { & $inRoot $_.Path })
+  $windows | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+  $deadline = [DateTime]::UtcNow.AddSeconds(5)
+  foreach ($w in $windows) { $w.WaitForExit([int][Math]::Max(0, ($deadline - [DateTime]::UtcNow).TotalMilliseconds)) | Out-Null }
+  # The window is only a client. The session daemon (a node.exe inside this folder) outlives it and keeps the files open, so ask it to stop first.
+  $node = Join-Path $root 'resources\node\node.exe'
+  $cli = Join-Path $root 'resources\app\pager\dist\cli.js'
+  if ((Test-Path $node) -and (Test-Path $cli)) { Stop-Daemon $node $cli }
+  # Anything still running from this folder (a daemon in another data directory, a helper) would block the replacement.
+  Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
+    Where-Object { $_.ProcessId -ne $PID -and (& $inRoot $_.ExecutablePath) } |
+    ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 }
 
 if ($env:OS -ne 'Windows_NT') { throw 'The Pager desktop window is Windows only.' }
-$Dir = [IO.Path]::GetFullPath($Dir)
+$Dir = [IO.Path]::GetFullPath($Dir).TrimEnd('\')
 $exe = Join-Path $Dir 'Pager.exe'
 
 if ($Uninstall) {
@@ -88,10 +104,31 @@ try {
   if (-not (Test-Path (Join-Path $root 'Pager.exe'))) { throw 'The zip does not contain Pager\Pager.exe.' }
 
   Stop-Pager $Dir
-  if (Test-Path $Dir) { Remove-Item $Dir -Recurse -Force }
+  $old = $null
+  if (Test-Path $Dir) {
+    # Renaming first is all-or-nothing: if something still holds a file open, the old install is left whole instead of half deleted.
+    $old = "$Dir.old-" + [Guid]::NewGuid().ToString('N').Substring(0, 8)
+    for ($try = 0; ; $try++) {
+      try { Rename-Item -LiteralPath $Dir -NewName (Split-Path $old -Leaf); break }
+      catch { if ($try -ge 5) { throw "Pager is still running from $Dir. Close it and run the installer again. ($($_.Exception.Message))" }; Start-Sleep -Seconds 1 }
+    }
+  }
   New-Item -ItemType Directory -Path (Split-Path $Dir) -Force | Out-Null
-  Move-Item -LiteralPath $root -Destination $Dir
+  try { Move-Item -LiteralPath $root -Destination $Dir }
+  catch { if ($old) { Rename-Item -LiteralPath $old -NewName (Split-Path $Dir -Leaf) }; throw }
+  Get-ChildItem -LiteralPath (Split-Path $Dir) -Directory -Filter ((Split-Path $Dir -Leaf) + '.old-*') -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
   Write-Host "Installed to $Dir"
+  # A daemon from an older build (a copy running from another folder, say) would be reused by the new window and keep its old behaviour, so it is retired too.
+  $node = Join-Path $Dir 'resources\node\node.exe'
+  $cli = Join-Path $Dir 'resources\app\pager\dist\cli.js'
+  try {
+    $newVersion = (Get-Content (Join-Path $Dir 'resources\app\pager\package.json') -Raw | ConvertFrom-Json).version
+    $running = (& $node $cli daemon status 2>&1 | Out-String)
+    if ($running -match 'running: pid \d+, (\S+?),' -and $Matches[1] -ne $newVersion) {
+      Write-Host "Stopping the running Pager daemon ($($Matches[1])) so the window starts $newVersion; its terminal sessions end."
+      Stop-Daemon $node $cli
+    }
+  } catch { Write-Host "Could not check the running daemon: $($_.Exception.Message)" }
 } finally {
   Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
 }
